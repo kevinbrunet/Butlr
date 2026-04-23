@@ -81,6 +81,7 @@ def _make_transcription_logger() -> Any:
 
     class TranscriptionLogger(FrameProcessor):
         async def process_frame(self, frame, direction):
+            await super().process_frame(frame, direction)
             if isinstance(frame, TranscriptionFrame):
                 log.info("STT › %s", frame.text)
             await self.push_frame(frame, direction)
@@ -95,6 +96,7 @@ def _make_llm_response_logger() -> Any:
 
     class LLMResponseLogger(FrameProcessor):
         async def process_frame(self, frame, direction):
+            await super().process_frame(frame, direction)
             if isinstance(frame, TextFrame) and frame.text:
                 log.info("LLM › %s", frame.text.rstrip())
             await self.push_frame(frame, direction)
