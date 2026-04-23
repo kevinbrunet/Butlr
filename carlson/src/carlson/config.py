@@ -43,6 +43,7 @@ class Config:
 
     # Misc
     language_default: str  # "fr" | "en"
+    use_vad: bool  # True = Silero VAD auto-detect; False = push-to-talk (Enter key)
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -62,4 +63,5 @@ class Config:
             mcp_home_token=os.getenv("MCP_HOME_TOKEN", ""),
             filler_delay_ms=int(os.getenv("FILLER_DELAY_MS", "500")),
             language_default=os.getenv("LANGUAGE_DEFAULT", "fr"),
+            use_vad=os.getenv("USE_VAD", "0").lower() in ("1", "true", "yes"),
         )

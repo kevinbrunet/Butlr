@@ -1,22 +1,40 @@
-"""faster-whisper STT service wiring.
+"""faster-whisper STT service — wraps Pipecat's FastWhisperSTTService.
 
-Pipecat has an existing Whisper integration; the concrete class name depends on
-the installed version. ~ adjust imports at pin time.
+~ Le nom exact de la classe Pipecat peut varier selon la version :
+  - pipecat >= 0.0.50 : FastWhisperSTTService dans pipecat.services.faster_whisper
+  - Si l'import rate, faire : python -c "from pipecat.services import faster_whisper; dir(faster_whisper)"
+
+Comportement attendu dans le pipeline :
+  UserStartedSpeakingFrame → accumule les AudioRawFrame
+  UserStoppedSpeakingFrame → transcrit le buffer → émet TranscriptionFrame
 """
 
 from __future__ import annotations
 
+import logging
+
 from ..config import Config
+
+log = logging.getLogger("carlson.stt")
 
 
 def build_stt_service(config: Config):
-    """Return a Pipecat STT service configured for bilingual FR/EN.
+    """Return a configured Pipecat STT service using faster-whisper.
 
-    Whisper is multilingual out of the box — we don't force a language so it
-    auto-detects per turn. Downside: occasional misdetections on very short
-    utterances. Mitigation: a short lang-detect post-pass on low-confidence
-    transcripts.
+    Whisper détecte automatiquement la langue (FR/EN) — on ne force pas
+    `language` pour supporter le mode bilingue. Sur les énoncés très courts,
+    la détection peut dériver ; ajuster `language` si besoin.
+
+    ~ `device="cuda"` et `compute_type="float16"` supposent une GPU NVIDIA avec
+    CUDA. Passer `device="cpu"` et `compute_type="int8"` si pas de GPU
+    disponible (latence x4–x10 ~).
     """
-    # from pipecat.services.whisper import WhisperSTTService
-    # return WhisperSTTService(model=config.stt_model, device="cuda")
-    raise NotImplementedError("Pipecat STT wiring — pin the SDK version first.")
+    # ~ import path stable depuis pipecat 0.0.48
+    from pipecat.services.faster_whisper import FastWhisperSTTService
+
+    return FastWhisperSTTService(
+        model=config.stt_model,
+        device="cuda",
+        compute_type="float16",
+        # language=None → auto-detect FR/EN
+    )
