@@ -35,7 +35,9 @@ def _make_ptt_gate() -> Any:
     thread via asyncio.run_coroutine_threadsafe.
     """
     # ~ FrameProcessor base class — import path stable since pipecat 0.0.40
-    from pipecat.frames.frames import AudioRawFrame, UserStartedSpeakingFrame, UserStoppedSpeakingFrame
+    # SegmentedSTTService écoute VADUser*SpeakingFrame, pas UserStartedSpeakingFrame
+    # (classes distinctes sans héritage commun — Pipecat 1.0).
+    from pipecat.frames.frames import AudioRawFrame, VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
     from pipecat.processors.frame_processor import FrameProcessor
 
     class PushToTalkGate(FrameProcessor):
@@ -48,13 +50,13 @@ def _make_ptt_gate() -> Any:
         async def open(self) -> None:
             if not self._open:
                 self._open = True
-                await self.push_frame(UserStartedSpeakingFrame())
+                await self.push_frame(VADUserStartedSpeakingFrame())
                 log.debug("PTT gate ouverte")
 
         async def close(self) -> None:
             if self._open:
                 self._open = False
-                await self.push_frame(UserStoppedSpeakingFrame())
+                await self.push_frame(VADUserStoppedSpeakingFrame())
                 log.debug("PTT gate fermée → transcription déclenchée")
 
         async def process_frame(self, frame, direction):
