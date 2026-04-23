@@ -11,7 +11,9 @@ def build_stt_service(config: Config):
 
     class FasterWhisperSTTService(SegmentedSTTService):
         def __init__(self, model_size, device, compute_type):
-            super().__init__()
+            from pipecat.services.settings import STTSettings
+            # model et language doivent être initialisés (pas NOT_GIVEN) — Pipecat 1.0 validate_complete
+            super().__init__(settings=STTSettings(model=model_size, language=None))
             self._model = WhisperModel(model_size, device=device, compute_type=compute_type)
 
         async def run_stt(self, audio: bytes) -> str:
