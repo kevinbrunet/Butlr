@@ -1,0 +1,22 @@
+# Room and device registry — copy to rooms.yaml and adapt.
+# backend_ref is opaque to mcp-home; each backend (mqtt, HA, …) interprets it.
+
+rooms:
+  - salon
+  - cuisine
+  - chambre
+  - bureau
+
+devices:
+  - id: salon.light.main
+    kind: light
+    room: salon
+    backend_ref: salon/light
+  - id: cuisine.light.main
+    kind: light
+    room: cuisine
+    backend_ref: cuisine/light
+  - id: chambre.light.bedside
+    kind: light
+    room: chambre
+    backend_ref: chambre/light/bedside

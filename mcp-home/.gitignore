@@ -1,0 +1,26 @@
+# Build
+bin/
+obj/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Local config (potentiellement secrets à terme : MCP_HOME_TOKEN, etc.)
+appsettings.Local.json
+appsettings.Production.json
+*.env
+.env
+
+# Publish output
+publish/
+out/
+
+# Test runner
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
