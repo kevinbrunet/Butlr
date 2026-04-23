@@ -26,7 +26,7 @@ def build_llm_service(config: Config):
 
     ~ OpenAILLMService import path stable depuis pipecat 0.0.40.
     """
-    from pipecat.services.openai import OpenAILLMService
+    from pipecat.services.openai.llm import OpenAILLMService
 
     log.info("LLM service → %s  model=%s", config.llm_base_url, config.llm_model)
     return OpenAILLMService(

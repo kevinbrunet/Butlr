@@ -1,40 +1,26 @@
-"""faster-whisper STT service — wraps Pipecat's FastWhisperSTTService.
-
-~ Le nom exact de la classe Pipecat peut varier selon la version :
-  - pipecat >= 0.0.50 : FastWhisperSTTService dans pipecat.services.faster_whisper
-  - Si l'import rate, faire : python -c "from pipecat.services import faster_whisper; dir(faster_whisper)"
-
-Comportement attendu dans le pipeline :
-  UserStartedSpeakingFrame → accumule les AudioRawFrame
-  UserStoppedSpeakingFrame → transcrit le buffer → émet TranscriptionFrame
-"""
-
 from __future__ import annotations
-
 import logging
-
 from ..config import Config
-
 log = logging.getLogger("carlson.stt")
 
-
 def build_stt_service(config: Config):
-    """Return a configured Pipecat STT service using faster-whisper.
+    from faster_whisper import WhisperModel
+    from pipecat.services.stt_service import SegmentedSTTService
+    from pipecat.frames.frames import TranscriptionFrame, AudioRawFrame
+    import numpy as np
 
-    Whisper détecte automatiquement la langue (FR/EN) — on ne force pas
-    `language` pour supporter le mode bilingue. Sur les énoncés très courts,
-    la détection peut dériver ; ajuster `language` si besoin.
+    class FasterWhisperSTTService(SegmentedSTTService):
+        def __init__(self, model_size, device, compute_type):
+            super().__init__()
+            self._model = WhisperModel(model_size, device=device, compute_type=compute_type)
 
-    ~ `device="cuda"` et `compute_type="float16"` supposent une GPU NVIDIA avec
-    CUDA. Passer `device="cpu"` et `compute_type="int8"` si pas de GPU
-    disponible (latence x4–x10 ~).
-    """
-    # ~ import path stable depuis pipecat 0.0.48
-    from pipecat.services.faster_whisper import FastWhisperSTTService
+        async def run_stt(self, audio: bytes) -> str:
+            audio_np = np.frombuffer(audio, dtype=np.int16).astype(np.float32) / 32768.0
+            segments, _ = self._model.transcribe(audio_np, language=None)
+            return "".join(s.text for s in segments)
 
-    return FastWhisperSTTService(
-        model=config.stt_model,
+    return FasterWhisperSTTService(
+        model_size=config.stt_model,
         device="cuda",
         compute_type="float16",
-        # language=None → auto-detect FR/EN
     )

@@ -34,11 +34,12 @@ def build_tts_service(config: Config):
     ~ PiperTTSService import path — stable depuis pipecat 0.0.48 ~.
     Si l'import rate, décommenter le FrameProcessor custom en bas de fichier.
     """
-    from pipecat.services.piper import PiperTTSService
+    from pipecat.services.piper.tts import PiperTTSService
 
     log.info("TTS service → piper, voix FR=%s", config.tts_voice_fr)
     return PiperTTSService(
-        voice=config.tts_voice_fr,
+        voice_id=config.tts_voice_fr,
+        use_cuda=True,
         # ~ sample_rate : Piper génère en 22050 Hz par défaut. Si LocalAudioTransport
         # attend une fréquence différente, ajuster ici ou dans les params transport.
     )

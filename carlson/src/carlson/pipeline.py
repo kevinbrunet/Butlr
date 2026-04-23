@@ -42,6 +42,8 @@ def _make_ptt_gate() -> Any:
         def __init__(self) -> None:
             super().__init__()
             self._open = False
+        async def _start(self, frame, direction):
+            await super()._start(frame, direction)
 
         async def open(self) -> None:
             if not self._open:
@@ -56,9 +58,18 @@ def _make_ptt_gate() -> Any:
                 log.debug("PTT gate fermée → transcription déclenchée")
 
         async def process_frame(self, frame, direction):
+            from pipecat.frames.frames import StartFrame, EndFrame, CancelFrame
+            
+            # Laisser pipecat gérer les frames système via super() EN PREMIER
+            await super().process_frame(frame, direction)
+            
+            # Filtrer l'audio seulement quand gate fermée
             if isinstance(frame, AudioRawFrame) and not self._open:
-                return  # discard mic audio while gate is closed
-            await self.push_frame(frame, direction)
+                return
+            
+            # Pour les frames non-système, propager
+            if not isinstance(frame, (StartFrame, EndFrame, CancelFrame)):
+                await self.push_frame(frame, direction)
 
     return PushToTalkGate()
 
@@ -102,7 +113,7 @@ async def build_pipeline(config: Config, mcp: McpHomeClient) -> tuple[Any, Any]:
     """
     # ~ pipecat core imports
     from pipecat.pipeline.pipeline import Pipeline
-    from pipecat.processors.aggregators.llm_context import LLMContext, LLMContextAggregatorPair
+    from pipecat.processors.aggregators.llm_response_universal import LLMContext, LLMContextAggregatorPair
     from pipecat.transports.local.audio import LocalAudioTransport, LocalAudioTransportParams
 
     stt = build_stt_service(config)
@@ -115,7 +126,7 @@ async def build_pipeline(config: Config, mcp: McpHomeClient) -> tuple[Any, Any]:
 
     # ~ create_context_aggregator pattern — stable depuis pipecat 1.0.0
     context = LLMContext(messages=[{"role": "system", "content": SYSTEM_PROMPT}])
-    context_aggregator: LLMContextAggregatorPair = llm.create_context_aggregator(context)
+    context_aggregator = LLMContextAggregatorPair(context)
 
     transcription_logger = _make_transcription_logger()
     llm_response_logger = _make_llm_response_logger()
