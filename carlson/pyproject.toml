@@ -1,0 +1,50 @@
+[project]
+name = "carlson"
+version = "0.0.1"
+description = "Carlson — voice butler for the Butlr smart home, built on Pipecat."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "../LICENSE" }
+authors = [{ name = "Kevin Brunet" }]
+
+# ~ Versions à re-vérifier au moment de l'installation — les écosystèmes bougent vite.
+dependencies = [
+    "pipecat-ai>=0.0.50",
+    "mcp>=1.0",
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    "numpy>=1.26",
+    "sounddevice>=0.4",
+    "pynput>=1.7",   # push-to-talk keyboard listener (Phase 2)
+    # STT / VAD / wake word / TTS installed via extras below to keep base lean.
+]
+
+[project.optional-dependencies]
+stt = ["faster-whisper>=1.0"]
+vad = ["silero-vad>=5.0"]
+wake = ["openwakeword>=0.6"]
+tts-piper = ["piper-tts>=1.2"]
+tts-xtts = ["TTS>=0.22"]  # ⚠ licence à vérifier avant usage non-personnel
+llm = ["openai>=1.30"]   # OpenAI-compatible client parlant à llama.cpp server (cf. ADR 0006)
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.4"]
+all = [
+    "faster-whisper>=1.0",
+    "silero-vad>=5.0",
+    "openwakeword>=0.6",
+    "piper-tts>=1.2",
+    "openai>=1.30",
+]
+
+[project.scripts]
+carlson = "carlson.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/carlson"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

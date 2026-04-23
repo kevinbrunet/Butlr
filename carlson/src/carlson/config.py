@@ -1,0 +1,74 @@
+"""Runtime configuration — read from environment variables.
+
+Keep this file the single place that reads os.environ. Everything else takes
+a Config instance.
+
+Défauts alignés avec les ADR du 2026-04-23 :
+- LLM : llama.cpp server (port 8080 par défaut ~), cf. ADR 0006.
+- MCP : mcp-home en service long-running exposé en SSE/HTTP sur le port 5090 ~,
+  cf. ADR 0003. Plus de spawn en sous-processus.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Config:
+    # LLM (llama.cpp server, OpenAI-compatible)
+    llm_base_url: str
+    llm_model: str
+    llm_api_key: str  # llama.cpp ignores it but the OpenAI SDK requires a value
+
+    # STT
+    stt_model: str  # e.g. "large-v3"
+
+    # TTS
+    tts_engine: str  # "piper" | "xtts"
+    tts_voice_fr: str
+    tts_voice_en: str
+    tts_model_dir: str  # directory that holds *.onnx + *.onnx.json Piper models
+
+    # VAD / input mode
+    use_vad: bool  # True = Silero VAD (slice 2.5), False = push-to-talk (slices 2.1-2.4)
+
+    # Wake word
+    wakeword_model: str
+    wakeword_threshold: float
+
+    # MCP — SSE/HTTP (cf. ADR 0003)
+    mcp_home_url: str        # ex. http://localhost:5090/mcp
+    mcp_home_token: str      # bearer token partagé ; vide = pas d'auth (dev local uniquement)
+
+    # Filler
+    filler_delay_ms: int
+
+    # Misc
+    language_default: str  # "fr" | "en"
+
+    @classmethod
+    def from_env(cls) -> "Config":
+        return cls(
+            llm_base_url=os.getenv("LLM_BASE_URL", "http://localhost:8080/v1"),
+            llm_model=os.getenv("LLM_MODEL", "Qwen/Qwen2.5-7B-Instruct"),
+            llm_api_key=os.getenv("LLM_API_KEY", "local-not-used"),
+            stt_model=os.getenv("STT_MODEL", "large-v3"),
+            tts_engine=os.getenv("TTS_ENGINE", "piper"),
+            tts_voice_fr=os.getenv("TTS_VOICE_FR", "fr_FR-siwis-medium"),
+            tts_voice_en=os.getenv("TTS_VOICE_EN", "en_US-amy-medium"),
+            tts_model_dir=os.getenv(
+                "TTS_MODEL_DIR",
+                os.path.join(os.path.expanduser("~"), "butlr-env", "piper", "models"),
+            ),
+            use_vad=os.getenv("CARLSON_VAD", "0").lower() in ("1", "true", "yes"),
+            wakeword_model=os.getenv(
+                "WAKEWORD_MODEL", "assets/wakeword/hey_carlson.tflite"
+            ),
+            wakeword_threshold=float(os.getenv("WAKEWORD_THRESHOLD", "0.5")),
+            mcp_home_url=os.getenv("MCP_HOME_URL", "http://localhost:5090/mcp"),
+            mcp_home_token=os.getenv("MCP_HOME_TOKEN", ""),
+            filler_delay_ms=int(os.getenv("FILLER_DELAY_MS", "500")),
+            language_default=os.getenv("LANGUAGE_DEFAULT", "fr"),
+        )
