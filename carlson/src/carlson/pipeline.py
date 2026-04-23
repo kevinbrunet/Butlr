@@ -102,7 +102,7 @@ async def build_pipeline(config: Config, mcp: McpHomeClient) -> tuple[Any, Any]:
     """
     # ~ pipecat core imports
     from pipecat.pipeline.pipeline import Pipeline
-    from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+    from pipecat.processors.aggregators.llm_context import OpenAILLMContext
     from pipecat.transports.local.audio import LocalAudioTransport, LocalAudioTransportParams
 
     stt = build_stt_service(config)
