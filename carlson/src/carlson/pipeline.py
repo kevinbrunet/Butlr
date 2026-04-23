@@ -59,17 +59,17 @@ def _make_ptt_gate() -> Any:
 
         async def process_frame(self, frame, direction):
             from pipecat.frames.frames import StartFrame, EndFrame, CancelFrame
-            
-            # Laisser pipecat gérer les frames système via super() EN PREMIER
+
             await super().process_frame(frame, direction)
-            
-            # Filtrer l'audio seulement quand gate fermée
+
+            # Bloquer uniquement l'audio quand la gate est fermée.
+            # StartFrame/EndFrame/CancelFrame doivent toujours se propager en aval
+            # sinon les services downstream (STT…) ne reçoivent jamais StartFrame
+            # et rejettent toutes les frames suivantes (Pipecat 1.0 _check_started).
             if isinstance(frame, AudioRawFrame) and not self._open:
                 return
-            
-            # Pour les frames non-système, propager
-            if not isinstance(frame, (StartFrame, EndFrame, CancelFrame)):
-                await self.push_frame(frame, direction)
+
+            await self.push_frame(frame, direction)
 
     return PushToTalkGate()
 
