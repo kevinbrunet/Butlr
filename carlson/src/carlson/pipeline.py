@@ -102,7 +102,7 @@ async def build_pipeline(config: Config, mcp: McpHomeClient) -> tuple[Any, Any]:
     """
     # ~ pipecat core imports
     from pipecat.pipeline.pipeline import Pipeline
-    from pipecat.processors.aggregators.llm_context import OpenAILLMContext
+    from pipecat.processors.aggregators.llm_context import LLMContext, LLMContextAggregatorPair
     from pipecat.transports.local.audio import LocalAudioTransport, LocalAudioTransportParams
 
     stt = build_stt_service(config)
@@ -113,9 +113,9 @@ async def build_pipeline(config: Config, mcp: McpHomeClient) -> tuple[Any, Any]:
     # service en Phase 3 via llm.set_tools(mcp.tools_as_openai()).
     _ = mcp
 
-    # ~ create_context_aggregator pattern — stable depuis pipecat 0.0.45
-    context = OpenAILLMContext(messages=[{"role": "system", "content": SYSTEM_PROMPT}])
-    context_aggregator = llm.create_context_aggregator(context)
+    # ~ create_context_aggregator pattern — stable depuis pipecat 1.0.0
+    context = LLMContext(messages=[{"role": "system", "content": SYSTEM_PROMPT}])
+    context_aggregator: LLMContextAggregatorPair = llm.create_context_aggregator(context)
 
     transcription_logger = _make_transcription_logger()
     llm_response_logger = _make_llm_response_logger()
