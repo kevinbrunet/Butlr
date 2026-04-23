@@ -1,0 +1,39 @@
+# Butlr — .gitignore racine
+# Les sous-projets ont leurs propres .gitignore plus spécifiques.
+
+# --- Claude Code ---
+# Overrides locaux, non partagés.
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/worktrees/
+
+# --- Éditeurs / IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- Secrets / environnement ---
+.env
+.env.*
+!.env.example
+scripts/env.ps1
+
+# --- OS / divers ---
+*.log
+*.tmp
+
+# --- Python (complément carlson/) ---
+__pycache__/
+*.py[cod]
+.venv/
+.venv-*/
+.pytest_cache/
+.ruff_cache/
+
+# --- .NET (complément mcp-home/) ---
+bin/
+obj/
+*.user

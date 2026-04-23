@@ -52,7 +52,7 @@ Test-PathExists -Path $outDir -CreateIfMissing | Out-Null
 
 Invoke-PiperSay `
     -VoiceName $env:PIPER_VOICE_FR_NAME `
-    -Text "Bonjour, je suis Carlson. Je suis prêt à vous servir." `
+    -Text "Bonjour, je suis Carlson. Comment puis-je vous servir ?" `
     -OutWav (Join-Path $outDir "test-fr.wav")
 
 Invoke-PiperSay `
