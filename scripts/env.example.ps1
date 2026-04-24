@@ -50,6 +50,13 @@ $env:PIPER_VOICE_EN_PATH = "en/en_GB/alan/medium"
 # Whisper (faster-whisper)
 # -----------------------------------------------------------------------------
 
-$env:WHISPER_MODEL        = "large-v3"      # "large-v3-turbo" ou "medium" comme fallback perf.
+# Dossier cible du modèle CTranslate2 téléchargé par Get-WhisperModel.ps1.
+# Le script crée ce dossier et y place model.bin + config.json.
+$env:WHISPER_MODEL_DIR    = Join-Path $env:MODELS_DIR "whisper\faster-whisper-large-v3"
+
+# STT_MODEL peut être un nom HF ("large-v3") ou un chemin local absolu.
+# Par défaut on pointe sur le chemin local — pas de requête réseau au démarrage.
+$env:STT_MODEL            = $env:WHISPER_MODEL_DIR
+
 $env:WHISPER_DEVICE       = "cuda"
 $env:WHISPER_COMPUTE_TYPE = "float16"       # ou "int8_float16" si tension VRAM.

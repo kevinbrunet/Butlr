@@ -13,6 +13,14 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+
+def _default_stt_model() -> str:
+    # Pointe sur le chemin local téléchargé par Get-WhisperModel.ps1.
+    # Si BUTLR_ENV_DIR n'est pas défini, on recalcule le même défaut que env.example.ps1.
+    butlr_env = os.getenv("BUTLR_ENV_DIR", str(Path.home() / "butlr-env"))
+    return str(Path(butlr_env) / "models" / "whisper" / "faster-whisper-large-v3")
 
 
 @dataclass(frozen=True)
@@ -22,8 +30,8 @@ class Config:
     llm_model: str
     llm_api_key: str  # llama.cpp ignores it but the OpenAI SDK requires a value
 
-    # STT
-    stt_model: str  # e.g. "large-v3"
+    # STT — nom HF ("large-v3") ou chemin absolu vers un dossier CTranslate2 local
+    stt_model: str
 
     # TTS
     tts_engine: str  # "piper" | "xtts"
@@ -51,7 +59,7 @@ class Config:
             llm_base_url=os.getenv("LLM_BASE_URL", "http://localhost:8080/v1"),
             llm_model=os.getenv("LLM_MODEL", "Qwen/Qwen2.5-7B-Instruct"),
             llm_api_key=os.getenv("LLM_API_KEY", "local-not-used"),
-            stt_model=os.getenv("STT_MODEL", "large-v3"),
+            stt_model=os.getenv("STT_MODEL", _default_stt_model()),
             tts_engine=os.getenv("TTS_ENGINE", "piper"),
             tts_voice_fr=os.getenv("TTS_VOICE_FR", "fr_FR-gilles-low"),
             tts_voice_en=os.getenv("TTS_VOICE_EN", "en_GB-alan-medium"),
