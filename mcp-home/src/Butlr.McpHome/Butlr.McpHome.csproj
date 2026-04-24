@@ -10,4 +10,9 @@
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- ~ version à valider : cf. CLAUDE.md mcp-home "Version exacte du SDK à valider au moment du pin" -->
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="0.2.0-preview.3" />
+  </ItemGroup>
+
 </Project>
