@@ -53,8 +53,8 @@ class Config:
             llm_api_key=os.getenv("LLM_API_KEY", "local-not-used"),
             stt_model=os.getenv("STT_MODEL", "large-v3"),
             tts_engine=os.getenv("TTS_ENGINE", "piper"),
-            tts_voice_fr=os.getenv("TTS_VOICE_FR", "fr_FR-siwis-medium"),
-            tts_voice_en=os.getenv("TTS_VOICE_EN", "en_US-amy-medium"),
+            tts_voice_fr=os.getenv("TTS_VOICE_FR", "fr_FR-gilles-low"),
+            tts_voice_en=os.getenv("TTS_VOICE_EN", "en_GB-alan-medium"),
             wakeword_model=os.getenv(
                 "WAKEWORD_MODEL", "assets/wakeword/hey_carlson.tflite"
             ),
