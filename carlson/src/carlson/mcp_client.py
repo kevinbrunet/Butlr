@@ -1,69 +1,49 @@
 """MCP client bridge — exposes MCP tools as OpenAI-style function schemas.
 
-Transport : **SSE/HTTP** (cf. ADR 0003). mcp-home est un service long-running
-accessible à `MCP_HOME_URL`. Carlson ouvre une connexion SSE au démarrage,
-s'authentifie par bearer token (`MCP_HOME_TOKEN`) et liste les tools.
-
-Plus de spawn en sous-processus — ce module ne touche jamais stdin/stdout.
+Transport : **Streamable HTTP** (cf. ADR 0003). mcp-home est un service
+long-running accessible à `MCP_HOME_URL`, câblé avec `.WithHttpTransport()`
+côté .NET. Carlson utilise donc `streamablehttp_client` du SDK Python.
 
 Flux :
-  1. Ouvrir la session SSE vers `MCP_HOME_URL` avec l'entête Authorization.
-  2. `list_tools()` → stocker les schemas MCP.
-  3. `tools_as_openai()` les convertit en function schemas OpenAI-compatibles
-     (consommés par le LLM servi par llama.cpp server, cf. ADR 0006).
-  4. Sur tool_call émis par le LLM, `call(name, args)` le forwarde à mcp-home
-     et renvoie un résultat texte.
+  1. Ouvrir la session vers `MCP_HOME_URL` avec l'entête Authorization.
+  2. `list_tools()` → stocker les schémas MCP.
+  3. `tools_as_pipecat()` les convertit en `ToolsSchema` Pipecat
+     (FunctionSchema par outil), consommé par le LLMContext.
+  4. Sur tool_call émis par le LLM, `call(name, args)` le forwarde à
+     mcp-home et renvoie un résultat texte pour réinjection dans le contexte.
 
-Stub volontaire pour la Phase 0 — l'implémentation réelle arrive à la Phase 3
-(wiring SDK `mcp` Python avec le client SSE). ~ L'API exacte du SDK (noms de
-context managers, shape de Session) dépend de la version pinnée : à valider
-au moment du wiring.
+Reconnexion : backoff exponentiel, max 5 tentatives (~). Si mcp-home est
+indisponible au démarrage, Carlson démarre sans tools et log une erreur.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Any
 
-# Imports lazy au moment du wiring réel :
-# from mcp.client.sse import sse_client
-# from mcp.client.session import ClientSession
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
 
 log = logging.getLogger("carlson.mcp_client")
+
+_MAX_RETRIES = 5
+_INITIAL_BACKOFF_S = 1.0
 
 
 @dataclass
 class ToolSchema:
     name: str
     description: str
-    parameters: dict[str, Any]  # JSON Schema
-
-
-def tool_to_openai(schema: ToolSchema) -> dict[str, Any]:
-    """Convert an MCP tool schema into the OpenAI functions format.
-
-    Le LLM local (Qwen 2.5 via llama.cpp server, endpoint /v1/chat/completions)
-    consomme ce format sans adaptation.
-    """
-    return {
-        "type": "function",
-        "function": {
-            "name": schema.name,
-            "description": schema.description,
-            "parameters": schema.parameters,
-        },
-    }
+    parameters: dict[str, Any]  # JSON Schema object (type/properties/required)
 
 
 class McpHomeClient:
-    """Thin async wrapper around the mcp SSE client.
+    """Async wrapper around the mcp Streamable HTTP client.
 
-    Skeleton — l'implémentation arrive en Phase 3 (cf. plan de roadmap Carlson).
-
-    ~ l'API exacte (context manager sur sse_client, shape de ClientSession,
-    normalisation des résultats) diffère selon la version du SDK `mcp` —
-    à pinner et valider avant wiring.
+    Lifecycle : ``await client.start()`` au démarrage, ``await client.stop()``
+    dans le bloc ``finally`` de ``main.py``.
     """
 
     def __init__(self, url: str, token: str = "") -> None:
@@ -76,18 +56,15 @@ class McpHomeClient:
         self._url = url
         self._token = token
         self._tools: list[ToolSchema] = []
+        self._session: ClientSession | None = None
+        self._http_cm: Any = None
+        self._session_cm: Any = None
 
     async def start(self) -> None:
-        """Ouvre la session SSE, liste les tools, les mémorise.
+        """Open Streamable HTTP session, list tools, store schemas.
 
-        TODO Phase 3 :
-          - construire les headers (``Authorization: Bearer <token>`` si non vide) ;
-          - ``async with sse_client(self._url, headers=...) as streams:`` ;
-          - ``async with ClientSession(*streams) as session:`` ;
-          - ``await session.initialize()`` ;
-          - ``tools = await session.list_tools()`` ;
-          - mapper vers ``ToolSchema`` et garder la session vivante pour ``call``.
-          - reconnexion avec backoff exponentiel si ``sse_client`` lève.
+        Retries with exponential backoff (max _MAX_RETRIES attempts).
+        Failure is non-fatal: Carlson starts without tool-calling capability.
         """
         log.info("Starting MCP client → %s", self._url)
         if not self._token:
@@ -95,22 +72,106 @@ class McpHomeClient:
                 "MCP_HOME_TOKEN is empty — running without auth. OK only on a "
                 "trusted LAN (cf. ADR 0003)."
             )
-        # self._tools = [ToolSchema(...) for t in tools]
+        headers: dict[str, str] | None = (
+            {"Authorization": f"Bearer {self._token}"} if self._token else None
+        )
+
+        backoff = _INITIAL_BACKOFF_S
+        for attempt in range(1, _MAX_RETRIES + 1):
+            try:
+                self._http_cm = streamablehttp_client(self._url, headers=headers)
+                read, write, _ = await self._http_cm.__aenter__()
+                self._session_cm = ClientSession(read, write)
+                self._session = await self._session_cm.__aenter__()
+                await self._session.initialize()
+                result = await self._session.list_tools()
+                self._tools = [
+                    ToolSchema(
+                        name=t.name,
+                        description=t.description or "",
+                        parameters=t.inputSchema,
+                    )
+                    for t in result.tools
+                ]
+                log.info("MCP tools disponibles : %s", [t.name for t in self._tools])
+                return
+            except Exception as exc:
+                log.warning(
+                    "MCP client démarrage échoué (tentative %d/%d) : %s",
+                    attempt,
+                    _MAX_RETRIES,
+                    exc,
+                )
+                self._session = None
+                self._session_cm = None
+                self._http_cm = None
+                if attempt < _MAX_RETRIES:
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, 30.0)
+
+        log.error(
+            "MCP client ne peut pas joindre mcp-home après %d tentatives — "
+            "tool calling désactivé pour cette session.",
+            _MAX_RETRIES,
+        )
 
     async def stop(self) -> None:
-        """Ferme proprement la session SSE."""
-        # TODO: exit des context managers, cancel de la tâche de reconnexion.
-        pass
+        """Close the HTTP session cleanly."""
+        if self._session_cm is not None:
+            try:
+                await self._session_cm.__aexit__(None, None, None)
+            except Exception:
+                pass
+            self._session_cm = None
+        if self._http_cm is not None:
+            try:
+                await self._http_cm.__aexit__(None, None, None)
+            except Exception:
+                pass
+            self._http_cm = None
+        self._session = None
 
     def tools_as_openai(self) -> list[dict[str, Any]]:
-        return [tool_to_openai(t) for t in self._tools]
+        """Return tools in OpenAI function-calling format (for debugging / tests)."""
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": t.parameters,
+                },
+            }
+            for t in self._tools
+        ]
+
+    def tools_as_pipecat(self) -> Any | None:
+        """Return a ToolsSchema for Pipecat's LLMContext, or None if no tools."""
+        if not self._tools:
+            return None
+        from pipecat.adapters.schemas.function_schema import FunctionSchema
+        from pipecat.adapters.schemas.tools_schema import ToolsSchema
+
+        schemas = [
+            FunctionSchema(
+                name=t.name,
+                description=t.description,
+                properties=t.parameters.get("properties", {}),
+                required=t.parameters.get("required", []),
+            )
+            for t in self._tools
+        ]
+        return ToolsSchema(standard_tools=schemas)
 
     async def call(self, tool_name: str, arguments: dict[str, Any]) -> str:
-        """Invoke an MCP tool and return a plain-text result for the LLM.
-
-        TODO Phase 3 : ``result = await session.call_tool(tool_name, arguments)``,
-        puis normaliser ``result.content`` (texte, éventuellement liste de parts)
-        en une chaîne que le LLM puisse ingérer.
-        """
-        log.info("Calling MCP tool %s with args %s", tool_name, arguments)
-        return f"(stub) called {tool_name}"
+        """Invoke an MCP tool and return a plain-text result for the LLM."""
+        if self._session is None:
+            log.error("MCP tool '%s' appelé mais client non connecté", tool_name)
+            return f"(erreur) mcp-home non disponible, impossible d'appeler {tool_name}"
+        log.info("MCP tool_call → %s  args=%s", tool_name, arguments)
+        result = await self._session.call_tool(tool_name, arguments)
+        if result.isError:
+            log.error("MCP tool '%s' a retourné une erreur : %s", tool_name, result.content)
+            return f"(erreur de {tool_name})"
+        parts = [c.text for c in result.content if hasattr(c, "text")]
+        return "\n".join(parts) if parts else "(ok)"
