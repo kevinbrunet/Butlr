@@ -12,8 +12,11 @@ Flux :
   4. Sur tool_call émis par le LLM, `call(name, args)` le forwarde à
      mcp-home et renvoie un résultat texte pour réinjection dans le contexte.
 
-Reconnexion : backoff exponentiel, max 5 tentatives (~). Si mcp-home est
-indisponible au démarrage, Carlson démarre sans tools et log une erreur.
+Lifetime : la connexion est maintenue dans une tâche asyncio de fond (_task).
+anyio impose que le cancel scope d'un task group soit entré et sorti depuis
+la même tâche — on ne peut donc pas faire __aenter__/__aexit__ manuels sur
+streamablehttp_client. Le pattern correct est un background task qui garde
+le `async with` ouvert et attend un stop_event.
 """
 
 from __future__ import annotations
@@ -44,6 +47,10 @@ class McpHomeClient:
 
     Lifecycle : ``await client.start()`` au démarrage, ``await client.stop()``
     dans le bloc ``finally`` de ``main.py``.
+
+    La connexion est maintenue dans une tâche de fond. ``start()`` retourne
+    dès que la session est établie (ou que toutes les tentatives ont échoué).
+    ``stop()`` signale la tâche et attend qu'elle se termine.
     """
 
     def __init__(self, url: str, token: str = "") -> None:
@@ -57,44 +64,42 @@ class McpHomeClient:
         self._token = token
         self._tools: list[ToolSchema] = []
         self._session: ClientSession | None = None
-        self._http_cm: Any = None
-        self._session_cm: Any = None
+        self._task: asyncio.Task[None] | None = None
+        self._stop_event = asyncio.Event()
+        self._ready_event = asyncio.Event()
 
-    async def start(self) -> None:
-        """Open Streamable HTTP session, list tools, store schemas.
-
-        Retries with exponential backoff (max _MAX_RETRIES attempts).
-        Failure is non-fatal: Carlson starts without tool-calling capability.
-        """
-        log.info("Starting MCP client → %s", self._url)
-        if not self._token:
-            log.warning(
-                "MCP_HOME_TOKEN is empty — running without auth. OK only on a "
-                "trusted LAN (cf. ADR 0003)."
-            )
+    async def _run(self) -> None:
+        """Background task : connect, stay alive, disconnect on stop."""
         headers: dict[str, str] | None = (
             {"Authorization": f"Bearer {self._token}"} if self._token else None
         )
-
         backoff = _INITIAL_BACKOFF_S
+
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
-                self._http_cm = streamablehttp_client(self._url, headers=headers)
-                read, write, _ = await self._http_cm.__aenter__()
-                self._session_cm = ClientSession(read, write)
-                self._session = await self._session_cm.__aenter__()
-                await self._session.initialize()
-                result = await self._session.list_tools()
-                self._tools = [
-                    ToolSchema(
-                        name=t.name,
-                        description=t.description or "",
-                        parameters=t.inputSchema,
-                    )
-                    for t in result.tools
-                ]
-                log.info("MCP tools disponibles : %s", [t.name for t in self._tools])
-                return
+                async with streamablehttp_client(self._url, headers=headers) as (
+                    read,
+                    write,
+                    _,
+                ):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        result = await session.list_tools()
+                        self._tools = [
+                            ToolSchema(
+                                name=t.name,
+                                description=t.description or "",
+                                parameters=t.inputSchema,
+                            )
+                            for t in result.tools
+                        ]
+                        log.info(
+                            "MCP tools disponibles : %s", [t.name for t in self._tools]
+                        )
+                        self._session = session
+                        self._ready_event.set()
+                        await self._stop_event.wait()
+                        return
             except Exception as exc:
                 log.warning(
                     "MCP client démarrage échoué (tentative %d/%d) : %s",
@@ -102,9 +107,6 @@ class McpHomeClient:
                     _MAX_RETRIES,
                     exc,
                 )
-                self._session = None
-                self._session_cm = None
-                self._http_cm = None
                 if attempt < _MAX_RETRIES:
                     await asyncio.sleep(backoff)
                     backoff = min(backoff * 2, 30.0)
@@ -114,21 +116,30 @@ class McpHomeClient:
             "tool calling désactivé pour cette session.",
             _MAX_RETRIES,
         )
+        self._ready_event.set()  # débloque start() même en cas d'échec total
+
+    async def start(self) -> None:
+        """Spawn the background connection task and wait until ready (or failed)."""
+        log.info("Starting MCP client → %s", self._url)
+        if not self._token:
+            log.warning(
+                "MCP_HOME_TOKEN is empty — running without auth. OK only on a "
+                "trusted LAN (cf. ADR 0003)."
+            )
+        self._stop_event.clear()
+        self._ready_event.clear()
+        self._task = asyncio.create_task(self._run(), name="mcp-home-client")
+        await self._ready_event.wait()
 
     async def stop(self) -> None:
-        """Close the HTTP session cleanly."""
-        if self._session_cm is not None:
+        """Signal the background task to exit and wait for it."""
+        self._stop_event.set()
+        if self._task is not None:
             try:
-                await self._session_cm.__aexit__(None, None, None)
+                await self._task
             except Exception:
                 pass
-            self._session_cm = None
-        if self._http_cm is not None:
-            try:
-                await self._http_cm.__aexit__(None, None, None)
-            except Exception:
-                pass
-            self._http_cm = None
+            self._task = None
         self._session = None
 
     def tools_as_openai(self) -> list[dict[str, Any]]:
