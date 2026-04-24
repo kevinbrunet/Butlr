@@ -1,12 +1,14 @@
 """Pipecat pipeline assembly.
 
-Frame flow (Phase 2, Slice 1 — STT → LLM → TTS, pas de tool) :
+Frame flow (Phase 3, Slice 2 — STT → LLM (+tools MCP) → TTS) :
 
     mic → [PTT gate | VAD] → STT → context_agg.user → LLM → TTS → speaker
-                                                               ↕
-                                                      context_agg.assistant
+                                                          ↕         ↕
+                                                    tool_call   context_agg.assistant
+                                                       ↓
+                                                  McpHomeClient.call()
 
-Wake word et MCP tools câblés en phases ultérieures.
+Wake word câblé en Phase 4.
 
 ~ Les chemins d'import Pipecat dépendent de la version pinnée. Si une import
   rate, faire `python -c "import pipecat; print(pipecat.__version__)"` et
@@ -60,8 +62,6 @@ def _make_ptt_gate() -> Any:
                 log.debug("PTT gate fermée → transcription déclenchée")
 
         async def process_frame(self, frame, direction):
-            from pipecat.frames.frames import StartFrame, EndFrame, CancelFrame
-
             await super().process_frame(frame, direction)
 
             # Bloquer uniquement l'audio quand la gate est fermée.
@@ -120,16 +120,31 @@ async def build_pipeline(config: Config, mcp: McpHomeClient) -> tuple[Any, Any]:
     from pipecat.processors.aggregators.llm_response_universal import LLMContext, LLMContextAggregatorPair
     from pipecat.transports.local.audio import LocalAudioTransport, LocalAudioTransportParams
 
+    from pipecat.services.llm_service import FunctionCallParams
+
     stt = build_stt_service(config)
     llm = build_llm_service(config)
     tts = build_tts_service(config)
 
-    # MCP tools — pas câblés en Phase 2 (pas de tool calling). Sera passé au LLM
-    # service en Phase 3 via llm.set_tools(mcp.tools_as_openai()).
-    _ = mcp
+    # MCP tools — Phase 3 : passer les schemas au LLM et enregistrer le handler.
+    tools_schema = mcp.tools_as_pipecat()
+
+    if tools_schema is not None:
+        async def _handle_tool_call(params: FunctionCallParams) -> None:
+            result = await mcp.call(params.function_name, dict(params.arguments))
+            await params.result_callback(result)
+
+        llm.register_function(None, _handle_tool_call)
+        log.info("Tool calling activé (%d tools)", len(mcp.tools_as_openai()))
+    else:
+        log.info("Aucun tool MCP disponible — mode texte seul.")
 
     # ~ create_context_aggregator pattern — stable depuis pipecat 1.0.0
-    context = LLMContext(messages=[{"role": "system", "content": SYSTEM_PROMPT}])
+    # tools omis si None (LLMContext attend NOT_GIVEN, pas None).
+    context = LLMContext(
+        messages=[{"role": "system", "content": SYSTEM_PROMPT}],
+        **({"tools": tools_schema} if tools_schema is not None else {}),
+    )
     context_aggregator = LLMContextAggregatorPair(context)
 
     transcription_logger = _make_transcription_logger()
