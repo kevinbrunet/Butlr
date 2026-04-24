@@ -39,7 +39,7 @@ def build_tts_service(config: Config):
     log.info("TTS service → piper, voix FR=%s", config.tts_voice_fr)
     return PiperTTSService(
         settings=PiperTTSService.Settings(voice=config.tts_voice_fr),
-        use_cuda=True,
+        use_cuda=False,  # TODO(Phase 4): réactiver quand cuDNN 9 est installé
         # ~ sample_rate : Piper génère en 22050 Hz par défaut. Si LocalAudioTransport
         # attend une fréquence différente, ajuster ici ou dans les params transport.
     )
