@@ -67,7 +67,7 @@ class Config:
                 "WAKEWORD_MODEL", "assets/wakeword/hey_carlson.tflite"
             ),
             wakeword_threshold=float(os.getenv("WAKEWORD_THRESHOLD", "0.5")),
-            mcp_home_url=os.getenv("MCP_HOME_URL", "http://localhost:5090/mcp"),
+            mcp_home_url=os.getenv("MCP_HOME_URL", "https://localhost:5001/mcp"),
             mcp_home_token=os.getenv("MCP_HOME_TOKEN", ""),
             filler_delay_ms=int(os.getenv("FILLER_DELAY_MS", "500")),
             language_default=os.getenv("LANGUAGE_DEFAULT", "fr"),

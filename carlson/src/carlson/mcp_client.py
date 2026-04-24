@@ -26,13 +26,30 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
+from mcp.shared._httpx_utils import MCP_DEFAULT_SSE_READ_TIMEOUT, MCP_DEFAULT_TIMEOUT
 
 log = logging.getLogger("carlson.mcp_client")
 
 _MAX_RETRIES = 5
 _INITIAL_BACKOFF_S = 1.0
+
+
+def _unverified_http_client_factory(
+    headers: dict[str, str] | None = None,
+    timeout: httpx.Timeout | None = None,
+    auth: httpx.Auth | None = None,
+) -> httpx.AsyncClient:
+    """Factory httpx sans vérification TLS — pour le certificat dev auto-signé de mcp-home."""
+    return httpx.AsyncClient(
+        headers=headers or {},
+        timeout=timeout or httpx.Timeout(MCP_DEFAULT_TIMEOUT, read=MCP_DEFAULT_SSE_READ_TIMEOUT),
+        auth=auth,
+        follow_redirects=True,
+        verify=False,  # certificat auto-signé en dev (cf. ADR 0003 — à remplacer par un vrai cert en prod)
+    )
 
 
 @dataclass
@@ -77,7 +94,11 @@ class McpHomeClient:
 
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
-                async with streamablehttp_client(self._url, headers=headers) as (
+                async with streamablehttp_client(
+                    self._url,
+                    headers=headers,
+                    httpx_client_factory=_unverified_http_client_factory,
+                ) as (
                     read,
                     write,
                     _,
@@ -106,6 +127,7 @@ class McpHomeClient:
                     attempt,
                     _MAX_RETRIES,
                     exc,
+                    exc_info=True,
                 )
                 if attempt < _MAX_RETRIES:
                     await asyncio.sleep(backoff)
