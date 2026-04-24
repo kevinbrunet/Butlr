@@ -1,20 +1,18 @@
 """Butlr / Phase 1 — smoke test faster-whisper sur un WAV court.
 
 Usage :
-    # depuis un venv avec faster-whisper installé :
-    #   python -m venv .venv
-    #   .venv\Scripts\Activate.ps1
-    #   pip install faster-whisper
-    #
+    # depuis le venv carlson (pip install -e .[all]) :
     python Test-Whisper.py <chemin-vers-wav>
 
 Variables d'env lues (avec fallback) :
-    WHISPER_MODEL         (défaut : large-v3)
+    STT_MODEL             chemin absolu vers un dossier CTranslate2 local,
+                          ou nom HF ("large-v3"). Défaut = ~/butlr-env/models/whisper/faster-whisper-large-v3.
+                          Valorisé automatiquement par env.ps1 (via Get-WhisperModel.ps1).
     WHISPER_DEVICE        (défaut : cuda)
     WHISPER_COMPUTE_TYPE  (défaut : float16)
 
-Au premier lancement, faster-whisper télécharge le modèle (~3 GB pour large-v3 ~).
-Le cache HF par défaut est ~/.cache/huggingface/hub (ou %USERPROFILE%\.cache\...).
+Le modèle doit être téléchargé au préalable avec Get-WhisperModel.ps1.
+Aucun accès réseau n'est effectué si STT_MODEL pointe sur un dossier local valide.
 """
 
 from __future__ import annotations
@@ -23,6 +21,11 @@ import os
 import sys
 import time
 from pathlib import Path
+
+
+def _default_model() -> str:
+    butlr_env = os.environ.get("BUTLR_ENV_DIR", str(Path.home() / "butlr-env"))
+    return str(Path(butlr_env) / "models" / "whisper" / "faster-whisper-large-v3")
 
 
 def main() -> int:
@@ -39,20 +42,20 @@ def main() -> int:
         from faster_whisper import WhisperModel
     except ImportError:
         print(
-            "faster-whisper non installé. Dans un venv : pip install faster-whisper",
+            "faster-whisper non installé. Dans le venv carlson : pip install -e .[all]",
             file=sys.stderr,
         )
         return 2
 
-    model_name   = os.environ.get("WHISPER_MODEL", "large-v3")
+    model_path   = os.environ.get("STT_MODEL", _default_model())
     device       = os.environ.get("WHISPER_DEVICE", "cuda")
     compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "float16")
 
-    print(f"[..] Chargement {model_name} ({device}, {compute_type})...")
+    print(f"[..] Chargement {model_path} ({device}, {compute_type})...")
     t0 = time.perf_counter()
-    model = WhisperModel(model_name, device=device, compute_type=compute_type)
+    model = WhisperModel(model_path, device=device, compute_type=compute_type, local_files_only=True)
     t_load = time.perf_counter() - t0
-    print(f"[ok] Modèle chargé en {t_load:.1f}s")
+    print(f"[ok] Modèle chargé en {t_load:.1f}s ({model_path})")
 
     print(f"[..] Transcription : {wav_path}")
     t0 = time.perf_counter()

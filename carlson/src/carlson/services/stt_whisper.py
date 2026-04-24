@@ -20,7 +20,7 @@ def build_stt_service(config: Config):
         def __init__(self, model_size: str, device: str, compute_type: str) -> None:
             # model et language doivent être initialisés (pas NOT_GIVEN) — Pipecat 1.0 validate_complete
             super().__init__(settings=STTSettings(model=model_size, language=None))
-            self._model = WhisperModel(model_size, device=device, compute_type=compute_type)
+            self._model = WhisperModel(model_size, device=device, compute_type=compute_type, local_files_only=True)
 
         async def run_stt(self, audio: bytes) -> AsyncGenerator[Frame, None]:
             # Pipecat 1.0 : run_stt est un async generator qui yield des frames,
