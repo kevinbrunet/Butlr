@@ -25,6 +25,9 @@ wake = ["openwakeword>=0.6"]
 tts-piper = ["piper-tts>=1.2"]
 tts-xtts = ["TTS>=0.22"]  # ⚠ licence à vérifier avant usage non-personnel
 llm = ["openai>=1.30"]   # OpenAI-compatible client parlant à llama.cpp server (cf. ADR 0006)
+# ~ onnxruntime-gpu remplace onnxruntime (CPU) — mutuellement exclusifs, pip gère le conflit.
+#   Requis par piper-tts et faster-whisper pour l'inférence GPU (CUDA 11.x/12.x).
+cuda = ["onnxruntime-gpu>=1.18"]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.4"]
 all = [
     "faster-whisper>=1.0",
@@ -32,6 +35,7 @@ all = [
     "openwakeword>=0.6",
     "piper-tts>=1.2",
     "openai>=1.30",
+    "onnxruntime-gpu>=1.18",
 ]
 
 [project.scripts]

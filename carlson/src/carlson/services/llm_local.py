@@ -32,5 +32,5 @@ def build_llm_service(config: Config):
     return OpenAILLMService(
         base_url=config.llm_base_url,
         api_key=config.llm_api_key,  # llama.cpp l'ignore, OpenAI SDK l'exige
-        model=config.llm_model,
+        settings=OpenAILLMService.Settings(model=config.llm_model),
     )
