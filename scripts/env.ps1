@@ -41,10 +41,10 @@ $env:PIPER_VOICES_BASE_URL = "https://huggingface.co/rhasspy/piper-voices/resolv
 
 # Voix FR + EN retenues (cf. architecture.md §3.1 et carlson/config.py par défaut).
 # Chaque voix = 2 fichiers : .onnx (modèle) + .onnx.json (config).
-$env:PIPER_VOICE_FR_NAME = "fr_FR-siwis-medium"
-$env:PIPER_VOICE_FR_PATH = "fr/fr_FR/siwis/medium"
-$env:PIPER_VOICE_EN_NAME = "en_US-amy-medium"
-$env:PIPER_VOICE_EN_PATH = "en/en_US/amy/medium"
+$env:PIPER_VOICE_FR_NAME = "fr_FR-gilles-low"
+$env:PIPER_VOICE_FR_PATH = "fr/fr_FR/gilles/low"
+$env:PIPER_VOICE_EN_NAME = "en_GB-alan-medium"
+$env:PIPER_VOICE_EN_PATH = "en/en_GB/alan/medium"
 
 # -----------------------------------------------------------------------------
 # Whisper (faster-whisper)
