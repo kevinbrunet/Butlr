@@ -25,7 +25,7 @@ RUN pip install --no-cache-dir -e /oww
 
 # Télécharge les modèles utilitaires OWW (melspectrogram.onnx, embedding_model.onnx…)
 # Ces fichiers ne sont pas dans le repo git — ils sont dans openwakeword/resources/models/.
-RUN python -c "import openwakeword; openwakeword.utils.download_models(openwakeword.MODELS_PATH)"
+RUN python -c "import openwakeword.utils; openwakeword.utils.download_models()"
 
 # Fork dscripka de piper-sample-generator — c'est celui référencé par OWW.
 # (github.com/rhasspy/piper-sample-generator a été restructuré et n'a plus generate_samples.py)
