@@ -15,6 +15,7 @@ FROM python:3.10-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git wget ffmpeg libsndfile1 \
     build-essential \
+    espeak-ng \
     && rm -rf /var/lib/apt/lists/*
 
 # openWakeWord depuis git — nécessaire pour accéder à openwakeword/train.py
@@ -55,6 +56,7 @@ RUN pip install --no-cache-dir \
     audiomentations==0.33.0 \
     torch-audiomentations==0.11.0 \
     piper-phonemize \
+    espeak-phonemizer \
     webrtcvad \
     acoustics==0.2.6 \
     scipy \
