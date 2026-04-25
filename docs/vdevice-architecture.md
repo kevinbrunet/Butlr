@@ -19,9 +19,11 @@
                                             ├─ UI web (dashboard arbitrage)
                                             └─ Couche VDevice ← ce doc
                                                   │
-                                                  ├─ Orchestrateur (résolution + audit)
-                                                  ├─ Registre permissions
-                                                  ├─ Registre devices
+                                                  ├─ Orchestrateur (arbitrage + state JSONL)
+                                                  ├─ Config git/yaml (hiérarchie maison/étage/pièce/device)
+                                                  ├─ Permissions (yaml en git)
+                                                  ├─ Registre devices (yaml en git + état runtime in-memory)
+                                                  ├─ ObservabilityService → OTel (out-of-scope)
                                                   └─ Drivers MQTT
                                                         │
                                                         └─► Bus MQTT (Mosquitto)
@@ -36,12 +38,13 @@ Carlson (et tout autre client MCP) **ne parle pas directement au modèle VDevice
 
 Concrètement, deux catégories de citoyens cohabitent dans le modèle :
 
-| Catégorie | Exemples | Émet | `actor_kind` |
+| Catégorie | Exemples | Tag VDevice | `actor_kind` |
 |---|---|---|---|
-| **Application autonome** | App Cocooning, App ChauffageEco, plugins de résolution | VDevices niveau 1 uniquement | `app` |
-| **Agent-utilisateur** | Carlson, UI web, app mobile, interrupteur niveau 2 | VDevices niveau 1 et 2 (le 2 reste réservé à l'utilisateur, ADR 0007) | `user_agent` |
+| **Application autonome** | App Cocooning, App ChauffageEco, arbitres custom | `app` | `app` |
+| **Agent-utilisateur** | Carlson, UI web, app mobile, interrupteur de pièce niveau 2 | `user_agent` | `user_agent` |
+| **Système** | Détecteurs intégrés (CO, fumée), composants signés du système | `system` | `system` |
 
-Le payload d'intention porte donc `actor_kind`, `actor_user_id` (pour les agents-utilisateur), `via_agent_id` (le canal : `carlson`, `ui-web`, `switch:salon`...), et `app_id` (pour les apps autonomes). Détails dans ADR 0013 et §4 ci-dessous.
+Le payload d'intention porte donc `actor_kind`, `actor_user_id` (pour les agents-utilisateur), `via_agent_id` (le canal : `carlson`, `ui-web`, `switch:salon`...), `app_id` (pour les apps autonomes), et un `tier_id` optionnel. Le **niveau cible** est résolu automatiquement par admission de tags si non spécifié — cf. [ADR 0014](adr/0014-dynamic-tiers-arbiters.md). Détails dans ADR 0013, ADR 0014 et §4 ci-dessous.
 
 ---
 
@@ -51,46 +54,60 @@ Le payload d'intention porte donc `actor_kind`, `actor_user_id` (pour les agents
 
 Service .NET hébergé dans `mcp-home`. Responsabilités :
 
-- Maintenir la liste des **VDevices actifs** (ADR 0008).
+- Maintenir la liste des **VDevices actifs en mémoire** (ADR 0008, persistés via snapshot JSONL — cf. ADR 0016).
 - Recevoir les déclarations d'intention (`create / update / renew / release`).
-- **Résoudre la commande device** par device, à chaque changement pertinent (nouvelle intention, expiration, changement de priorité).
+- **Résoudre la commande device** par device : pour chaque changement pertinent, itérer les niveaux configurés dans l'ordre de `rank` croissant, demander à l'arbitre de chaque niveau s'il a une valeur, premier non-null gagne (cf. ADR 0014 — strict winner-takes-all entre niveaux).
 - Émettre les commandes vers les drivers.
 - Émettre les événements vers les apps (`vdevice.preempted`, etc.).
-- Persister VDevices, audit, état réel (ADR 0012).
+- Émettre spans / logs / metrics OTel pour toute opération significative (cf. ADR 0016).
 
 C'est le composant **stateful par excellence** du système. Tout le reste gravite autour.
 
-### 2.2 Resolver (politique d'arbitrage par device)
+### 2.2 TierRegistry et arbitres (par niveau, configurable)
 
-Composant interne à l'orchestrateur, paramétrable par device :
+L'arbitrage n'est plus une fonction monolithique : c'est un **registre de niveaux** chargé depuis la config (cf. ADR 0014, ADR 0015), où chaque niveau porte son propre arbitre, ses tags d'admission, sa politique de durée, son flag `bypass_inertia`.
 
-- **Niveau 3** présent → winner-takes-all absolu, bypass inertie.
-- **Niveau 2** présent et non expiré → winner-takes-all, départage timestamp serveur.
-- **Niveau 1** : politique configurable :
-  - Par défaut : **priorité stricte**.
-  - Optionnel : **plugin de résolution** (pondération, courbe, blending) — implémenté en .NET, chargé par config par device.
+- **`TierRegistry`** : structure read-only chargée au démarrage depuis `config/home.yaml` (et les overrides de pièce / device). Indexe les niveaux par `id` et par `rank`. Valide la cohérence au load-time : rangs uniques, ids uniques, arbitres référencés existent, tags valides.
+- **`IArbiter`** (anciennement `IResolver`) : interface pure
+  ```csharp
+  interface IArbiter
+  {
+      Value? Arbitrate(IReadOnlyCollection<VDevice> admitted, RealState? state);
+  }
+  ```
+- Implémentations de référence dans `Butlr.VDevice.Core` :
+  - `WinnerTakesAllArbiter` — premier admis gagne (utile pour `safety` ou tout niveau mono-émetteur).
+  - `StrictPriorityArbiter` — plus haute priorité gagne, départage timestamp serveur.
+  - `UserPriorityThenTimestampArbiter` — départage par priorité utilisateur d'abord, timestamp serveur ensuite (cf. ADR 0008).
+  - `WeightedAverageArbiter` — moyenne pondérée des valeurs des VDevices admis (uniquement pour les attributs numériques continus ; refus typé sinon).
+- **Arbitres custom** chargés depuis des assemblies .NET listées dans la config (cf. ADR 0014 §"Plugins d'arbitre").
 
-Le resolver est une fonction pure : `(vdevices[], real_state) → command`. Cette pureté permet des tests unitaires exhaustifs sans tirer le reste du système.
+Les arbitres sont des **fonctions pures**. Tests unitaires exhaustifs sans tirer le reste du système.
 
-### 2.3 Permission Registry
+### 2.3 Permission Registry (en git/yaml)
 
-Stockage SQLite + API :
+Lecture sur disque + cache mémoire (cf. ADR 0009 patché par ADR 0014, persistance via ADR 0015) :
 
-- Octroi à la première déclaration (cf. ADR 0009).
+- Source de vérité : `~/.butlr/config/permissions/<app_id>__<device_id>.yaml`.
+- Octroi à la première déclaration (UI ou vocal) — création + commit git.
 - Lecture rapide par couple `(app_id, device_id)`.
-- Notifications utilisateur (UI / vocal) à l'octroi.
-- Révocation propage immédiatement aux VDevices actifs.
+- Révocation : update du fichier (`status: revoked`) + commit, propage immédiatement aux VDevices actifs (préemption).
+- Les agents-utilisateur ne consultent pas ce registre (ils ne sont pas soumis au modèle de permission — cf. ADR 0013).
 
-### 2.4 Device Registry
+### 2.4 Device Registry et hiérarchie maison/étage/pièce/device (en git/yaml)
 
-Stockage SQLite + API :
+Source de vérité : arborescence `~/.butlr/config/<étage>/<pièce>/<device>.yaml` (cf. ADR 0015) :
 
 - Devices logiques avec leurs clusters Matter supportés (ADR 0010).
 - Mappage vers `external_id` MQTT (Z2M / ZWaveJS).
-- État de santé courant (online/offline/degraded).
-- Friendly name et pièce assignés par l'utilisateur.
+- Friendly name dérivé du nom de fichier ou explicite.
+- Pièce et étage dérivés de la position dans l'arborescence — pas de duplication.
+- `tier_overrides` par device : delta vs config héritée de la pièce.
+- `fallback` opt-in par device (cf. ADR 0012 §"Pas de fallback automatique" — règle préservée).
 
-Peuplé automatiquement par les drivers via les annonces MQTT.
+L'**état de santé** courant (online/offline/degraded) est **en mémoire**, alimenté par les drivers, **pas persisté** (cf. ADR 0016 §"État réel des devices").
+
+Découverte automatique Z2M : si une annonce MQTT mentionne un `external_id` non listé, le device est créé en yaml dans un répertoire `unsorted/` à la racine ; l'utilisateur le déplace ensuite dans la bonne pièce via l'UI ou un `git mv`.
 
 ### 2.5 Drivers
 
@@ -106,11 +123,16 @@ Un driver = adaptateur Matter cluster ↔ MQTT pour une **classe de device** (AD
 
 Chaque driver écoute les topics MQTT pertinents, normalise vers Matter, applique l'inertie, et publie les commandes.
 
-### 2.6 Audit Log
+### 2.6 Observabilité (OpenTelemetry)
 
-Journal append-only persisté (SQLite ou fichier rotaté, cf. ADR 0012). Toutes les opérations significatives y passent : création/mort de VDevice, commande envoyée, ack reçu, erreur, octroi/révocation de permission.
+Toutes les opérations significatives produisent des **spans, logs structurés et metrics OTel** (cf. [ADR 0016](adr/0016-state-snapshot-otel-observability.md)). Le **collector OTel et le backend de stockage** (Loki, Tempo, Grafana, OpenSearch…) sont **out-of-scope `mcp-home`** — c'est l'opérateur qui les configure.
 
-L'UI dashboard et la vue "qui propose quoi" en sont la lecture.
+- **Service** `ObservabilityService` : façade interne qui encapsule l'instrumentation. Émet :
+  - Span `arbitration` par décision (attributs : `device_id`, `evaluated_tiers`, `winning_tier`, `winning_vdevice_id`, `arbiter`, `inputs_count`).
+  - Span enfant `driver.command` à l'envoi MQTT.
+  - Logs structurés `vdevice.created/renewed/released/expired/preempted`, `permission.granted/revoked`, `device.command_failed`.
+  - Metrics : `butlr.vdevice.active`, `butlr.arbitration.duration`, `butlr.driver.command.total`, `butlr.mqtt.connected`, `butlr.permission.pending`.
+- **Endpoint local "recent activity"** (Phase 2.6) : cache mémoire des `~ 1000 dernières` décisions par device, lu par l'UI dashboard. Pas un audit légal, juste une vue rapide pour l'utilisateur sans dépendance backend.
 
 ### 2.7 Surface API
 
@@ -127,11 +149,13 @@ L'**actor_kind n'est pas choisi par le client** : il est posé par la couche d'e
 
 Page web servie par `mcp-home` (cf. `architecture.md` §7.4 — la page existante est étendue) :
 
+- Vue navigable de la **hiérarchie maison/étage/pièce/device** (reflète l'arborescence `config/`).
 - Liste des devices, leur état réel, leur santé.
-- Pour chaque device : VDevices actifs, niveaux, qui gagne, audit récent.
-- Gestion des permissions (octroyer, modifier, révoquer).
-- Configuration des fallbacks par device.
-- Configuration de la politique de résolution niveau 1 par device.
+- Pour chaque device : VDevices actifs, niveau qui gagne et pourquoi, "recent activity" depuis le cache mémoire (cf. §2.6).
+- Gestion des permissions (octroyer, modifier, révoquer) — édite les fichiers yaml + commit git.
+- Configuration des fallbacks par device — édite le yaml device.
+- Configuration des **niveaux et de leur arbitre** par device (override) ou par pièce / étage / maison.
+- Indicateur "config orpheline" : un override yaml qui ne matche plus rien dans son parent (cf. ADR 0015 §"Héritage par delta").
 
 C'est l'interface qui matérialise la transparence promise par le modèle.
 
@@ -152,17 +176,30 @@ mcp-home/
 │   │
 │   ├── Butlr.VDevice.Core/              # NOUVEAU — modèle pur, sans I/O
 │   │   ├── VDevice.cs                   # entité
-│   │   ├── Levels.cs                    # enum + invariants
-│   │   ├── Resolver/                    # IResolver + DefaultPriorityResolver
+│   │   ├── Tier.cs                      # niveau (id, rank, admission, duration_policy, bypass_inertia)
+│   │   ├── TierRegistry.cs              # registre read-only chargé au démarrage
+│   │   ├── Arbiters/                    # IArbiter + implémentations de référence
+│   │   │   ├── IArbiter.cs
+│   │   │   ├── WinnerTakesAllArbiter.cs
+│   │   │   ├── StrictPriorityArbiter.cs
+│   │   │   ├── UserPriorityThenTimestampArbiter.cs
+│   │   │   └── WeightedAverageArbiter.cs
 │   │   ├── Capabilities/                # types Matter clusters utilisés
 │   │   └── Events/                      # records d'événements (preempted, expired...)
+│   │
+│   ├── Butlr.VDevice.Config/            # NOUVEAU — chargement config git/yaml + héritage delta
+│   │   ├── ConfigRepository.cs          # API git (LibGit2Sharp), commit/load
+│   │   ├── YamlSerializer.cs            # YamlDotNet wrapper
+│   │   ├── DeltaResolver.cs             # héritage maison ⊕ étage ⊕ pièce ⊕ device
+│   │   ├── SchemaValidator.cs           # validation au load-time
+│   │   └── Models/                      # records typés (HomeConfig, RoomConfig, DeviceConfig…)
 │   │
 │   ├── Butlr.VDevice.Orchestrator/      # NOUVEAU — service stateful
 │   │   ├── OrchestratorService.cs
 │   │   ├── PermissionService.cs
 │   │   ├── DeviceRegistryService.cs
-│   │   ├── AuditService.cs
-│   │   ├── Persistence/                 # SQLite (Microsoft.Data.Sqlite)
+│   │   ├── ObservabilityService.cs      # façade OpenTelemetry (spans, logs, metrics)
+│   │   ├── State/                       # snapshot JSONL (vdevices.jsonl) + rejeu boot
 │   │   └── Wiring/                      # extensions DI
 │   │
 │   ├── Butlr.VDevice.Drivers/           # NOUVEAU — drivers MQTT
@@ -182,14 +219,14 @@ mcp-home/
 │
 └── tests/
     ├── Butlr.McpHome.Tests/             # existant
-    ├── Butlr.VDevice.Core.Tests/        # NOUVEAU — Resolver, lifecycle
+    ├── Butlr.VDevice.Core.Tests/        # NOUVEAU — arbitres, lifecycle, admission par tags
     ├── Butlr.VDevice.Orchestrator.Tests/# NOUVEAU — intégration en mémoire
     └── Butlr.VDevice.Drivers.Tests/     # NOUVEAU — avec broker MQTT en testcontainer
 ```
 
 ### Pourquoi ce découpage
 
-- **`Core` sans I/O** : tests unitaires purs sur le resolver et le lifecycle, sans broker MQTT, sans SQLite.
+- **`Core` sans I/O** : tests unitaires purs sur les arbitres et le lifecycle, sans broker MQTT, sans disque, sans git.
 - **`Orchestrator` séparé des drivers** : on peut tester l'orchestrateur avec des fake drivers en mémoire, et tester les drivers avec un fake orchestrateur.
 - **`Drivers` regroupé** : un seul service hôte qui spawn les drivers selon la config — pas un binaire par driver.
 - **`Api` séparé** : si on décide finalement de tout faire passer par MCP (cf. §2.7), ce projet disparaît proprement.
@@ -208,17 +245,19 @@ POST /vdevice
   "actor_kind": "app",
   "app_id": "cocooning",
   "device_id": "thermostat-salon",
-  "level": 1,
+  "tier_id": "apps",                // optionnel : si absent, résolution auto par admission de tags
   "priority": 60,
   "cluster": "Thermostat",
   "attribute": "OccupiedHeatingSetpoint",
   "value": 2100,                    // 21.00 °C en int16, 0.01 °C
   "duration": "persistent"          // ou "ttl_ms": 600000
 }
-→ 201 { "vdevice_id": "vd-abc123", "heartbeat_interval_ms": 30000, "grace_ms": 5000 }
+→ 201 { "vdevice_id": "vd-abc123", "tier_id": "apps", "heartbeat_interval_ms": 30000, "grace_ms": 5000 }
 ```
 
-Note : `level=2` avec `actor_kind=app` → refus dur (cf. ADR 0009).
+Notes :
+- `tier_id` est **optionnel** ; s'il est absent, l'orchestrateur sélectionne le niveau de plus haut `rank` dont les `tags_required` sont satisfaits par les tags du VDevice (`app` ici, dérivé de `actor_kind`). Cf. ADR 0014 §"Résolution automatique du niveau".
+- Une demande `tier_id="user-override"` avec `actor_kind=app` → **refus dur** : le tag `app` ne matche pas les `tags_required: [user_agent]` du niveau. Cf. ADR 0009 patché par ADR 0014.
 
 ### 4.2 Renew
 
@@ -242,7 +281,7 @@ DELETE /vdevice/{id}
 → 204
 ```
 
-### 4.5 Override utilisateur (niveau 2) par un agent-utilisateur
+### 4.5 Override utilisateur (`user-override`) par un agent-utilisateur
 
 ```
 POST /vdevice
@@ -251,20 +290,22 @@ POST /vdevice
   "actor_user_id": "kevin",         // requis si actor_kind=user_agent
   "via_agent_id": "carlson",        // canal : carlson | ui-web | ui-mobile | switch:salon ...
   "device_id": "thermostat-salon",
-  "level": 2,
-  "priority": 100,                  // priorité utilisateur intra-niveau 2 (ADR 0008)
+  "tier_id": "user-override",       // optionnel : auto-résolu via tag user_agent
+  "priority": 100,                  // priorité utilisateur intra-niveau (ADR 0008)
   "cluster": "Thermostat",
   "attribute": "OccupiedHeatingSetpoint",
   "value": 2200,
-  "duration_ms": 7200000            // OBLIGATOIRE au niveau 2 (ADR 0008)
+  "duration_ms": 7200000            // OBLIGATOIRE — duration_policy.ttl_required du niveau (ADR 0014)
 }
 ```
 
+Le niveau `user-override` du preset par défaut a `ttl_required: true` (héritage direct de "niveau 2 = TTL obligatoire" de l'ADR 0008). Une déclaration sans `duration_ms` → refus dur.
+
 La résolution de `duration_ms` (calcul heuristique ou prompt utilisateur) est de la **responsabilité de l'agent**, pas de l'orchestrateur — cf. ADR 0013 §"Résolution de la durée".
 
-### 4.6 Réglage durable par un agent-utilisateur (niveau 1, cas particulier)
+### 4.6 Réglage durable par un agent-utilisateur (niveau `apps`, cas particulier)
 
-Un agent-utilisateur peut aussi poser un VDevice niveau 1 — par exemple, l'UI web propose à l'utilisateur de **changer durablement** la consigne d'un thermostat (pas un override temporaire, une nouvelle valeur de référence) :
+Un agent-utilisateur peut aussi poser un VDevice sur le niveau `apps` (concurrent des apps autonomes) — par exemple, l'UI web propose à l'utilisateur de **changer durablement** la consigne d'un thermostat (pas un override temporaire, une nouvelle valeur de référence) :
 
 ```
 POST /vdevice
@@ -273,8 +314,8 @@ POST /vdevice
   "actor_user_id": "kevin",
   "via_agent_id": "ui-web",
   "device_id": "thermostat-salon",
-  "level": 1,
-  "priority": 100,                  // priorité utilisateur directe, surclasse les apps
+  "tier_id": "apps",                // explicite : on veut le niveau persistant, pas user-override
+  "priority": 100,                  // priorité utilisateur directe, surclasse les apps tierces
   "cluster": "Thermostat",
   "attribute": "OccupiedHeatingSetpoint",
   "value": 2050,
@@ -282,52 +323,160 @@ POST /vdevice
 }
 ```
 
-L'orchestrateur le traite comme un VDevice niveau 1 classique avec un `app_id` synthétique `app:user-direct:kevin` pour la traçabilité dans le registre des apps. Pas de prompt de permission (cf. ADR 0013).
+⚠ Le niveau `apps` du preset par défaut a `tags_required: [app]`. Pour qu'un agent-utilisateur puisse y émettre, soit (a) le niveau accepte aussi `user_agent` dans ses tags d'admission (à configurer), soit (b) le payload porte un tag explicite `app` en plus de `user_agent` (la couche d'entrée en décide selon le canal). Choix de policy à figer au wiring — cf. ADR 0014 §"Tags multiples sur un VDevice".
 
-### 4.6 Stream d'événements (côté app)
+L'orchestrateur le traite comme un VDevice classique avec un `app_id` synthétique `app:user-direct:kevin` pour la traçabilité. Pas de prompt de permission (cf. ADR 0013).
+
+### 4.7 Stream d'événements (côté app)
 
 Canal SSE `GET /vdevice/events?app_id=cocooning` qui pousse `vdevice.preempted`, `vdevice.expired`, `device.command_failed`, `permission.revoked`.
 
 ---
 
-## 5. Choix techniques par défaut
+## 5. Configuration hiérarchique git/yaml
 
-| Domaine | Choix par défaut | Raison | Alt. à évaluer |
-|---|---|---|---|
-| Persistance | ✓ SQLite (`Microsoft.Data.Sqlite`) | Embedded, zéro setup, suffisant ⚠ | LiteDB (simpler), PostgreSQL (Phase 3+) |
-| Client MQTT | ✓ MQTTnet (déjà dans `architecture.md` §3.2) | MIT, mature, async | — |
-| Broker MQTT | ✓ Mosquitto (déjà mentionné) | Standard de facto, stable | EMQX (cluster-able, surdimensionné ici) |
-| Bus radio | ✓ Zigbee2MQTT | ADR 0011 | — |
-| Plugins de résolution | Assemblies .NET chargés au démarrage selon config | Simplicité, type-safe | WASM plugins (Phase 3+) |
-| Audit storage | SQLite append-only avec rotation | Cohérent avec le reste | Journal fichier rotaté si volumétrie explose |
+Cf. [ADR 0015](adr/0015-config-git-yaml-hierarchy.md) pour la décision et le format complet. Synthèse opérationnelle pour cette couche :
+
+### 5.1 Arborescence
+
+La config vit dans un repo git local : `~/.butlr/config/`. Structure :
+
+```
+~/.butlr/config/
+├── home.yaml                  # racine : preset de niveaux par défaut, métadonnées maison
+├── etage-rdc/
+│   ├── etage.yaml             # delta vs home (ex. plus de niveaux ajoutés à l'étage)
+│   ├── salon/
+│   │   ├── piece.yaml         # delta vs étage
+│   │   ├── thermostat-salon.yaml
+│   │   ├── plafonnier.yaml
+│   │   └── volet-baie.yaml
+│   └── cuisine/...
+├── etage-1/...
+├── unsorted/                  # devices découverts par Z2M, à ranger
+│   └── 0x84fd27...yaml
+├── apps/                      # déclaration des apps autonomes connues
+│   └── cocooning.yaml
+├── permissions/               # une permission = un fichier yaml
+│   └── cocooning__thermostat-salon.yaml
+└── arbiters/                  # plugins .NET référencés
+    └── cocooning-energy.yaml
+```
+
+### 5.2 Héritage par delta (pas par git-merge sémantique)
+
+Chaque fichier enfant ne contient **que les deltas** vs la config héritée du parent. Au boot, le `DeltaResolver` empile les overlays dans l'ordre maison → étage → pièce → device et produit la config effective par device en mémoire.
+
+Le merge est **explicite et typé** (pas un git-merge ligne à ligne). Conséquence : un `git pull` ramène les fichiers à jour et le boot recalcule tout. Aucun conflit de résolution sémantique au runtime.
+
+⚠ Une clé qui n'existe pas dans la config parente est traitée comme une **config orpheline** : log warning au boot, ignorée à l'arbitrage, exposée dans l'UI dashboard (cf. §2.8). Pas de fail-fast — la config orpheline n'empêche pas le système de tourner.
+
+### 5.3 Reconfiguration = restart (POC)
+
+Au POC, modifier la config (édition manuelle yaml ou via UI qui commit) **n'est pas pris en compte à chaud** : il faut redémarrer `mcp-home`. Au redémarrage :
+
+1. Tous les VDevices actifs sont **purgés** (cf. §6 et ADR 0016 §"Politique de rejeu au boot").
+2. Le `TierRegistry` est rechargé.
+3. Les apps doivent recréer leurs VDevices (les apps niveau 1 persistant le font de toute façon par renew).
+
+Le hot-reload est listé Phase 3+ — pas un objectif POC (cf. ADR 0014 §"Reconfiguration").
+
+### 5.4 Outils
+
+| Besoin | Outil |
+|---|---|
+| Manipuler le repo git | ✓ LibGit2Sharp (MIT) |
+| Parser/sérialiser yaml | ✓ YamlDotNet (MIT) |
+| Valider le schéma au load | json-schema généré depuis les records C# de `Butlr.VDevice.Config/Models/` |
 
 ---
 
-## 6. Mode de progression conseillé
+## 6. Observabilité (OpenTelemetry)
+
+Cf. [ADR 0016](adr/0016-state-snapshot-otel-observability.md). Synthèse opérationnelle :
+
+### 6.1 État VDevices
+
+- **Source de vérité runtime** : en mémoire (collection thread-safe dans l'orchestrateur).
+- **Snapshot** : fichier append-only `~/.butlr/state/vdevices.jsonl`. Chaque mutation (create/renew/update/release/expired/preempted) émet une ligne.
+- **Compaction** : périodique (~ 24 h ⚠) via swap atomique vers `vdevices.jsonl.new` puis `rename`. Au boot, on lit le fichier compacté pour reconstruire l'état.
+- **Pas de SQLite, pas de DB**. Le state est mutation-heavy mais les requêtes sur l'état sont triviales (par device_id) — l'in-memory + JSONL append est strictement suffisant.
+
+### 6.2 Audit, logs et metrics → OpenTelemetry
+
+Tout ce qui était "audit log" dans l'ancien ADR 0012 passe par OTel. Mapping :
+
+| Événement | Vecteur OTel | Attributs clefs |
+|---|---|---|
+| Création / mutation VDevice | log structuré niveau Info | `vdevice_id`, `device_id`, `tier_id`, `actor_kind`, `priority` |
+| Arbitrage | span `arbitration` | `device_id`, `evaluated_tiers`, `winning_tier`, `winning_vdevice_id`, `arbiter`, `inputs_count`, `duration_ms` |
+| Commande device | span enfant `driver.command` | `device_id`, `cluster`, `attribute`, `value`, `mqtt_topic`, `ack_received` |
+| Préemption | log structuré niveau Info | `vdevice_id`, `reason` (`priority_changed`, `permission_revoked`, `expired`...) |
+| Octroi/révocation permission | log structuré niveau Info | `app_id`, `device_id`, `tier_max`, `priority_max`, `granted_by` |
+| Échec commande | log structuré niveau Warning ou Error | `device_id`, `error_kind`, `mqtt_response` |
+
+Metrics standard exposées :
+
+- `butlr.vdevice.active` (gauge, par tier)
+- `butlr.arbitration.duration` (histogram, par device)
+- `butlr.driver.command.total` (counter, par status `ack`/`nack`/`timeout`)
+- `butlr.mqtt.connected` (gauge 0/1 par broker)
+- `butlr.permission.pending` (gauge — nombre de prompts en attente)
+
+### 6.3 Stack OTel — out-of-scope mcp-home
+
+`mcp-home` instrumente avec `OpenTelemetry.Api` + `OpenTelemetry.Extensions.Hosting` et exporte en **OTLP/gRPC** vers `localhost:4317` par défaut (configurable). Le **collector OTel et le backend** (Loki, Tempo, Grafana, OpenSearch, Honeycomb…) **ne sont pas livrés par `mcp-home`**. C'est un choix d'opérateur — au POC, un docker-compose externe suffit, voire pas de collector du tout (les exports échouent silencieusement en dev local sans casser `mcp-home`).
+
+### 6.4 "Recent activity" UI sans backend OTel
+
+Pour que l'UI dashboard reste utilisable même sans collector OTel branché, l'`ObservabilityService` maintient un **cache mémoire** des `~ 1 000` dernières décisions par device, exposé via un endpoint local. Pas un audit légal — une vue rapide pour répondre à "pourquoi mon thermostat a chauffé à 22h13 ?" sans dépendance externe.
+
+---
+
+## 7. Choix techniques par défaut
+
+| Domaine | Choix par défaut | Raison | Alt. à évaluer |
+|---|---|---|---|
+| State VDevices | ✓ in-memory + snapshot JSONL | Mutations-heavy, pas de SQL nécessaire (cf. ADR 0016) | LiteDB si introspection plus riche un jour |
+| Config | ✓ git + yaml hiérarchique (cf. ADR 0015) | Versionnable, lisible, diffable, pas de DB pour de la config rare-écriture | SQLite si écriture devient fréquente (improbable) |
+| Audit / logs / metrics | ✓ OpenTelemetry (OTLP/gRPC) | Standard, outils gratuits, collector out-of-scope (cf. ADR 0016) | journal fichier rotaté si OTel pose souci en dev |
+| Lib git | ✓ LibGit2Sharp (MIT) | Mature, embedded, pas de dépendance à `git` CLI | — |
+| Lib yaml | ✓ YamlDotNet (MIT) | Standard .NET, support des comments à l'écriture | — |
+| Client MQTT | ✓ MQTTnet (déjà dans `architecture.md` §3.2) | MIT, mature, async | — |
+| Broker MQTT | ✓ Mosquitto (déjà mentionné) | Standard de facto, stable | EMQX (cluster-able, surdimensionné ici) |
+| Bus radio | ✓ Zigbee2MQTT | ADR 0011 | — |
+| Plugins d'arbitre | ✓ Assemblies .NET chargées au démarrage selon `arbiters/*.yaml` | Simplicité, type-safe | WASM plugins (Phase 3+) |
+
+---
+
+## 8. Mode de progression conseillé
 
 Le chantier est volumineux. Pour éviter le big-bang, voici l'ordre recommandé (détails dans `tasks-vdevice-implementation.md`) :
 
-1. **Phase 2.0 — Fondations.** `Butlr.VDevice.Core` complet (entités, resolver, lifecycle), tests unitaires. Aucune intégration. **Critère** : tous les cas limites de l'audit conversation passent en test unitaire.
-2. **Phase 2.1 — Orchestrateur en mémoire.** `Butlr.VDevice.Orchestrator` sans persistance. Surface API minimale (create/renew/release). Fake driver en mémoire. Tests d'intégration.
-3. **Phase 2.2 — Persistance.** SQLite branché, rejeu au boot, audit log.
-4. **Phase 2.3 — Permissions.** Modèle Android, prompt UI, registry persisté.
+1. **Phase 2.0 — Fondations.** `Butlr.VDevice.Core` complet (entités, `Tier`, `TierRegistry`, `IArbiter` + arbitres de référence, lifecycle), tests unitaires. Aucune intégration. **Critère** : tous les cas limites passent en test unitaire (admission par tags, strict winner-takes-all entre niveaux, départage intra-niveau, lifecycle renew/expire/preempt).
+2. **Phase 2.1 — Orchestrateur en mémoire.** `Butlr.VDevice.Orchestrator` sans persistance disque. Surface API minimale (create/renew/release). Fake driver en mémoire. Tests d'intégration. `ObservabilityService` instrumente déjà (spans, logs, metrics) — l'export OTel peut être désactivé en test.
+3. **Phase 2.2 — Config git/yaml et state snapshot.** `Butlr.VDevice.Config` (LibGit2Sharp + YamlDotNet, `DeltaResolver`, validation schéma). `State/` JSONL snapshot + rejeu au boot. Plus d'audit SQLite — l'instrumentation OTel posée en 2.1 est la seule trace.
+4. **Phase 2.3 — Permissions.** Modèle Android, prompt UI, registry yaml en `config/permissions/`.
 5. **Phase 2.4 — Premier driver MQTT.** `LightDriver` Zigbee2MQTT. Bout-en-bout sur de vraies ampoules.
 6. **Phase 2.5 — Drivers étendus.** Thermostat, cover, switch, capteurs.
-7. **Phase 2.6 — UI dashboard.** Vue "qui propose quoi", gestion permissions.
-8. **Phase 2.7 — Migration outils MCP.** Les tools MCP existants (`turn_on_light`, etc.) deviennent des clients VDevice (apps internes).
+7. **Phase 2.6 — UI dashboard.** Hiérarchie maison/étage/pièce/device, vue "qui propose quoi", gestion permissions, configuration de niveaux par scope, indicateur "config orpheline".
+8. **Phase 2.7 — Migration outils MCP.** Les tools MCP existants (`turn_on_light`, etc.) deviennent des clients VDevice (apps internes ou agents-utilisateur selon le canal — cf. §2.7).
 
 À chaque phase, **un état démo-able** : on peut couper la suite à n'importe laquelle des phases sans laisser le système dans un état hybride dégénéré.
 
 ---
 
-## 7. Liens
+## 9. Liens
 
-- [ADR 0007 — Virtual Device et arbitrage](adr/0007-virtual-device-arbitration.md)
+- [ADR 0007 — Virtual Device et arbitrage](adr/0007-virtual-device-arbitration.md) *(superseded by 0014)*
 - [ADR 0008 — Lifecycle des VDevices](adr/0008-vdevice-lifecycle-renew.md)
 - [ADR 0009 — Permissions](adr/0009-app-device-permissions.md)
 - [ADR 0010 — Matter Clusters](adr/0010-matter-clusters-capability-model.md)
 - [ADR 0011 — Drivers MQTT](adr/0011-driver-mqtt-adapter.md)
-- [ADR 0012 — Persistance, audit, fallback](adr/0012-state-persistence-audit-fallback.md)
+- [ADR 0012 — Persistance, audit, fallback](adr/0012-state-persistence-audit-fallback.md) *(superseded by 0015 + 0016)*
 - [ADR 0013 — Agents-utilisateur vs apps autonomes](adr/0013-user-agents-vs-apps.md)
+- [ADR 0014 — Niveaux dynamiques et arbitres](adr/0014-dynamic-tiers-arbiters.md)
+- [ADR 0015 — Config hiérarchique git/yaml](adr/0015-config-git-yaml-hierarchy.md)
+- [ADR 0016 — State snapshot et observabilité OTel](adr/0016-state-snapshot-otel-observability.md)
 - [Backlog d'implémentation](tasks-vdevice-implementation.md)
 - [Architecture globale Butlr](architecture.md)

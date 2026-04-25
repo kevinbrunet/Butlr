@@ -37,3 +37,7 @@ __pycache__/
 bin/
 obj/
 *.user
+carlson/fr_FR-gilles-low.onnx
+carlson/fr_FR-gilles-low.onnx.json
+carlson/fr_FR-siwis-medium.onnx
+carlson/fr_FR-siwis-medium.onnx.json

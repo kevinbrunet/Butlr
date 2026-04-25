@@ -1,7 +1,9 @@
 # ADR 0012 — Persistance d'état, audit log, bootstrap et fallback
 
 **Date** : 2026-04-25
-**Statut** : Accepté
+**Statut** : Superseded by [ADR 0015](0015-config-git-yaml-hierarchy.md) (config) and [ADR 0016](0016-state-snapshot-otel-observability.md) (state, audit, observabilité)
+
+> **Note** — Cet ADR posait SQLite comme stockage unifié de la config, du state, et de l'audit. Le 2026-04-25 (même journée), Kevin a tranché pour une partition par nature : **config en git/yaml hiérarchique** (ADR 0015), **state in-memory + snapshot JSONL** et **audit/logs/metrics via OpenTelemetry** (ADR 0016). Lire ce document pour la motivation initiale (besoin de survie au redémarrage, audit lisible, fallback opt-in) ; lire ADR 0015 et 0016 pour les choix actuellement implémentés.
 
 ## Contexte
 
@@ -154,3 +156,4 @@ Plus rapide en runtime. Rejeté : un crash = perte des dernières minutes d'audi
 ## Révisions
 
 - **2026-04-25** — Création. Six décisions consolidées (persistance, rejeu, audit, découverte, bootstrap, fallback) parce qu'elles sont étroitement couplées et qu'un ADR par sujet aurait fait six fichiers redondants. Si l'un de ces sujets devient assez complexe pour mériter son propre ADR, il sera scindé en supersession partielle.
+- **2026-04-25** — **Superseded** par deux successeurs, le même jour. Décisions de Kevin sur (1) git+yaml pour la config et (2) OpenTelemetry pour l'observabilité. Voir [ADR 0015](0015-config-git-yaml-hierarchy.md) pour la config hiérarchique en git, et [ADR 0016](0016-state-snapshot-otel-observability.md) pour le state in-memory + snapshot JSONL + audit/logs/metrics OTel. Le présent ADR garde sa valeur historique pour la motivation et les alternatives discutées (notamment §"Pas de fallback automatique" qui reste une règle dure du système — cf. ADR 0016 §"État réel des devices : pas persisté").

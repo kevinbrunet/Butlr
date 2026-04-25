@@ -1,7 +1,9 @@
 # ADR 0007 — Virtual Device et arbitrage à trois niveaux
 
 **Date** : 2026-04-25
-**Statut** : Accepté
+**Statut** : Superseded by [ADR 0014](0014-dynamic-tiers-arbiters.md)
+
+> **Note** — Cet ADR pose les fondations du modèle VDevice et de l'arbitrage à trois niveaux. Sa logique reste valide comme **configuration par défaut** du système, mais le **modèle de niveaux n'est plus hardcodé** : il devient une donnée de configuration (cf. ADR 0014). Lire ce document pour la motivation et la sémantique de fond ; lire ADR 0014 pour le modèle réellement implémenté.
 
 ## Contexte
 
@@ -104,3 +106,4 @@ Tentation initiale. Rejeté car incohérent : si User à priorité 100 et apps �
 ## Révisions
 
 - **2026-04-25** — Création. Issue d'une session de conception (Kevin × Claude) le 2026-04-24 sur un système domotique composable. Ouvre la voie aux ADRs 0008 (lifecycle), 0009 (permissions), 0010 (capacités Matter), 0011 (drivers MQTT), 0012 (persistance/audit/fallback).
+- **2026-04-25** — **Superseded by [ADR 0014](0014-dynamic-tiers-arbiters.md)**. Décision de Kevin la même journée : le modèle de niveaux ne doit pas être hardcodé. Un niveau = un arbitre + une politique d'admission par tags + une politique de durée + un flag bypass_inertia + un rang. Strict winner-takes-all entre niveaux. Le preset à trois niveaux (1 apps / 2 user-override / 3 safety) reste la configuration par défaut, mais le moteur n'en a plus connaissance câblée. Le mot `IResolver` introduit ici est renommé `IArbiter` partout dans le code et la doc.
