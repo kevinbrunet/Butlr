@@ -23,7 +23,7 @@ RUN pip install --no-cache-dir \
     "openwakeword[full]" \
     "piper-tts>=1.2"
 
-COPY docker/entrypoint.sh /entrypoint.sh
+COPY carlson/docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 WORKDIR /work
