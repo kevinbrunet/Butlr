@@ -147,34 +147,45 @@ def download_features() -> None:
         log.info("  -> %s (%d MB)", dest, size_mb)
 
 
-def verify_piper_gen() -> None:
-    """Vérifie que generate_samples.py est accessible dans piper-sample-generator."""
-    gs = PIPER_GEN / "generate_samples.py"
+def find_generate_samples() -> Path:
+    """Localise generate_samples.py dans piper-sample-generator (structure variable selon version)."""
     if not PIPER_GEN.exists():
         log.error("Répertoire piper-gen absent : %s", PIPER_GEN)
         sys.exit(1)
-    log.info("Contenu de %s : %s", PIPER_GEN, [p.name for p in PIPER_GEN.iterdir()])
-    if not gs.exists():
-        log.error("generate_samples.py introuvable dans %s", PIPER_GEN)
+    candidates = list(PIPER_GEN.rglob("generate_samples.py"))
+    if not candidates:
+        log.error(
+            "generate_samples.py introuvable sous %s\nContenu : %s",
+            PIPER_GEN,
+            [p.name for p in PIPER_GEN.iterdir()],
+        )
         sys.exit(1)
-    log.info("generate_samples.py trouvé : OK")
-    # Test d'import direct pour révéler une éventuelle erreur de dépendance
+    found = candidates[0]
+    log.info("generate_samples.py trouvé : %s", found)
+    return found.parent
+
+
+def verify_piper_gen() -> Path:
+    """Retourne le dossier parent de generate_samples.py à ajouter au PYTHONPATH."""
+    gs_dir = find_generate_samples()
     result = subprocess.run(
-        [sys.executable, "-c", f"import sys; sys.path.insert(0, '{PIPER_GEN}'); import generate_samples; print('import OK')"],
+        [sys.executable, "-c",
+         f"import sys; sys.path.insert(0, {str(gs_dir)!r}); import generate_samples; print('import OK')"],
         capture_output=True, text=True,
     )
     if result.returncode != 0:
         log.error("Import generate_samples échoué :\n%s\n%s", result.stdout, result.stderr)
         sys.exit(1)
-    log.info("import generate_samples : OK")
+    log.info("import generate_samples : OK (path=%s)", gs_dir)
+    return gs_dir
 
 
-def run_phase(label: str, flag: str) -> None:
+def run_phase(label: str, flag: str, extra_pythonpath: str = "") -> None:
     """Exécute une phase du script train.py d'openWakeWord."""
     log.info("=== %s ===", label)
     env = os.environ.copy()
-    existing = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = f"{PIPER_GEN}:{existing}" if existing else str(PIPER_GEN)
+    parts = [p for p in [extra_pythonpath, env.get("PYTHONPATH", "")] if p]
+    env["PYTHONPATH"] = ":".join(parts)
     log.info("  PYTHONPATH=%s", env["PYTHONPATH"])
     result = subprocess.run(
         [sys.executable, str(OWW_TRAIN_SCRIPT), "--training_config", str(OWW_CONFIG_PATH), flag],
@@ -245,14 +256,14 @@ if __name__ == "__main__":
     download_features()
 
     log.info("--- Phase 1 : generation des clips positifs (piper-sample-generator) ---")
-    verify_piper_gen()
-    run_phase("generate_clips", "--generate_clips")
+    gs_path = verify_piper_gen()
+    run_phase("generate_clips", "--generate_clips", extra_pythonpath=str(gs_path))
 
     log.info("--- Phase 2 : augmentation des clips ---")
-    run_phase("augment_clips", "--augment_clips")
+    run_phase("augment_clips", "--augment_clips", extra_pythonpath=str(gs_path))
 
     log.info("--- Phase 3 : entrainement du modele ---")
-    run_phase("train_model", "--train_model")
+    run_phase("train_model", "--train_model", extra_pythonpath=str(gs_path))
 
     log.info("--- Phase 4 : collecte de la sortie ---")
     collect_output(our_config.get("model_name", "hey_carlson"))
