@@ -59,17 +59,29 @@ def main() -> None:
     stream = pa.open(rate=RATE, channels=1, format=pyaudio.paInt16,
                      input=True, frames_per_buffer=CHUNK)
 
+    import numpy as np
+
     print(f"\nÉcoute... (seuil={args.threshold}) — dis 'Hey Carlson' — Ctrl+C pour quitter\n")
     try:
         while True:
-            import numpy as np
             raw = stream.read(CHUNK, exception_on_overflow=False)
-            audio = np.frombuffer(raw, dtype=np.int16)
+            pcm = np.frombuffer(raw, dtype=np.int16)
+            # OWW attend du float32 normalisé [-1, 1] (même conversion que WakeWordProcessor)
+            audio = pcm.astype(np.float32) / 32768.0
+
+            # VU-mètre : amplitude RMS pour vérifier que le micro capte quelque chose
+            rms = float(np.sqrt(np.mean(audio ** 2)))
+            vu = "▓" * int(rms * 200)
+
             scores: dict = model.predict(audio)
             for name, score in scores.items():
                 bar = "█" * int(score * 30)
                 trigger = " ← DÉTECTÉ !" if score >= args.threshold else ""
-                print(f"\r{name}: {score:.3f} |{bar:<30}|{trigger}    ", end="", flush=True)
+                print(
+                    f"\r{name}: {score:.3f} |{bar:<30}|{trigger}  "
+                    f"  mic: {rms:.4f} |{vu:<20}|    ",
+                    end="", flush=True,
+                )
     except KeyboardInterrupt:
         print("\n\nArrêt.")
     finally:
