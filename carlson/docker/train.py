@@ -140,11 +140,31 @@ def download_features() -> None:
         log.info("  -> %s (%d MB)", dest, size_mb)
 
 
+def verify_piper_gen() -> None:
+    """Vérifie que generate_samples.py est accessible dans piper-sample-generator."""
+    gs = PIPER_GEN / "generate_samples.py"
+    if not PIPER_GEN.exists():
+        log.error("Répertoire piper-gen absent : %s", PIPER_GEN)
+        sys.exit(1)
+    log.info("Contenu de %s : %s", PIPER_GEN, [p.name for p in PIPER_GEN.iterdir()])
+    if not gs.exists():
+        log.error("generate_samples.py introuvable dans %s", PIPER_GEN)
+        sys.exit(1)
+    log.info("generate_samples.py trouvé : OK")
+    # Test d'import direct pour révéler une éventuelle erreur de dépendance
+    result = subprocess.run(
+        [sys.executable, "-c", f"import sys; sys.path.insert(0, '{PIPER_GEN}'); import generate_samples; print('import OK')"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        log.error("Import generate_samples échoué :\n%s\n%s", result.stdout, result.stderr)
+        sys.exit(1)
+    log.info("import generate_samples : OK")
+
+
 def run_phase(label: str, flag: str) -> None:
     """Exécute une phase du script train.py d'openWakeWord."""
     log.info("=== %s ===", label)
-    # PYTHONPATH explicite : OWW train.py fait `from generate_samples import ...`
-    # (top-level) — piper-sample-generator doit être dans le path du sous-process.
     env = os.environ.copy()
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = f"{PIPER_GEN}:{existing}" if existing else str(PIPER_GEN)
@@ -218,6 +238,7 @@ if __name__ == "__main__":
     download_features()
 
     log.info("--- Phase 1 : generation des clips positifs (piper-sample-generator) ---")
+    verify_piper_gen()
     run_phase("generate_clips", "--generate_clips")
 
     log.info("--- Phase 2 : augmentation des clips ---")
