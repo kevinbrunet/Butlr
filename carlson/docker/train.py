@@ -127,12 +127,26 @@ def download_features() -> None:
       Premier lancement : peut prendre 10-30 min selon la connexion.
       Utilise wget -c pour reprendre automatiquement en cas de coupure.
     """
+    # Tailles minimales attendues — un fichier plus petit = téléchargement tronqué.
+    MIN_SIZES_MB = {
+        "openwakeword_features_ACAV100M_2000_hrs_16bit.npy": 3_000,  # ~ 4-6 GB
+        "validation_set_features.npy": 100,
+    }
+
     FEATURES_DIR.mkdir(parents=True, exist_ok=True)
     for filename, url in FEATURES_URLS.items():
         dest = FEATURES_DIR / filename
-        if dest.exists() and dest.stat().st_size > 0:
-            log.info("Features en cache : %s (%d MB)", filename, dest.stat().st_size // (1024 * 1024))
-            continue
+        min_mb = MIN_SIZES_MB.get(filename, 1)
+        if dest.exists():
+            size_mb = dest.stat().st_size // (1024 * 1024)
+            if size_mb >= min_mb:
+                log.info("Features en cache : %s (%d MB)", filename, size_mb)
+                continue
+            log.warning(
+                "Fichier tronque detecte : %s (%d MB < %d MB min) — re-telechargement.",
+                filename, size_mb, min_mb,
+            )
+            dest.unlink()
         log.info("Telechargement %s ...", filename)
         log.info("  (peut prendre plusieurs minutes — wget -c reprend si coupure)")
         # wget -c : resume si fichier partiel ; --tries=5 : 5 tentatives auto.
