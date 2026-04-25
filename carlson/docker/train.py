@@ -104,12 +104,11 @@ def build_oww_config(our: dict) -> Path:
     )
     cfg["background_paths"] = []
 
-    # Chemin vers piper-sample-generator
-    if "piper_sample_generator" in cfg:
-        cfg["piper_sample_generator"]["path"]           = str(PIPER_GEN)
-        cfg["piper_sample_generator"]["speaker_model"]  = str(
-            PIPER_GEN / "models" / "en_US-libritts_r-medium.pt"
-        )
+    # Clé plate lue par OWW train.py : config["piper_sample_generator_path"]
+    # (pas une nested dict — cf. exemples/custom_model.yml du repo OWW)
+    cfg["piper_sample_generator_path"] = str(PIPER_GEN)
+    # Modèle speaker utilisé par le fork dscripka
+    cfg["speaker_model_path"] = str(PIPER_GEN / "models" / "en_US-libritts_r-medium.pt")
 
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     with open(OWW_CONFIG_PATH, "w", encoding="utf-8") as f:

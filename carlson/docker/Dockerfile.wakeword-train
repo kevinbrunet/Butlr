@@ -22,9 +22,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN git clone --depth=1 https://github.com/dscripka/openWakeWord /oww
 RUN pip install --no-cache-dir -e /oww
 
-# piper-sample-generator — utilisé par openWakeWord pour générer les clips positifs
-# (différent de piper-tts ; spécialisé pour la diversité de voix en training).
-RUN git clone --depth=1 https://github.com/rhasspy/piper-sample-generator /piper-gen
+# Fork dscripka de piper-sample-generator — c'est celui référencé par OWW.
+# (github.com/rhasspy/piper-sample-generator a été restructuré et n'a plus generate_samples.py)
+RUN git clone --depth=1 https://github.com/dscripka/piper-sample-generator /piper-gen
 
 # Modèle libritts pour piper-sample-generator (~500 MB)
 RUN mkdir -p /piper-gen/models && \
