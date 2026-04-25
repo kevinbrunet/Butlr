@@ -35,8 +35,10 @@ RUN mkdir -p /piper-gen/models && \
 # Séparées en couches pour faciliter le debug et profiter du cache Docker.
 #
 # Couche 1 : PyTorch ecosystem
+# torch-audiomentations==0.11.0 appelle torchaudio.set_audio_backend() qui a été
+# supprimé dans torchaudio>=2.1 — on reste sur 2.0.x où la fonction est encore là.
 RUN pip install --no-cache-dir \
-    torch torchaudio \
+    "torch==2.0.1" "torchaudio==2.0.2" \
     torchinfo==1.8.0 \
     torchmetrics==1.2.0
 
