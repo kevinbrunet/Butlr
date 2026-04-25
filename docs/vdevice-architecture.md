@@ -30,9 +30,18 @@
                                                                └─ ZWaveJS
 ```
 
-Carlson (et tout autre client MCP) **ne parle pas directement au modèle VDevice**. Il parle aux tools MCP, qui sont eux-mêmes des **apps internes** (du point de vue VDevice) — ils déclarent des intentions via la même API que les apps tierces.
+Carlson (et tout autre client MCP) **ne parle pas directement au modèle VDevice**. Il parle aux tools MCP, qui transforment l'appel en déclaration d'intention vers l'orchestrateur.
 
-Cela évite un cas spécial pour Carlson : du point de vue de l'orchestrateur, "Carlson allume la lumière" est une intention applicative comme une autre, soumise aux mêmes règles d'arbitrage.
+**Distinction structurante (cf. ADR 0013)** : Carlson n'est **pas** une app comme les autres. C'est un **agent-utilisateur** — il transmet l'intention de l'utilisateur, il ne porte pas d'intention propre. Quand l'utilisateur dit « allume la lumière », l'auteur de l'intention c'est l'utilisateur ; Carlson est le **canal**.
+
+Concrètement, deux catégories de citoyens cohabitent dans le modèle :
+
+| Catégorie | Exemples | Émet | `actor_kind` |
+|---|---|---|---|
+| **Application autonome** | App Cocooning, App ChauffageEco, plugins de résolution | VDevices niveau 1 uniquement | `app` |
+| **Agent-utilisateur** | Carlson, UI web, app mobile, interrupteur niveau 2 | VDevices niveau 1 et 2 (le 2 reste réservé à l'utilisateur, ADR 0007) | `user_agent` |
+
+Le payload d'intention porte donc `actor_kind`, `actor_user_id` (pour les agents-utilisateur), `via_agent_id` (le canal : `carlson`, `ui-web`, `switch:salon`...), et `app_id` (pour les apps autonomes). Détails dans ADR 0013 et §4 ci-dessous.
 
 ---
 
@@ -107,10 +116,12 @@ L'UI dashboard et la vue "qui propose quoi" en sont la lecture.
 
 L'orchestrateur expose son API via :
 
-- **Tools MCP** pour les apps internes (Carlson, Claude Desktop, CLI admin) — créer/renew/release VDevice, lire l'état.
-- **Endpoint HTTP/SSE dédié** (à finaliser) pour les apps tierces qui ne sont pas des clients MCP — typiquement les apps domotiques externes (apps Home Assistant si on en garde quelques-unes en lecture, scripts de domotique perso).
+- **Tools MCP** pour les agents-utilisateur côté MCP (Carlson, Claude Desktop, CLI admin) et les apps autonomes implémentées comme clients MCP. Le tool reçoit du client une intention et la traduit en `POST /vdevice` interne en remplissant le bon `actor_kind` (cf. ADR 0013).
+- **Endpoint HTTP/SSE dédié** pour les apps autonomes tierces qui ne sont pas des clients MCP (apps domotiques externes, scripts perso) et pour l'**UI web/mobile** (agents-utilisateur côté UI).
 
-⚠ Le double canal (MCP + HTTP direct) est à confirmer au moment du wiring. Une option simple est de **tout faire passer par MCP**, en faisant écrire les apps domotiques tierces comme des clients MCP. À arbitrer.
+L'**actor_kind n'est pas choisi par le client** : il est posé par la couche d'entrée selon le canal. Un tool MCP `set_thermostat` exposé à Carlson force `actor_kind=user_agent` ; un endpoint `/vdevice` consommé par App Cocooning force `actor_kind=app`. Cette séparation par canal d'entrée empêche un client malveillant de se déclarer agent-utilisateur (au POC bearer token unique, plus strict avec l'identité signée Phase 2+ — cf. ADR 0013 §"Authentification").
+
+⚠ Le double canal (MCP + HTTP direct) est à confirmer au moment du wiring. Tout faire passer par MCP reste possible si on préfère un seul transport — à arbitrer une fois la première app tierce non-MCP rencontrée.
 
 ### 2.8 UI Dashboard (web)
 
@@ -189,11 +200,12 @@ mcp-home/
 
 > ⚠ Esquisse pour ancrer la conversation. Spec détaillée à écrire au moment du wiring.
 
-### 4.1 Déclaration d'intention (côté app)
+### 4.1 Déclaration d'intention par une app autonome
 
 ```
 POST /vdevice
 {
+  "actor_kind": "app",
   "app_id": "cocooning",
   "device_id": "thermostat-salon",
   "level": 1,
@@ -205,6 +217,8 @@ POST /vdevice
 }
 → 201 { "vdevice_id": "vd-abc123", "heartbeat_interval_ms": 30000, "grace_ms": 5000 }
 ```
+
+Note : `level=2` avec `actor_kind=app` → refus dur (cf. ADR 0009).
 
 ### 4.2 Renew
 
@@ -228,21 +242,47 @@ DELETE /vdevice/{id}
 → 204
 ```
 
-### 4.5 Override utilisateur (niveau 2)
+### 4.5 Override utilisateur (niveau 2) par un agent-utilisateur
 
 ```
 POST /vdevice
 {
-  "app_id": "user:kevin",
+  "actor_kind": "user_agent",
+  "actor_user_id": "kevin",         // requis si actor_kind=user_agent
+  "via_agent_id": "carlson",        // canal : carlson | ui-web | ui-mobile | switch:salon ...
   "device_id": "thermostat-salon",
   "level": 2,
-  "priority": 100,                  // priorité utilisateur
+  "priority": 100,                  // priorité utilisateur intra-niveau 2 (ADR 0008)
   "cluster": "Thermostat",
   "attribute": "OccupiedHeatingSetpoint",
   "value": 2200,
-  "duration_ms": 7200000            // OBLIGATOIRE au niveau 2
+  "duration_ms": 7200000            // OBLIGATOIRE au niveau 2 (ADR 0008)
 }
 ```
+
+La résolution de `duration_ms` (calcul heuristique ou prompt utilisateur) est de la **responsabilité de l'agent**, pas de l'orchestrateur — cf. ADR 0013 §"Résolution de la durée".
+
+### 4.6 Réglage durable par un agent-utilisateur (niveau 1, cas particulier)
+
+Un agent-utilisateur peut aussi poser un VDevice niveau 1 — par exemple, l'UI web propose à l'utilisateur de **changer durablement** la consigne d'un thermostat (pas un override temporaire, une nouvelle valeur de référence) :
+
+```
+POST /vdevice
+{
+  "actor_kind": "user_agent",
+  "actor_user_id": "kevin",
+  "via_agent_id": "ui-web",
+  "device_id": "thermostat-salon",
+  "level": 1,
+  "priority": 100,                  // priorité utilisateur directe, surclasse les apps
+  "cluster": "Thermostat",
+  "attribute": "OccupiedHeatingSetpoint",
+  "value": 2050,
+  "duration": "persistent"          // pas de TTL : c'est une consigne durable
+}
+```
+
+L'orchestrateur le traite comme un VDevice niveau 1 classique avec un `app_id` synthétique `app:user-direct:kevin` pour la traçabilité dans le registre des apps. Pas de prompt de permission (cf. ADR 0013).
 
 ### 4.6 Stream d'événements (côté app)
 
@@ -288,5 +328,6 @@ Le chantier est volumineux. Pour éviter le big-bang, voici l'ordre recommandé 
 - [ADR 0010 — Matter Clusters](adr/0010-matter-clusters-capability-model.md)
 - [ADR 0011 — Drivers MQTT](adr/0011-driver-mqtt-adapter.md)
 - [ADR 0012 — Persistance, audit, fallback](adr/0012-state-persistence-audit-fallback.md)
+- [ADR 0013 — Agents-utilisateur vs apps autonomes](adr/0013-user-agents-vs-apps.md)
 - [Backlog d'implémentation](tasks-vdevice-implementation.md)
 - [Architecture globale Butlr](architecture.md)

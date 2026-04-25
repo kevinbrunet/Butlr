@@ -400,15 +400,39 @@ Chaque driver a son test d'intégration avec un device réel ou un mock Z2M.
 
 ## Phase 2.7 — Migration outils MCP existants
 
-**Objectif** : faire en sorte que les tools `turn_on_light` / `turn_off_light` actuels (cf. `architecture.md` §7.1) deviennent des **clients VDevice** (apps internes) au lieu de piloter directement le mock.
+**Objectif** : faire en sorte que les tools `turn_on_light` / `turn_off_light` actuels (cf. `architecture.md` §7.1) deviennent des **clients VDevice** au lieu de piloter directement le mock. Carlson est un **agent-utilisateur** (cf. ADR 0013), pas une app autonome — la modélisation diffère du chemin "App Cocooning".
 
-### Tâche 2.7.1 — App interne "carlson-internal"
+### Tâche 2.7.1 — Carlson en tant qu'agent-utilisateur
 
-- [ ] Lors d'un appel `turn_on_light(room)`, mcp-home crée un VDevice niveau 2 (durée par défaut `~ 4 h` ⚠ — à arbitrer) au nom de `app_id=carlson-internal`.
-- [ ] Permission auto-octroyée pour Carlson sur tous les devices `light` (Carlson est une app système configurée).
-- [ ] Tests.
+**Prérequis** : ADR 0013 lu et compris ; Phases 2.1 → 2.4 finalisées.
 
-**Acceptation** : "Hey Carlson, allume le salon" → un VDevice niveau 2 apparaît dans l'audit, l'ampoule s'allume.
+- [ ] Côté **mcp-home**, les tools MCP exposés à Carlson (`turn_on_light`, `set_thermostat`, etc.) construisent un payload `actor_kind=user_agent`, `actor_user_id=<utilisateur courant>`, `via_agent_id="carlson"`. Pas de `app_id` dans ce chemin.
+- [ ] L'**actor_kind est posé par le tool MCP**, pas reçu du client : un client MCP malveillant ne peut pas auto-déclarer `actor_kind=user_agent`. Au POC, l'utilisateur courant est l'utilisateur unique du foyer (cf. `architecture.md §11`) ; structure `actor_user_id` prévue dès maintenant pour la diarization Phase 3+.
+- [ ] **Pas de prompt de permission** déclenché par ce chemin (les agents-utilisateur ne sont pas soumis au modèle Android — cf. ADR 0009 patché par ADR 0013).
+- [ ] Côté **Carlson (Python)**, la résolution de la `duration_ms` pour le niveau 2 se fait **avant** l'appel au tool MCP :
+  - Si l'utilisateur a explicité une durée (« pour 30 min ») → utiliser cette durée.
+  - Sinon, **heuristique configurable** par device et plage horaire (ex. lumière salon le soir → jusqu'à `~ 23:30` ; radiateur en hiver → `~ 1 h`). Stub d'heuristique au POC, données de configuration dans `carlson/config/intent_heuristics.yaml` (à créer).
+  - Sinon (heuristique non applicable), Carlson **prompt vocalement** : « Pour combien de temps ? ». Réponse parsée et appliquée.
+  - **Jamais** d'appel niveau 2 sans `duration_ms` — l'orchestrateur le rejette de toute façon (ADR 0008).
+- [ ] Côté **mcp-home**, ajouter validation au point d'entrée : `actor_kind=user_agent` + `level=2` + pas de `duration_ms` → `400 Bad Request` avec message explicite, audit log de la requête malformée.
+- [ ] Tests :
+  - Unitaire orchestrateur : refus `actor_kind=app + level=2` (ADR 0009).
+  - Unitaire orchestrateur : accept `actor_kind=user_agent + level=2 + duration_ms` ; refus si `duration_ms` absent.
+  - Unitaire Carlson (Python) : heuristique de durée pour différents (device, plage horaire).
+  - Intégration : l'audit log d'un override vocal porte bien `actor_user_id=kevin`, `via_agent_id=carlson`.
+
+**Acceptation** : « Hey Carlson, allume le salon » → un VDevice niveau 2 avec `actor_kind=user_agent`, `actor_user_id=kevin`, `via_agent_id=carlson`, `duration_ms` calculé par Carlson, apparaît dans l'audit ; l'ampoule s'allume ; à expiration, retour à l'intention applicative ou au fallback.
+
+### Tâche 2.7.1bis — UI web comme agent-utilisateur
+
+**Prérequis** : 2.7.1, Phase 2.6 (UI dashboard) en cours ou finalisée.
+
+- [ ] Le contrôle d'override niveau 2 dans l'UI dashboard contient **obligatoirement** un slider de durée (pas de défaut implicite — cf. ADR 0013).
+- [ ] L'endpoint qui consomme le formulaire force `actor_kind=user_agent`, `actor_user_id=<utilisateur de la session>`, `via_agent_id="ui-web"`.
+- [ ] Le contrôle "réglage durable" (changer la consigne de référence d'un thermostat, par exemple) émet un VDevice niveau 1 avec `actor_kind=user_agent`, `app_id` synthétique `app:user-direct:<user>` (cf. ADR 0013 §"Niveau 1 par un agent-utilisateur").
+- [ ] Tests : intégration formulaire → orchestrateur → audit log avec les bons champs.
+
+**Acceptation** : depuis l'UI, un override niveau 2 sans slider configuré est **impossible à soumettre** ; le réglage durable depuis l'UI est tracé distinctement de l'override temporaire dans l'audit.
 
 ### Tâche 2.7.2 — Déprécation `ConsoleMockBackend`
 
@@ -465,11 +489,12 @@ Chaque driver a son test d'intégration avec un device réel ou un mock Z2M.
 - ❌ Ne pas accepter une intention niveau 2 sans `duration_ms` explicite, jamais (cf. ADR 0008).
 - ❌ Ne pas court-circuiter le single-writer MQTT, même "juste pour un test" (cf. ADR 0011).
 - ❌ Ne pas commander de "valeur neutre" au boot quand aucun VDevice n'écrit (cf. ADR 0012).
+- ❌ Ne pas modéliser Carlson (ni l'UI web/mobile, ni les interrupteurs niveau 2) comme une app autonome avec permission auto-octroyée niveau 2 — c'est un agent-utilisateur, pas une app (cf. ADR 0013). La distinction est posée par `actor_kind` au point d'entrée, pas dans le code métier de l'orchestrateur.
 
 ---
 
 ## Liens
 
 - [Structuration projet](vdevice-architecture.md)
-- ADR : [0007](adr/0007-virtual-device-arbitration.md), [0008](adr/0008-vdevice-lifecycle-renew.md), [0009](adr/0009-app-device-permissions.md), [0010](adr/0010-matter-clusters-capability-model.md), [0011](adr/0011-driver-mqtt-adapter.md), [0012](adr/0012-state-persistence-audit-fallback.md)
+- ADR : [0007](adr/0007-virtual-device-arbitration.md), [0008](adr/0008-vdevice-lifecycle-renew.md), [0009](adr/0009-app-device-permissions.md), [0010](adr/0010-matter-clusters-capability-model.md), [0011](adr/0011-driver-mqtt-adapter.md), [0012](adr/0012-state-persistence-audit-fallback.md), [0013](adr/0013-user-agents-vs-apps.md)
 - [Architecture globale](architecture.md)

@@ -9,10 +9,12 @@
 # Taille image : ~ 8-10 GB (PyTorch + TensorFlow + dépendances training).
 # GPU          : passer --gpus all au docker run si NVIDIA Container Toolkit installé.
 
-FROM python:3.11-slim
+# python:3.10 requis : tensorflow-cpu==2.8.1 supporte Python 3.7-3.10 uniquement.
+FROM python:3.10-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git wget ffmpeg libsndfile1 \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # openWakeWord depuis git — nécessaire pour accéder à openwakeword/train.py
@@ -29,27 +31,39 @@ RUN mkdir -p /piper-gen/models && \
     wget -q -O /piper-gen/models/en_US-libritts_r-medium.pt \
     "https://github.com/rhasspy/piper-sample-generator/releases/download/v2.0.0/en_US-libritts_r-medium.pt"
 
-# Dépendances de training — versions exactes du notebook
-# (les versions sont importantes : speechbrain 0.5.14 + tensorflow-cpu 2.8.1 + onnx_tf 1.10.0
-#  forment un triplet compatible ; ne pas bumper sans tester).
+# Dépendances de training — versions exactes du notebook.
+# Séparées en couches pour faciliter le debug et profiter du cache Docker.
+#
+# Couche 1 : PyTorch ecosystem
 RUN pip install --no-cache-dir \
-    piper-phonemize \
-    webrtcvad \
-    mutagen==1.47.0 \
+    torch torchaudio \
     torchinfo==1.8.0 \
-    torchmetrics==1.2.0 \
-    speechbrain==0.5.14 \
-    audiomentations==0.33.0 \
-    torch-audiomentations==0.11.0 \
-    acoustics==0.2.6 \
+    torchmetrics==1.2.0
+
+# Couche 2 : TensorFlow + ONNX (triplet compatible : tf 2.8.1 + tf_probability 0.16.0 + onnx_tf 1.10.0)
+RUN pip install --no-cache-dir \
     "tensorflow-cpu==2.8.1" \
     "tensorflow_probability==0.16.0" \
     "onnx_tf==1.10.0" \
+    onnx
+
+# Couche 3 : audio processing
+RUN pip install --no-cache-dir \
+    speechbrain==0.5.14 \
+    audiomentations==0.33.0 \
+    torch-audiomentations==0.11.0 \
+    piper-phonemize \
+    webrtcvad \
+    acoustics==0.2.6 \
+    scipy \
+    soundfile
+
+# Couche 4 : utilitaires restants
+RUN pip install --no-cache-dir \
+    mutagen==1.47.0 \
     pronouncing==0.2.0 \
     "datasets==2.14.6" \
     deep-phonemizer==0.0.19 \
-    onnx \
-    scipy \
     tqdm \
     pyyaml
 
