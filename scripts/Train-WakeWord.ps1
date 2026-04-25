@@ -28,12 +28,15 @@ $ErrorActionPreference = 'Stop'
 . $PSScriptRoot\_Lib.ps1
 Import-BtlrEnv
 
-$repoRoot   = Split-Path $PSScriptRoot -Parent
-$carlsonDir = Join-Path $repoRoot 'carlson'
-$assetsDir  = Join-Path $carlsonDir 'assets\wakeword'
-$configPath = Join-Path $assetsDir 'training_config.yaml'
-$imageName  = 'butlr-wakeword-train'
-$dockerfile = 'carlson/docker/Dockerfile.wakeword-train'
+$repoRoot    = Split-Path $PSScriptRoot -Parent
+$carlsonDir  = Join-Path $repoRoot 'carlson'
+$assetsDir   = Join-Path $carlsonDir 'assets\wakeword'
+$configPath  = Join-Path $assetsDir 'training_config.yaml'
+# Cache des features HuggingFace (~4-6 GB) — persistant entre les runs pour éviter
+# le re-téléchargement. Stocké hors du repo (trop volumineux pour git).
+$featuresDir = Join-Path $env:LOCALAPPDATA 'Butlr\wakeword-features'
+$imageName   = 'butlr-wakeword-train'
+$dockerfile  = 'carlson/docker/Dockerfile.wakeword-train'
 
 # -- Vérifie Docker ------------------------------------------------------------
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
@@ -111,28 +114,38 @@ if ($needsBuild) {
 }
 
 # -- Lancement de l'entraînement -----------------------------------------------
-$assetsDirAbs = [System.IO.Path]::GetFullPath($assetsDir)
+$assetsDirAbs   = [System.IO.Path]::GetFullPath($assetsDir)
+$featuresDirAbs = [System.IO.Path]::GetFullPath($featuresDir)
+New-Item -ItemType Directory -Force -Path $featuresDirAbs | Out-Null
 
 $dockerArgs = @(
     'run', '--rm',
     '--name', 'butlr-wakeword-train',
     '-v', "${assetsDirAbs}:/data",
+    '-v', "${featuresDirAbs}:/work/features",
     $imageName
 )
 
 if ($Gpu) {
     Write-Host "Mode GPU activé (--gpus all)." -ForegroundColor Cyan
-    $dockerArgs = @('run', '--rm', '--gpus', 'all', '--name', 'butlr-wakeword-train', '-v', "${assetsDirAbs}:/data", $imageName)
+    $dockerArgs = @(
+        'run', '--rm', '--gpus', 'all',
+        '--name', 'butlr-wakeword-train',
+        '-v', "${assetsDirAbs}:/data",
+        '-v', "${featuresDirAbs}:/work/features",
+        $imageName
+    )
 }
 
 Write-Host ""
 Write-Host "Lancement de l'entraînement..." -ForegroundColor Cyan
-Write-Host "  Config  : $configPath"
-Write-Host "  Sortie  : $assetsDir\hey_carlson.tflite"
+Write-Host "  Config    : $configPath"
+Write-Host "  Features  : $featuresDirAbs (cache persistant, ~4-6 GB au 1er run)"
+Write-Host "  Sortie    : $assetsDir\hey_carlson.tflite"
 if ($Gpu) {
-    Write-Host "  Durée   : ~45 min (GPU)" -ForegroundColor DarkGray
+    Write-Host "  Durée     : ~45 min (GPU)" -ForegroundColor DarkGray
 } else {
-    Write-Host "  Durée   : ~2-4 h (CPU) — ajoute -Gpu si tu as NVIDIA Container Toolkit" -ForegroundColor DarkGray
+    Write-Host "  Durée     : ~2-4 h (CPU) — ajoute -Gpu si tu as NVIDIA Container Toolkit" -ForegroundColor DarkGray
 }
 Write-Host ""
 
