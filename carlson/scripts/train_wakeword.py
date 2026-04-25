@@ -1,20 +1,15 @@
-"""Préparation et lancement de l'entraînement du wake word "Hey Carlson".
+"""Utilitaire de configuration pour l'entraînement du wake word "Hey Carlson".
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  CONTRAINTE WINDOWS
-  La génération automatique des samples positifs (Piper TTS) et
-  l'entraînement openWakeWord ne fonctionnent qu'en environnement
-  Linux. ~ Source : openWakeWord README + dépendances Piper CLI.
+Ce script gère la config YAML et, sous Linux/WSL, peut lancer l'entraînement
+openWakeWord directement. Sur Windows, l'entraînement passe par Docker :
 
-  Deux chemins possibles depuis Windows :
-    A) Google Colab (recommandé, aucun prérequis local)
-    B) WSL2 — lancer ce script depuis une distrib Ubuntu
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    .\\scripts\\Train-WakeWord.ps1         # entraînement CPU via Docker
+    .\\scripts\\Train-WakeWord.ps1 -Gpu    # entraînement GPU
 
 Usage :
     python carlson/scripts/train_wakeword.py                   # affiche les instructions
     python carlson/scripts/train_wakeword.py --generate-config # écrit le YAML de config
-    python carlson/scripts/train_wakeword.py --run             # lance si sous Linux/WSL
+    python carlson/scripts/train_wakeword.py --run             # lance si sous Linux/WSL/Docker
 
 Sortie attendue :
     carlson/assets/wakeword/hey_carlson.tflite   (modèle final)
@@ -83,40 +78,25 @@ def print_colab_instructions() -> None:
     lines = [
         "",
         "=" * 70,
-        "  GUIDE D'ENTRAINEMENT -- Google Colab (recommande)",
+        "  GUIDE D'ENTRAINEMENT -- Docker (recommande)",
         "=" * 70,
         "",
-        "L'entrainement openWakeWord ne peut pas tourner directement sur Windows.",
-        "Le plus simple : Google Colab, GPU gratuit, environnement Linux pret.",
+        "L'entrainement openWakeWord necessite Linux — on passe par Docker.",
         "",
-        "ETAPE 1 -- Ouvre le notebook officiel",
-        "  URL : https://github.com/dscripka/openWakeWord/blob/main/notebooks/automatic_model_training.ipynb",
-        "  -> Clique 'Open in Colab' (bouton en haut du notebook)",
-        "  -> Connecte-toi avec ton compte Google",
+        "ETAPE 1 -- Lance l'entrainement via Docker (depuis le repo racine) :",
         "",
-        "ETAPE 2 -- Active le GPU",
-        "  Menu : Execution -> Modifier le type d'execution -> T4 GPU",
-        "  (Sans GPU, l'entrainement prend 4-8 h au lieu de ~45 min)",
+        "  .\\scripts\\Train-WakeWord.ps1          # CPU (~2-4 h)",
+        "  .\\scripts\\Train-WakeWord.ps1 -Gpu     # GPU NVIDIA (~45 min)",
         "",
-        "ETAPE 3 -- Configure la phrase cible",
-        "  Dans la premiere cellule de config, remplace la phrase d'exemple par :",
-        '    target_phrase = "Hey Carlson"',
-        "  Garde les autres parametres par defaut pour un premier essai.",
+        "  Le container va :",
+        '    a) Generer ~5 000 clips audio "Hey Carlson" via Piper TTS',
+        "    b) Telecharger les donnees negatives depuis Hugging Face",
+        "    c) Entrainer le modele et produire hey_carlson.tflite",
         "",
-        "ETAPE 4 -- Lance toutes les cellules",
-        "  Menu : Execution -> Tout executer",
-        "  Le notebook va :",
-        "    a) Installer openWakeWord + dependances (~5 min)",
-        '    b) Generer ~5 000 clips audio "Hey Carlson" via TTS (~15 min)',
-        "    c) Telecharger les donnees negatives depuis Hugging Face (~5 min)",
-        "    d) Entrainer le modele (~20-40 min avec GPU)",
-        "    e) Exporter hey_carlson.tflite et hey_carlson.onnx",
+        "  Premier lancement : ~5-10 min de build Docker + telechargement (~4-6 GB).",
+        "  Les lancements suivants reutilisent l'image en cache.",
         "",
-        "ETAPE 5 -- Recupere le modele",
-        "  Telecharge hey_carlson.tflite et place-le ici :",
-        "    carlson/assets/wakeword/hey_carlson.tflite",
-        "",
-        "ETAPE 6 -- Teste localement",
+        "ETAPE 2 -- Teste localement",
         "  $env:USE_WAKEWORD = '1'",
         "  carlson",
         "  -> Dis 'Hey Carlson' et verifie que Carlson repond.",
@@ -126,16 +106,11 @@ def print_colab_instructions() -> None:
         "  -> Manque trop souvent   : baisse  WAKEWORD_THRESHOLD (0.4, 0.3...)",
         "",
         "-" * 70,
-        "  ALTERNATIVE -- Entrainement en local via WSL2",
+        "  ALTERNATIVE -- Depuis un terminal Linux/WSL2",
         "-" * 70,
         "",
-        "  Depuis un terminal Ubuntu/WSL2 :",
-        "",
-        "    pip install openwakeword[full]",
+        "    pip install openwakeword[full] piper-tts",
         "    python carlson/scripts/train_wakeword.py --run",
-        "",
-        "  Le script genere les donnees et lance l'entrainement.",
-        "  Recupere ensuite carlson/assets/wakeword/hey_carlson.tflite.",
         "",
     ]
     print("\n".join(lines))

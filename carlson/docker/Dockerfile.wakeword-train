@@ -1,0 +1,36 @@
+# Image d'entraînement du wake word "Hey Carlson" via openWakeWord.
+#
+# Build  : docker build -f carlson/docker/Dockerfile.wakeword-train -t butlr-wakeword-train .
+# Run    : voir scripts/Train-WakeWord.ps1
+#
+# Taille image : ~ 4-6 GB (PyTorch inclus dans openwakeword[full]).
+# GPU          : passer --gpus all au docker run si NVIDIA Container Toolkit installé.
+
+FROM python:3.11-slim
+
+# Dépendances système pour le traitement audio (libsndfile, ffmpeg) et le téléchargement.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsndfile1 \
+    ffmpeg \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# openwakeword[full] inclut : torch, torchaudio, speechbrain, audiomentations,
+# tensorflow-cpu, et les utilitaires de génération de données synthétiques.
+# piper-tts fournit le binaire `piper` nécessaire à la génération des samples positifs.
+# ~ Versions fixées lors du build — à ré-évaluer si openwakeword change ses extras.
+RUN pip install --no-cache-dir \
+    "openwakeword[full]" \
+    "piper-tts>=1.2"
+
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+WORKDIR /work
+
+# /data est monté depuis carlson/assets/wakeword/ sur le host :
+#   - en lecture : training_config.yaml
+#   - en écriture : hey_carlson.tflite + hey_carlson.onnx (sortie)
+VOLUME ["/data"]
+
+ENTRYPOINT ["/entrypoint.sh"]
