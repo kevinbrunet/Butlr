@@ -71,6 +71,10 @@ RUN pip install --no-cache-dir \
 
 COPY carlson/docker/train.py /train.py
 
+# generate_samples.py est dans /piper-gen — OWW l'importe via sys.path depuis le config,
+# mais le PYTHONPATH garantit que ça marche quel que soit le chemin dans le YAML.
+ENV PYTHONPATH=/piper-gen
+
 WORKDIR /work
 
 # /data monté depuis carlson/assets/wakeword/ :
