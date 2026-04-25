@@ -53,11 +53,14 @@ RUN pip install --no-cache-dir \
     torchmetrics==1.2.0
 
 # Couche 2 : TensorFlow + ONNX (triplet compatible : tf 2.8.1 + tf_probability 0.16.0 + onnx_tf 1.10.0)
+# protobuf<3.21 requis : tensorflow 2.8.1 utilise l'ancienne API protobuf C++
+# (Descriptors cannot be created directly avec protobuf>=4.x)
 RUN pip install --no-cache-dir \
     "tensorflow-cpu==2.8.1" \
     "tensorflow_probability==0.16.0" \
     "onnx_tf==1.10.0" \
-    onnx
+    onnx \
+    "protobuf<3.21"
 
 # Couche 3 : audio processing
 RUN pip install --no-cache-dir \
