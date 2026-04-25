@@ -73,5 +73,5 @@ class Config:
             filler_delay_ms=int(os.getenv("FILLER_DELAY_MS", "500")),
             language_default=os.getenv("LANGUAGE_DEFAULT", "fr"),
             use_vad=os.getenv("USE_VAD", "0").lower() in ("1", "true", "yes"),
-            use_wakeword=os.getenv("USE_WAKEWORD", "0").lower() in ("1", "true", "yes"),
+            use_wakeword=os.getenv("USE_WAKEWORD", "1").lower() in ("1", "true", "yes"),
         )
