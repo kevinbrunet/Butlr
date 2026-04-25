@@ -1,14 +1,17 @@
 """Pipecat pipeline assembly.
 
-Frame flow (Phase 3, Slice 2 — STT → LLM (+tools MCP) → TTS) :
+Frame flow (Phase 4, Slice 3 — wake word + STT → LLM (+tools MCP) → TTS) :
 
-    mic → [PTT gate | VAD] → STT → context_agg.user → LLM → TTS → speaker
-                                                          ↕         ↕
-                                                    tool_call   context_agg.assistant
-                                                       ↓
-                                                  McpHomeClient.call()
+    mic → [WakeWord | PTT gate | VAD] → STT → context_agg.user → LLM → TTS → speaker
+                                                                    ↕         ↕
+                                                              tool_call   context_agg.assistant
+                                                                 ↓
+                                                            McpHomeClient.call()
 
-Wake word câblé en Phase 4.
+Modes :
+    use_wakeword=True  → WakeWord (+ Silero VAD pour fin de tour)
+    use_vad=True       → Silero VAD seul (sans wake word)
+    use_vad=False      → push-to-talk clavier
 
 ~ Les chemins d'import Pipecat dépendent de la version pinnée. Si une import
   rate, faire `python -c "import pipecat; print(pipecat.__version__)"` et
@@ -26,6 +29,7 @@ from .persona import SYSTEM_PROMPT
 from .services.llm_local import build_llm_service
 from .services.stt_whisper import build_stt_service
 from .services.tts_piper import build_tts_service
+from .services.wake_word import build_wake_word_service
 
 log = logging.getLogger("carlson.pipeline")
 
@@ -109,7 +113,7 @@ def _make_llm_response_logger() -> Any:
 async def build_pipeline(config: Config, mcp: McpHomeClient) -> tuple[Any, Any]:
     """Construct and return a (Pipeline, gate) pair.
 
-    gate is None when use_vad=True ; it's a PushToTalkGate when use_vad=False.
+    gate is a PushToTalkGate when use_vad=False and use_wakeword=False ; None sinon.
 
     ~ Import paths validated against pipecat-ai 0.0.50+. If imports fail after
       a version bump, check `pipecat.transports`, `pipecat.audio`, and
@@ -152,22 +156,44 @@ async def build_pipeline(config: Config, mcp: McpHomeClient) -> tuple[Any, Any]:
 
     gate: Any = None
 
-    if config.use_vad:
-        # Étape 2.5 — Silero VAD remplace le push-to-talk
-        # ~ SileroVADAnalyzer : nécessite silero-vad>=5.0 et torch
+    # ~ SileroVADAnalyzer : nécessite silero-vad>=5.0 et torch.
+    # Réutilisé en mode wake word (Silero gère la fin de tour) et en mode VAD pur.
+    def _make_vad_transport() -> Any:
         from pipecat.audio.vad.silero import SileroVADAnalyzer
 
-        transport = LocalAudioTransport(
+        return LocalAudioTransport(
             LocalAudioTransportParams(
                 audio_in_enabled=True,
                 audio_out_enabled=True,
                 vad_enabled=True,
                 vad_analyzer=SileroVADAnalyzer(),
-                # ~ vad_audio_passthrough : le audio brut est quand même propagé
-                # en aval pour que le STT l'accumule.
+                # ~ vad_audio_passthrough : l'audio brut se propage en aval pour
+                # que le STT accumule les échantillons entre les events VAD.
                 vad_audio_passthrough=True,
             )
         )
+
+    if config.use_wakeword:
+        # Phase 4 — Slice 3 : wake word "Hey Carlson" en amont du STT.
+        # Silero reste actif pour détecter la fin du tour (VADUserStoppedSpeakingFrame).
+        transport = _make_vad_transport()
+        wake_word = build_wake_word_service(config)
+        pipeline = Pipeline([
+            transport.input(),
+            wake_word,
+            stt,
+            transcription_logger,
+            context_aggregator.user(),
+            llm,
+            llm_response_logger,
+            tts,
+            transport.output(),
+            context_aggregator.assistant(),
+        ])
+        mode = "wakeword"
+    elif config.use_vad:
+        # Étape 2.5 — Silero VAD remplace le push-to-talk
+        transport = _make_vad_transport()
         pipeline = Pipeline([
             transport.input(),
             transcription_logger,
@@ -179,6 +205,7 @@ async def build_pipeline(config: Config, mcp: McpHomeClient) -> tuple[Any, Any]:
             transport.output(),
             context_aggregator.assistant(),
         ])
+        mode = "vad"
     else:
         # Étapes 2.1–2.4 — push-to-talk clavier
         transport = LocalAudioTransport(
@@ -201,10 +228,11 @@ async def build_pipeline(config: Config, mcp: McpHomeClient) -> tuple[Any, Any]:
             transport.output(),
             context_aggregator.assistant(),
         ])
+        mode = "ptt"
 
     log.info(
         "Pipeline construit (mode=%s, stt=%s, llm=%s@%s, tts=%s)",
-        "vad" if config.use_vad else "ptt",
+        mode,
         config.stt_model,
         config.llm_model,
         config.llm_base_url,
