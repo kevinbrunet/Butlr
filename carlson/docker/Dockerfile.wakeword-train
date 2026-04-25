@@ -35,7 +35,12 @@ RUN mkdir -p /piper-gen/models && \
 # Dépendances de training — versions exactes du notebook.
 # Séparées en couches pour faciliter le debug et profiter du cache Docker.
 #
-# Couche 1 : PyTorch ecosystem
+# Couche 1 : NumPy 1.x — doit être installé avant torch/tf car les binaires
+# (torch 2.0.1, torchaudio 2.0.2, torchmetrics 1.2.0) ont été compilés contre NumPy 1.x.
+# NumPy 2.x lève RuntimeError: Numpy is not available au runtime.
+RUN pip install --no-cache-dir "numpy<2"
+
+# Couche 2 : PyTorch ecosystem
 # torch-audiomentations==0.11.0 appelle torchaudio.set_audio_backend() qui a été
 # supprimé dans torchaudio>=2.1 — on reste sur 2.0.x où la fonction est encore là.
 RUN pip install --no-cache-dir \
