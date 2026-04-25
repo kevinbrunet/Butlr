@@ -15,7 +15,6 @@ import os
 import shutil
 import subprocess
 import sys
-import urllib.request
 import yaml
 from pathlib import Path
 
@@ -126,16 +125,24 @@ def download_features() -> None:
 
     ~ Taille : quelques GB pour ACAV100M, ~100 MB pour validation.
       Premier lancement : peut prendre 10-30 min selon la connexion.
+      Utilise wget -c pour reprendre automatiquement en cas de coupure.
     """
     FEATURES_DIR.mkdir(parents=True, exist_ok=True)
     for filename, url in FEATURES_URLS.items():
         dest = FEATURES_DIR / filename
-        if dest.exists():
-            log.info("Features en cache : %s", filename)
+        if dest.exists() and dest.stat().st_size > 0:
+            log.info("Features en cache : %s (%d MB)", filename, dest.stat().st_size // (1024 * 1024))
             continue
         log.info("Telechargement %s ...", filename)
-        log.info("  (peut prendre plusieurs minutes)")
-        urllib.request.urlretrieve(url, dest)
+        log.info("  (peut prendre plusieurs minutes — wget -c reprend si coupure)")
+        # wget -c : resume si fichier partiel ; --tries=5 : 5 tentatives auto.
+        result = subprocess.run(
+            ["wget", "-c", "--tries=5", "--timeout=60", "-O", str(dest), url],
+            check=False,
+        )
+        if result.returncode != 0:
+            log.error("Telechargement echoue pour %s (exit %d)", filename, result.returncode)
+            sys.exit(result.returncode)
         size_mb = dest.stat().st_size // (1024 * 1024)
         log.info("  -> %s (%d MB)", dest, size_mb)
 
