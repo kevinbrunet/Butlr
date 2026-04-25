@@ -103,6 +103,7 @@ def build_oww_config(our: dict) -> Path:
         FEATURES_DIR / "validation_set_features.npy"
     )
     cfg["background_paths"] = []
+    cfg["rir_paths"] = []
 
     # Clé plate lue par OWW train.py : config["piper_sample_generator_path"]
     # (pas une nested dict — cf. exemples/custom_model.yml du repo OWW)
