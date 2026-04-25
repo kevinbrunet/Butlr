@@ -111,6 +111,22 @@ def build_oww_config(our: dict) -> Path:
     # Modèle speaker utilisé par le fork dscripka
     cfg["speaker_model_path"] = str(PIPER_GEN / "models" / "en-us-libritts-high.pt")
 
+    # Clips réels enregistrés par l'utilisateur — fortement recommandés pour
+    # combler le gap entre voix TTS synthétique et voix humaine réelle.
+    custom_dir = our.get("custom_positive_clips_dir", "")
+    if custom_dir:
+        custom_path = DATA_DIR / custom_dir
+        if custom_path.exists() and any(custom_path.glob("*.wav")):
+            cfg["custom_model_data"] = str(custom_path)
+            n_clips = len(list(custom_path.glob("*.wav")))
+            log.info("Clips reels trouves : %d fichiers dans %s", n_clips, custom_path)
+        else:
+            log.warning(
+                "custom_positive_clips_dir=%s specifie mais dossier absent ou vide — "
+                "enregistre des clips avec scripts/record_wakeword.py",
+                custom_path,
+            )
+
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     with open(OWW_CONFIG_PATH, "w", encoding="utf-8") as f:
         yaml.dump(cfg, f, default_flow_style=False)
