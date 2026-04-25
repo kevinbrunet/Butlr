@@ -51,7 +51,8 @@ class Config:
 
     # Misc
     language_default: str  # "fr" | "en"
-    use_vad: bool  # True = Silero VAD auto-detect; False = push-to-talk (Enter key)
+    use_vad: bool      # True = Silero VAD auto-detect; False = push-to-talk (Enter key)
+    use_wakeword: bool  # True = "Hey Carlson" requis avant tout tour; implique use_vad=True
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -72,4 +73,5 @@ class Config:
             filler_delay_ms=int(os.getenv("FILLER_DELAY_MS", "500")),
             language_default=os.getenv("LANGUAGE_DEFAULT", "fr"),
             use_vad=os.getenv("USE_VAD", "0").lower() in ("1", "true", "yes"),
+            use_wakeword=os.getenv("USE_WAKEWORD", "0").lower() in ("1", "true", "yes"),
         )

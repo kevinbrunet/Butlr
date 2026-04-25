@@ -1,0 +1,25 @@
+# openWakeWord — config d'entraînement pour "Hey Carlson"
+# Référence : https://github.com/dscripka/openWakeWord/blob/main/notebooks/automatic_model_training.ipynb
+
+# Identifiant du modèle (nom du fichier .tflite et .onnx en sortie)
+model_name: hey_carlson
+
+# Phrase cible — openWakeWord génère les samples positifs à partir de cette phrase
+# via TTS multi-voix (nécessite Linux + Piper installé dans l'env openWakeWord).
+target_phrase: "Hey Carlson"
+
+# ~ Nombre de samples positifs synthétiques à générer.
+# 5000 est un bon point de départ ; augmenter si FP rate trop élevé.
+n_positive_samples: 5000
+
+# ~ Nombre d'epochs d'entraînement. 100 suffit pour un premier test ;
+# augmenter à 300-500 pour une meilleure précision.
+n_epochs: 100
+
+# Seuil de score pour la détection (repris dans Carlson via WAKEWORD_THRESHOLD).
+# Valeur plus haute = moins de faux positifs, mais plus de manqués.
+detection_threshold: 0.5
+
+# Les négatifs (parole, musique, bruits) sont téléchargés automatiquement depuis
+# Hugging Face (dataset davidscripka/openwakeword_features). Connexion internet requise.
+use_precomputed_features: true
