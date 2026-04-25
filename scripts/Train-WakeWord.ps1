@@ -121,6 +121,7 @@ New-Item -ItemType Directory -Force -Path $featuresDirAbs | Out-Null
 $dockerArgs = @(
     'run', '--rm',
     '--name', 'butlr-wakeword-train',
+    '--shm-size=4g',
     '-v', "${assetsDirAbs}:/data",
     '-v', "${featuresDirAbs}:/work/features",
     $imageName
@@ -131,6 +132,7 @@ if ($Gpu) {
     $dockerArgs = @(
         'run', '--rm', '--gpus', 'all',
         '--name', 'butlr-wakeword-train',
+        '--shm-size=4g',
         '-v', "${assetsDirAbs}:/data",
         '-v', "${featuresDirAbs}:/work/features",
         $imageName
