@@ -62,7 +62,9 @@ def main() -> None:
     print(f"\nÉcoute... (seuil={args.threshold}) — dis 'Hey Carlson' — Ctrl+C pour quitter\n")
     try:
         while True:
-            audio = stream.read(CHUNK, exception_on_overflow=False)
+            import numpy as np
+            raw = stream.read(CHUNK, exception_on_overflow=False)
+            audio = np.frombuffer(raw, dtype=np.int16)
             scores: dict = model.predict(audio)
             for name, score in scores.items():
                 bar = "█" * int(score * 30)
