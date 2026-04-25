@@ -106,3 +106,7 @@ def main() -> None:
         print("✓  Bon nombre de clips.")
     print("\nProchaine étape : relance l'entraînement")
     print("  .\\scripts\\Train-WakeWord.ps1 -Gpu")
+
+
+if __name__ == "__main__":
+    main()
