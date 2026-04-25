@@ -97,7 +97,7 @@ def build_oww_config(our: dict) -> Path:
 
     # Données pré-calculées (pas de téléchargement audioset/FMA)
     cfg["feature_data_files"] = {
-        "ACAV100M": str(FEATURES_DIR / "openwakeword_features_ACAV100M_2000_hrs_16bit.npy")
+        "ACAV100M_sample": str(FEATURES_DIR / "openwakeword_features_ACAV100M_2000_hrs_16bit.npy")
     }
     cfg["false_positive_validation_data_path"] = str(
         FEATURES_DIR / "validation_set_features.npy"
