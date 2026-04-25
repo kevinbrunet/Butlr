@@ -11,6 +11,7 @@ Suit exactement le notebook automatic_model_training.ipynb d'openWakeWord :
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -142,10 +143,17 @@ def download_features() -> None:
 def run_phase(label: str, flag: str) -> None:
     """Exécute une phase du script train.py d'openWakeWord."""
     log.info("=== %s ===", label)
+    # PYTHONPATH explicite : OWW train.py fait `from generate_samples import ...`
+    # (top-level) — piper-sample-generator doit être dans le path du sous-process.
+    env = os.environ.copy()
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = f"{PIPER_GEN}:{existing}" if existing else str(PIPER_GEN)
+    log.info("  PYTHONPATH=%s", env["PYTHONPATH"])
     result = subprocess.run(
         [sys.executable, str(OWW_TRAIN_SCRIPT), "--training_config", str(OWW_CONFIG_PATH), flag],
         cwd=str(WORK_DIR),
         check=False,
+        env=env,
     )
     if result.returncode != 0:
         log.error("Phase '%s' echouee (exit %d)", label, result.returncode)
