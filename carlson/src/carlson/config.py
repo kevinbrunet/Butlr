@@ -23,6 +23,19 @@ def _default_stt_model() -> str:
     return str(Path(butlr_env) / "models" / "whisper" / "faster-whisper-large-v3")
 
 
+def _default_wakeword_model() -> str:
+    # hey_carlson.onnx si présent (modèle entraîné localement).
+    # Sinon, repli sur hey_jarvis pré-entraîné OWW (validé, fonctionne out-of-the-box).
+    import openwakeword.utils
+    carlson_root = Path(__file__).parent.parent.parent
+    custom = carlson_root / "assets" / "wakeword" / "hey_carlson.onnx"
+    if custom.exists():
+        return str(custom)
+    oww_resources = Path(openwakeword.utils.__file__).parent / "resources" / "models"
+    jarvis = oww_resources / "hey_jarvis_v0.1.onnx"
+    return str(jarvis) if jarvis.exists() else str(oww_resources / "hey_jarvis_v0.1.tflite")
+
+
 @dataclass(frozen=True)
 class Config:
     # LLM (llama.cpp server, OpenAI-compatible)
@@ -64,14 +77,12 @@ class Config:
             tts_engine=os.getenv("TTS_ENGINE", "piper"),
             tts_voice_fr=os.getenv("TTS_VOICE_FR", "fr_FR-gilles-low"),
             tts_voice_en=os.getenv("TTS_VOICE_EN", "en_GB-alan-medium"),
-            wakeword_model=os.getenv(
-                "WAKEWORD_MODEL", "assets/wakeword/hey_carlson.tflite"
-            ),
+            wakeword_model=os.getenv("WAKEWORD_MODEL", _default_wakeword_model()),
             wakeword_threshold=float(os.getenv("WAKEWORD_THRESHOLD", "0.5")),
             mcp_home_url=os.getenv("MCP_HOME_URL", "https://localhost:5001/mcp"),
             mcp_home_token=os.getenv("MCP_HOME_TOKEN", ""),
             filler_delay_ms=int(os.getenv("FILLER_DELAY_MS", "500")),
             language_default=os.getenv("LANGUAGE_DEFAULT", "fr"),
-            use_vad=os.getenv("USE_VAD", "0").lower() in ("1", "true", "yes"),
+            use_vad=os.getenv("USE_VAD", "1").lower() in ("1", "true", "yes"),
             use_wakeword=os.getenv("USE_WAKEWORD", "1").lower() in ("1", "true", "yes"),
         )
