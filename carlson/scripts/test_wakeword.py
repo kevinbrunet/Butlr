@@ -66,14 +66,15 @@ def main() -> None:
         while True:
             raw = stream.read(CHUNK, exception_on_overflow=False)
             pcm = np.frombuffer(raw, dtype=np.int16)
-            # OWW attend du float32 normalisé [-1, 1] (même conversion que WakeWordProcessor)
-            audio = pcm.astype(np.float32) / 32768.0
+            # OWW exige du int16 brut — _get_melspectrogram() cast les listes en int16,
+            # donc passer du float32 normalisé [-1,1] produit des zéros et des scores ~0.001.
+            audio_f32 = pcm.astype(np.float32) / 32768.0  # pour le VU-mètre uniquement
 
             # VU-mètre : amplitude RMS pour vérifier que le micro capte quelque chose
-            rms = float(np.sqrt(np.mean(audio ** 2)))
+            rms = float(np.sqrt(np.mean(audio_f32 ** 2)))
             vu = "▓" * int(rms * 200)
 
-            scores: dict = model.predict(audio)
+            scores: dict = model.predict(pcm)
             for name, score in scores.items():
                 bar = "█" * int(score * 30)
                 trigger = " ← DÉTECTÉ !" if score >= args.threshold else ""

@@ -21,10 +21,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # openWakeWord depuis git — nécessaire pour accéder à openwakeword/train.py
 # (le package PyPI n'expose pas ce script comme module runnable).
 RUN git clone --depth=1 https://github.com/dscripka/openWakeWord /oww
-RUN pip install --no-cache-dir -e /oww
 
-# Télécharge les modèles utilitaires OWW (melspectrogram.onnx, embedding_model.onnx…)
-# Ces fichiers ne sont pas dans le repo git — ils sont dans openwakeword/resources/models/.
+# Installe depuis PyPI en version fixe = même version que le host carlson (openwakeword==0.6.0).
+# CRITIQUE : training et inference doivent utiliser le MÊME embedding_model.onnx.
+# Si les versions divergent, le modèle entraîné produit 0.001 au runtime car les
+# embeddings de la version git HEAD != embeddings 0.6.0.
+RUN pip install --no-cache-dir "openwakeword==0.6.0"
+
+# Télécharge les modèles utilitaires OWW 0.6.0 (melspectrogram.onnx, embedding_model.onnx…)
 RUN python -c "import openwakeword.utils; openwakeword.utils.download_models()"
 
 # Fork dscripka de piper-sample-generator — c'est celui référencé par OWW.

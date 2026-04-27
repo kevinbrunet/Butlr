@@ -28,3 +28,9 @@ detection_threshold: 0.5
 # Chemin relatif au volume /data dans Docker (= carlson/assets/wakeword/).
 # Laisser vide ("") pour n'utiliser que les samples synthétiques.
 custom_positive_clips_dir: "my_recordings"
+
+# Désactiver la génération synthétique anglaise (piper-sample-generator / libritts).
+# true = entraîne uniquement sur les clips dans custom_positive_clips_dir.
+# Utiliser quand my_recordings/ contient >= 200 clips (réels + synth FR via Generate-FrenchTTS.ps1).
+# false = pipeline complet (synth anglais + injection des clips réels).
+skip_synthetic_generation: true

@@ -45,7 +45,7 @@ function Get-PiperVoice {
         Write-Ok "OK : $dest"
     }
 }
-
+Get-PiperVoice -Name "fr_FR-mls-medium" -SubPath "fr/fr_FR/mls/medium"
 Get-PiperVoice -Name $env:PIPER_VOICE_FR_NAME -SubPath $env:PIPER_VOICE_FR_PATH
 Get-PiperVoice -Name $env:PIPER_VOICE_EN_NAME -SubPath $env:PIPER_VOICE_EN_PATH
 

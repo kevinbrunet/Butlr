@@ -89,7 +89,9 @@ class WakeWordProcessor(FrameProcessor):
             chunk = self._audio_buf[:bytes_per_chunk]
             self._audio_buf = self._audio_buf[bytes_per_chunk:]
 
-            samples = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
+            # OWW exige du int16 brut — _get_melspectrogram() cast les valeurs en int16,
+            # donc float32 normalisé [-1,1] serait tronqué à zéro → scores ~0.001.
+            samples = np.frombuffer(chunk, dtype=np.int16)
             # ~ Model.predict retourne un dict {model_name: float} — API openWakeWord>=0.6.
             scores: dict[str, float] = self._model.predict(samples)
             score = max(scores.values()) if scores else 0.0
@@ -114,13 +116,32 @@ class WakeWordProcessor(FrameProcessor):
                 self._confirm_count = 0
 
 
+def _ensure_oww_models() -> None:
+    """Télécharge les modèles utilitaires OWW si absents (melspectrogram.onnx, etc.).
+
+    Nécessaire après un pip install fresh — ces fichiers ne sont pas dans le wheel,
+    ils se téléchargent depuis GitHub releases au premier usage.
+    """
+    import pathlib
+    import openwakeword.utils  # type: ignore[import-untyped]
+
+    resources_dir = pathlib.Path(openwakeword.utils.__file__).parent / "resources" / "models"
+    melspec = resources_dir / "melspectrogram.onnx"
+    if not melspec.exists():
+        log.info("Modèles utilitaires OWW absents — téléchargement...")
+        openwakeword.utils.download_models()
+        log.info("Modèles OWW téléchargés.")
+
+
 def build_wake_word_service(config: Config) -> WakeWordProcessor:
     # ~ Import conditionnel : openwakeword n'est requis que si USE_WAKEWORD=1.
     from openwakeword.model import Model  # type: ignore[import-untyped]
 
+    _ensure_oww_models()
+
     model = Model(
         wakeword_models=[config.wakeword_model],
-        inference_framework="tflite",
+        inference_framework="onnx",
     )
     log.info(
         "Wake word model chargé : %s (seuil=%.2f, confirmation=%d chunks)",
