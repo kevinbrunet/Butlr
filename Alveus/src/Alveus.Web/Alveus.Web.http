@@ -1,0 +1,6 @@
+@Alveus.Web_HostAddress = http://localhost:5081
+
+GET {{Alveus.Web_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
