@@ -61,6 +61,11 @@ builder.Services.AddSingleton<FinishTool>();
 // Stratégie de compactage de session injectée dans RunAgentPrompt — cf. ADR 0019.
 builder.Services.AddSingleton<IAgentSessionCompactionService, SummarizingAgentSessionCompactionService>();
 
+// Vérification du travail avant l'issue "Done" — cf. ADR 0020. Sans Agent:VerificationCommand
+// configuré, la vérification est un no-op qui valide toujours.
+builder.Services.AddSingleton<IAgentWorkVerificationService>(
+    _ => new CmdAgentWorkVerificationService(workspaceRoot, builder.Configuration["Agent:VerificationCommand"]));
+
 // Nom de l'agent : sert à la fois de Name pour le ChatClientAgent et de clé
 // d'enregistrement DI, pour que RunAgentPrompt puisse cibler l'agent par son nom.
 var agentName = builder.Configuration["Agent:Name"]

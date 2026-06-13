@@ -13,7 +13,9 @@ namespace Alveus.Web.Activities;
 /// <summary>
 /// Envoie <see cref="Prompt"/> à l'agent désigné par <see cref="AgentName"/> (résolu via les
 /// services à clé enregistrés dans <c>Program.cs</c>, cf. configuration <c>Agent:Name</c>) et
-/// attend que l'agent appelle <see cref="FinishTool"/> pour se terminer — cf. ADR 0019.
+/// attend que l'agent appelle <see cref="FinishTool"/> pour se terminer — cf. ADR 0019. Avant de
+/// sortir par l'issue "Done", le travail est vérifié par <see cref="IAgentWorkVerificationService"/>
+/// (cf. ADR 0020) ; en cas d'échec, la boucle continue avec le détail de l'échec en guise de prompt.
 /// La session (prompt + réponse, y compris raisonnement et appels d'outils) est persistée dans
 /// l'état de l'activité : si l'activité est réexécutée après une suspension du workflow, elle
 /// reprend la même session plutôt que d'en démarrer une nouvelle — cf. ADR 0018.
@@ -33,12 +35,19 @@ public sealed class RunAgentPrompt : CodeActivity
         + "en précisant reason et questions. Si tu ne peux pas continuer, appelle-le avec outcome='blocked' en "
         + "précisant reason.";
 
-    private readonly IAgentSessionCompactionService _compactionService;
+    private const string VerificationFailedPrompt =
+        "La vérification automatique du travail a échoué. Corrige le problème décrit ci-dessous, puis rappelle "
+        + "l'outil Finish.\n\n";
 
-    public RunAgentPrompt(IAgentSessionCompactionService compactionService)
+    private readonly IAgentSessionCompactionService _compactionService;
+    private readonly IAgentWorkVerificationService _workVerificationService;
+
+    public RunAgentPrompt(IAgentSessionCompactionService compactionService, IAgentWorkVerificationService workVerificationService)
     {
         ArgumentNullException.ThrowIfNull(compactionService);
+        ArgumentNullException.ThrowIfNull(workVerificationService);
         _compactionService = compactionService;
+        _workVerificationService = workVerificationService;
     }
 
     [Input(Description = "Nom de l'agent à appeler (clé d'enregistrement DI, cf. Agent:Name en configuration).")]
@@ -80,15 +89,22 @@ public sealed class RunAgentPrompt : CodeActivity
             var finish = FindFinishCall(response);
             if (finish is not null)
             {
-                await CompleteWithFinishAsync(context, finish);
-                return;
-            }
+                var retryMessage = await TryCompleteAsync(context, finish);
+                if (retryMessage is null)
+                {
+                    return;
+                }
 
-            nextMessage = ReminderPrompt;
+                nextMessage = retryMessage;
+            }
+            else
+            {
+                nextMessage = ReminderPrompt;
+            }
         }
 
         context.Set(Summary, string.Empty);
-        context.Set(Reason, "Nombre maximal de relances atteint sans appel à l'outil de fin de tâche (boucle évitée).");
+        context.Set(Reason, "Nombre maximal de relances atteint sans confirmation finale validée (boucle évitée).");
         await context.CompleteActivityWithOutcomesAsync(["Blocked"]);
     }
 
@@ -112,26 +128,38 @@ public sealed class RunAgentPrompt : CodeActivity
         return null;
     }
 
-    private async ValueTask CompleteWithFinishAsync(ActivityExecutionContext context, FinishCall finish)
+    /// <summary>
+    /// Traite l'appel à <see cref="FinishTool"/>. Retourne <c>null</c> si l'activité s'est
+    /// terminée (issue posée via <see cref="ActivityExecutionContext.CompleteActivityWithOutcomesAsync"/>),
+    /// ou un message à renvoyer à l'agent si la vérification du travail (issue "Done") a échoué
+    /// et que la boucle doit continuer — cf. ADR 0020.
+    /// </summary>
+    private async ValueTask<string?> TryCompleteAsync(ActivityExecutionContext context, FinishCall finish)
     {
         context.Set(Summary, finish.Summary);
 
         switch (finish.Outcome)
         {
             case AgentTaskOutcome.Done:
-                await context.CompleteActivityWithOutcomesAsync(["Done"]);
-                break;
+                var verification = await _workVerificationService.VerifyAsync(context.CancellationToken);
+                if (verification.Success)
+                {
+                    await context.CompleteActivityWithOutcomesAsync(["Done"]);
+                    return null;
+                }
+
+                return VerificationFailedPrompt + verification.Output;
 
             case AgentTaskOutcome.NeedsMoreInfo:
                 context.Set(Reason, finish.Reason);
                 context.Set(Questions, finish.Questions);
                 await context.CompleteActivityWithOutcomesAsync(["NeedsMoreInfo"]);
-                break;
+                return null;
 
             case AgentTaskOutcome.Blocked:
                 context.Set(Reason, finish.Reason);
                 await context.CompleteActivityWithOutcomesAsync(["Blocked"]);
-                break;
+                return null;
 
             default:
                 throw new ArgumentOutOfRangeException(nameof(finish), finish.Outcome, "Outcome inattendu.");
