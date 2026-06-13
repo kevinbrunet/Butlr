@@ -5,13 +5,13 @@ using System.Text;
 namespace Alveus.Web.Tools;
 
 /// <summary>
-/// Tool agent : consultation et édition de fichiers/répertoires, restreint à <c>workspaceRoot</c>
+/// Tool agent : consultation et édition de fichiers, restreint à <c>workspaceRoot</c>
 /// (cf. ADR 0017). Toute opération sur un chemin résolu hors de ce répertoire est refusée.
+/// Volontairement centré sur les fichiers — lister un répertoire relève de l'outil
+/// d'exécution de commandes (<c>ls</c>), pour éviter le chevauchement entre les deux outils.
 /// </summary>
 public sealed class StrReplaceEditorTool
 {
-    private const int ViewDirectoryDepth = 2;
-
     private readonly string _workspaceRoot;
 
     // Historique d'édition par fichier, pour undo_edit. `null` = le fichier n'existait pas
@@ -24,10 +24,10 @@ public sealed class StrReplaceEditorTool
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
     }
 
-    [Description("Consulte ou édite des fichiers/répertoires dans le workspace de l'agent. Commandes : 'view' (cat -n sur un fichier, listing sur 2 niveaux pour un répertoire), 'create' (crée un fichier, échoue s'il existe déjà), 'str_replace' (remplace old_str par new_str, old_str doit être unique dans le fichier), 'insert' (insère new_str après la ligne insert_line), 'undo_edit' (annule le dernier edit sur path).")]
+    [Description("Consulte ou édite des FICHIERS (pas des répertoires) dans le workspace de l'agent. Ce n'est PAS un shell : 'command' doit être l'une de view, create, str_replace, insert, undo_edit — jamais une commande shell comme 'ls' ou 'cat' (pour ça, ou pour lister un répertoire, utilise l'outil d'exécution de commandes). Commandes : 'view' (cat -n sur un fichier), 'create' (crée un fichier, échoue s'il existe déjà), 'str_replace' (remplace old_str par new_str, old_str doit être unique dans le fichier), 'insert' (insère new_str après la ligne insert_line), 'undo_edit' (annule le dernier edit sur path).")]
     public string Execute(
         [Description("Commande : view, create, str_replace, insert, undo_edit.")] string command,
-        [Description("Chemin du fichier ou répertoire. Doit être relatif à la racine du workspace (ex. 'agent-edit.txt', pas '/workspace/agent-edit.txt') ; un chemin absolu hors du workspace est refusé.")] string path,
+        [Description("Chemin du fichier (pas d'un répertoire). Doit être relatif à la racine du workspace (ex. 'agent-edit.txt', pas '/workspace/agent-edit.txt') ; un chemin absolu hors du workspace est refusé.")] string path,
         [Description("Chaîne à rechercher (str_replace). Doit apparaître exactement une fois dans le fichier.")] string? old_str = null,
         [Description("Chaîne de remplacement (str_replace) ou contenu à insérer (insert).")] string? new_str = null,
         [Description("Contenu initial du fichier à créer (create).")] string? file_text = null,
@@ -45,7 +45,11 @@ public sealed class StrReplaceEditorTool
             "str_replace" => StrReplace(resolvedPath, old_str, new_str),
             "insert" => Insert(resolvedPath, insert_line, new_str),
             "undo_edit" => UndoEdit(resolvedPath),
-            _ => throw new ArgumentException($"Commande inconnue : '{command}'. Attendu : view, create, str_replace, insert, undo_edit.", nameof(command)),
+            _ => throw new ArgumentException(
+                $"Commande inconnue : '{command}'. Cet outil n'est pas un shell — attendu : view, create, str_replace, "
+                + "insert, undo_edit. Pour lister un répertoire, utilise 'view' avec ce path. Pour exécuter une "
+                + "commande shell, utilise l'outil d'exécution de commandes.",
+                nameof(command)),
         };
     }
 
@@ -69,19 +73,16 @@ public sealed class StrReplaceEditorTool
     {
         if (Directory.Exists(path))
         {
-            return ViewDirectory(path);
+            throw new InvalidOperationException(
+                $"'{path}' est un répertoire — cet outil ne gère que des fichiers. Utilise l'outil "
+                + "d'exécution de commandes (ex. 'ls') pour lister un répertoire.");
         }
 
-        if (File.Exists(path))
+        if (!File.Exists(path))
         {
-            return ViewFile(path);
+            throw new FileNotFoundException($"Fichier introuvable : '{path}'.");
         }
 
-        throw new FileNotFoundException($"Chemin introuvable : '{path}'.");
-    }
-
-    private static string ViewFile(string path)
-    {
         var lines = File.ReadAllLines(path);
         var sb = new StringBuilder();
         for (var i = 0; i < lines.Length; i++)
@@ -90,31 +91,6 @@ public sealed class StrReplaceEditorTool
         }
 
         return sb.ToString();
-    }
-
-    private static string ViewDirectory(string path)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine($"{path}/");
-        AppendDirectoryEntries(sb, path, depth: ViewDirectoryDepth, indent: "  ");
-        return sb.ToString();
-    }
-
-    private static void AppendDirectoryEntries(StringBuilder sb, string path, int depth, string indent)
-    {
-        foreach (var dir in Directory.EnumerateDirectories(path).OrderBy(d => d, StringComparer.Ordinal))
-        {
-            sb.AppendLine($"{indent}{Path.GetFileName(dir)}/");
-            if (depth > 1)
-            {
-                AppendDirectoryEntries(sb, dir, depth - 1, indent + "  ");
-            }
-        }
-
-        foreach (var file in Directory.EnumerateFiles(path).OrderBy(f => f, StringComparer.Ordinal))
-        {
-            sb.AppendLine($"{indent}{Path.GetFileName(file)}");
-        }
     }
 
     private string Create(string path, string? fileText)

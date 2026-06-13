@@ -51,18 +51,14 @@ public sealed class StrReplaceEditorToolTests : IDisposable
     }
 
     [Fact]
-    public void Execute_ViewDirectory_ListsTwoLevelsDeep()
+    public void Execute_ViewDirectory_ThrowsAndRedirectsToCmdRunTool()
     {
-        Directory.CreateDirectory(FullPath("sub/nested"));
-        _tool.Execute("create", "sub/file.txt", file_text: "x");
-        _tool.Execute("create", "sub/nested/deep.txt", file_text: "y");
+        Directory.CreateDirectory(FullPath("sub"));
 
-        var result = _tool.Execute("view", ".");
+        var ex = Assert.Throws<InvalidOperationException>(() => _tool.Execute("view", "sub"));
 
-        Assert.Contains("sub/", result);
-        Assert.Contains("file.txt", result);
-        Assert.Contains("nested/", result);
-        Assert.DoesNotContain("deep.txt", result);
+        Assert.Contains("répertoire", ex.Message);
+        Assert.Contains("ls", ex.Message);
     }
 
     [Fact]

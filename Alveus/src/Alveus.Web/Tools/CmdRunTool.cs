@@ -39,7 +39,7 @@ public sealed class CmdRunTool : IDisposable
         _shell.StandardInput.WriteLine("exec 2>&1");
     }
 
-    [Description("Exécute une commande dans un shell bash persistant (état conservé entre les appels : cwd, variables, etc.) et renvoie sa sortie (stdout+stderr) et son code de retour.")]
+    [Description("Exécute une commande dans un shell bash persistant (état conservé entre les appels : cwd, variables, etc.) et renvoie sa sortie (stdout+stderr) et son code de retour. Pour consulter ou modifier un fichier précis (lire, créer, remplacer du texte), préfère l'outil d'édition de fichiers — plus fiable que cat/sed/echo.")]
     public async Task<string> RunAsync(
         [Description("Commande shell à exécuter.")] string command,
         CancellationToken cancellationToken = default)

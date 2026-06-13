@@ -86,6 +86,27 @@ public sealed class AgentToolsIntegrationTests : IClassFixture<AgentFixture>
     }
 
     [Fact]
+    public async Task Agent_ListsWorkspaceFiles_EventuallyUsesCorrectTool()
+    {
+        if (SkipIfLlamaCppUnavailable())
+        {
+            return;
+        }
+
+        const string fileName = "agent-list-me.txt";
+        File.WriteAllText(Path.Combine(_fixture.WorkspaceRoot, fileName), "contenu");
+
+        var response = await _fixture.Agent.RunAsync(
+            "Liste les fichiers présents dans le répertoire de travail, sans rien modifier.");
+
+        // ~ Avec un modèle 35B, un premier appel maladroit (ex. StrReplaceEditorTool avec
+        // command='ls') est toléré : FunctionInvokingChatClient renvoie l'erreur au modèle, qui
+        // se corrige. Ce test vérifie le résultat final — la distinction entre les deux outils,
+        // pas l'absence de toute hésitation initiale.
+        Assert.Contains(fileName, response.Text);
+    }
+
+    [Fact]
     public async Task Agent_CallsFinishTool_WithDoneOutcome_WhenTaskIsTrivial()
     {
         if (SkipIfLlamaCppUnavailable())
