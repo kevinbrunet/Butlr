@@ -1,0 +1,4 @@
+# Workspace de l'agent (CmdRunTool / StrReplaceEditorTool, cf. ADR 0017) — contenu généré, pas versionné.
+*
+!.gitignore
+!.gitkeep

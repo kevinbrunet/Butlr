@@ -4,3 +4,12 @@ GET {{Alveus.Web_HostAddress}}/weatherforecast/
 Accept: application/json
 
 ###
+
+POST {{Alveus.Web_HostAddress}}/agent/chat
+Content-Type: application/json
+
+{
+  "message": "Allume la lumière du salon"
+}
+
+###

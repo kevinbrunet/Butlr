@@ -1,5 +1,10 @@
+using System.ClientModel;
+using Alveus.Web.Tools;
 using Elsa.Extensions;
 using FastEndpoints;
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
+using OpenAI;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -27,10 +32,46 @@ builder.Services.AddElsa(elsa =>
 builder.Services.AddFastEndpoints();
 builder.Services.AddAuthorization();
 
-// TODO(Phase Alveus): câbler Microsoft.Agents.AI avec un IChatClient.
-// Pas de provider configuré ici — voir CLAUDE.md (pas de dépendance cloud sans ADR).
-// Si l'agent doit parler à llama.cpp (endpoint OpenAI-compatible local), ajouter
-// Microsoft.Extensions.AI.OpenAI et pointer le client sur l'URL locale via config.
+// Agent IA branché sur llama.cpp server (endpoint OpenAI-compatible local, cf. ADR 0006).
+var llamaCppEndpoint = builder.Configuration["LlamaCpp:Endpoint"]
+    ?? throw new InvalidOperationException("Configuration manquante : LlamaCpp:Endpoint");
+var llamaCppModel = builder.Configuration["LlamaCpp:Model"]
+    ?? throw new InvalidOperationException("Configuration manquante : LlamaCpp:Model");
+
+// llama.cpp n'exige pas de clé API mais le SDK OpenAI en réclame une non vide.
+var openAiClient = new OpenAIClient(new ApiKeyCredential("not-needed"), new OpenAIClientOptions
+{
+    Endpoint = new Uri(llamaCppEndpoint),
+});
+
+IChatClient chatClient = openAiClient.GetChatClient(llamaCppModel).AsIChatClient();
+
+// Tools agentiques (shell + édition de fichiers), restreints à un workspace dédié — cf. ADR 0017.
+var workspaceRootSetting = builder.Configuration["Agent:WorkspaceRoot"]
+    ?? throw new InvalidOperationException("Configuration manquante : Agent:WorkspaceRoot");
+var workspaceRoot = Path.GetFullPath(workspaceRootSetting, builder.Environment.ContentRootPath);
+Directory.CreateDirectory(workspaceRoot);
+
+builder.Services.AddSingleton(_ => new CmdRunTool(workspaceRoot));
+builder.Services.AddSingleton(_ => new StrReplaceEditorTool(workspaceRoot));
+
+builder.Services.AddSingleton<AIAgent>(sp =>
+{
+    var cmdRunTool = sp.GetRequiredService<CmdRunTool>();
+    var editorTool = sp.GetRequiredService<StrReplaceEditorTool>();
+
+    var tools = new List<AITool>
+    {
+        AIFunctionFactory.Create(cmdRunTool.RunAsync),
+        AIFunctionFactory.Create(editorTool.Execute),
+    };
+
+    return new ChatClientAgent(
+        chatClient,
+        instructions: "Tu es Butlr, le majordome domotique de Kevin. Réponds de façon concise.",
+        name: "Butlr",
+        tools: tools);
+});
 
 var app = builder.Build();
 
@@ -53,6 +94,13 @@ var summaries = new[]
     "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
 };
 
+app.MapPost("/agent/chat", async (AgentChatRequest request, AIAgent agent, CancellationToken cancellationToken) =>
+{
+    var response = await agent.RunAsync(request.Message, cancellationToken: cancellationToken);
+    return new AgentChatResponse(response.Text);
+})
+.WithName("AgentChat");
+
 app.MapGet("/weatherforecast", () =>
 {
     var forecast =  Enumerable.Range(1, 5).Select(index =>
@@ -73,3 +121,7 @@ record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
 {
     public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
 }
+
+record AgentChatRequest(string Message);
+
+record AgentChatResponse(string Reply);
