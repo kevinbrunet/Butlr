@@ -22,6 +22,8 @@ public sealed class AgentFixture : IAsyncLifetime
 
     public StrReplaceEditorTool EditorTool { get; }
 
+    public FinishTool FinishTool { get; }
+
     public AIAgent Agent { get; }
 
     public bool IsLlamaCppAvailable { get; private set; }
@@ -34,6 +36,7 @@ public sealed class AgentFixture : IAsyncLifetime
     {
         CmdRunTool = new CmdRunTool(WorkspaceRoot);
         EditorTool = new StrReplaceEditorTool(WorkspaceRoot);
+        FinishTool = new FinishTool();
 
         var openAiClient = new OpenAIClient(new ApiKeyCredential("not-needed"), new OpenAIClientOptions
         {
@@ -46,11 +49,14 @@ public sealed class AgentFixture : IAsyncLifetime
         {
             AIFunctionFactory.Create(CmdRunTool.RunAsync),
             AIFunctionFactory.Create(EditorTool.Execute),
+            AIFunctionFactory.Create(FinishTool.Finish),
         };
 
         Agent = new ChatClientAgent(
             chatClient,
-            instructions: "Tu es Alveus-Worker, l'agent d'exécution technique de Butlr. Réponds de façon concise.",
+            instructions: "Tu es Alveus-Worker, l'agent d'exécution technique de Butlr. Réponds de façon concise. "
+                + "Quand tu arrêtes de travailler (tâche terminée, besoin de précisions, ou bloqué), tu DOIS appeler "
+                + "l'outil Finish pour le signaler — sinon on te redemandera de le faire.",
             name: AgentName,
             tools: tools);
     }

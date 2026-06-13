@@ -1,3 +1,5 @@
+using Alveus.Web.Tools;
+using Microsoft.Extensions.AI;
 using Xunit.Abstractions;
 
 namespace Alveus.Web.Tests.Agent;
@@ -81,5 +83,28 @@ public sealed class AgentToolsIntegrationTests : IClassFixture<AgentFixture>
             $"Avec ton outil d'édition de fichiers, dans le fichier '{fileName}' remplace 'ancienne' par 'nouvelle'.");
 
         Assert.Contains("valeur=nouvelle", File.ReadAllText(Path.Combine(_fixture.WorkspaceRoot, fileName)));
+    }
+
+    [Fact]
+    public async Task Agent_CallsFinishTool_WithDoneOutcome_WhenTaskIsTrivial()
+    {
+        if (SkipIfLlamaCppUnavailable())
+        {
+            return;
+        }
+
+        var response = await _fixture.Agent.RunAsync(
+            "Cette tâche ne demande aucune action : appelle directement ton outil de fin de tâche (Finish) "
+            + "avec outcome='done' et un résumé indiquant qu'il n'y avait rien à faire.");
+
+        var finishCall = response.Messages
+            .SelectMany(m => m.Contents)
+            .OfType<FunctionCallContent>()
+            .Where(c => c.Name == FinishTool.FunctionName)
+            .Select(c => FinishCall.FromArguments(c.Arguments))
+            .FirstOrDefault(f => f is not null);
+
+        Assert.NotNull(finishCall);
+        Assert.Equal(AgentTaskOutcome.Done, finishCall!.Outcome);
     }
 }

@@ -1,5 +1,6 @@
 using System.ClientModel;
 using Alveus.Web.Activities;
+using Alveus.Web.Agents;
 using Alveus.Web.Tools;
 using Elsa.Extensions;
 using FastEndpoints;
@@ -55,6 +56,10 @@ Directory.CreateDirectory(workspaceRoot);
 
 builder.Services.AddSingleton(_ => new CmdRunTool(workspaceRoot));
 builder.Services.AddSingleton(_ => new StrReplaceEditorTool(workspaceRoot));
+builder.Services.AddSingleton<FinishTool>();
+
+// Stratégie de compactage de session injectée dans RunAgentPrompt — cf. ADR 0019.
+builder.Services.AddSingleton<IAgentSessionCompactionService, SummarizingAgentSessionCompactionService>();
 
 // Nom de l'agent : sert à la fois de Name pour le ChatClientAgent et de clé
 // d'enregistrement DI, pour que RunAgentPrompt puisse cibler l'agent par son nom.
@@ -65,16 +70,20 @@ builder.Services.AddKeyedSingleton<AIAgent>(agentName, (sp, _) =>
 {
     var cmdRunTool = sp.GetRequiredService<CmdRunTool>();
     var editorTool = sp.GetRequiredService<StrReplaceEditorTool>();
+    var finishTool = sp.GetRequiredService<FinishTool>();
 
     var tools = new List<AITool>
     {
         AIFunctionFactory.Create(cmdRunTool.RunAsync),
         AIFunctionFactory.Create(editorTool.Execute),
+        AIFunctionFactory.Create(finishTool.Finish),
     };
 
     return new ChatClientAgent(
         chatClient,
-        instructions: "Tu es Alveus-Worker, l'agent d'exécution technique de Butlr. Réponds de façon concise.",
+        instructions: "Tu es Alveus-Worker, l'agent d'exécution technique de Butlr. Réponds de façon concise. "
+            + "Quand tu arrêtes de travailler (tâche terminée, besoin de précisions, ou bloqué), tu DOIS appeler "
+            + "l'outil Finish pour le signaler — sinon on te redemandera de le faire.",
         name: agentName,
         tools: tools);
 });
