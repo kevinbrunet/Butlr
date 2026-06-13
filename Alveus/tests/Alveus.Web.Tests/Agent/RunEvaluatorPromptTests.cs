@@ -26,7 +26,7 @@ public sealed class RunEvaluatorPromptTests : IClassFixture<RunEvaluatorPromptFi
     }
 
     [Fact]
-    public async Task RunEvaluatorPrompt_GivenTaskPrompt_WritesTestSuiteAndCompletesAsDone()
+    public async Task RunEvaluatorPrompt_GivenTaskPrompt_WritesTestSuiteAndCompletesWithVerdict()
     {
         if (!_fixture.IsLlamaCppAvailable)
         {
@@ -43,7 +43,7 @@ public sealed class RunEvaluatorPromptTests : IClassFixture<RunEvaluatorPromptFi
             + "contenant exactement le texte 'hello'.\". Avec ton outil d'édition de fichiers, crée dans ton "
             + "espace de travail un fichier nommé 'test_hello.sh' contenant un script de test qui vérifierait "
             + "qu'un travail répondant à cette consigne est correct, puis appelle l'outil de fin de tâche "
-            + "(Finish) avec outcome='done'.");
+            + "(Finish) avec outcome='done' et verdict='pass'.");
 
         var runner = _fixture.Services.GetRequiredService<IWorkflowRunner>();
         var result = await runner.RunAsync(activity, new RunWorkflowOptions(), CancellationToken.None);
@@ -53,8 +53,69 @@ public sealed class RunEvaluatorPromptTests : IClassFixture<RunEvaluatorPromptFi
 
         var outputRegister = result.WorkflowExecutionContext.GetActivityOutputRegister();
         var summary = outputRegister.FindOutputByActivityId(activityId, nameof(RunEvaluatorPrompt.Summary)) as string;
+        var reason = outputRegister.FindOutputByActivityId(activityId, nameof(RunEvaluatorPrompt.Reason)) as string;
         Assert.False(string.IsNullOrWhiteSpace(summary));
+        Assert.Null(reason);
 
         _output.WriteLine($"Statut workflow : {result.WorkflowState.Status}, fichiers écrits : {string.Join(", ", writtenFiles.Select(Path.GetFileName))}, résumé : {summary}");
+    }
+
+    [Fact]
+    public async Task RunEvaluatorPrompt_VerdictFail_ReportsReason()
+    {
+        if (!_fixture.IsLlamaCppAvailable)
+        {
+            _output.WriteLine("llama.cpp indisponible sur ALVEUS_TEST_LLAMACPP_ENDPOINT — test ignoré.");
+            return;
+        }
+
+        const string activityId = "run-evaluator-prompt-fail";
+
+        var activity = ActivatorUtilities.CreateInstance<RunEvaluatorPrompt>(_fixture.Services);
+        activity.Id = activityId;
+        activity.Prompt = new Input<string>(
+            "Appelle directement ton outil de fin de tâche (Finish) avec outcome='done', verdict='fail' et "
+            + "reason='le fichier hello.txt ne contient pas le texte attendu (rapport fictif)'.");
+
+        var runner = _fixture.Services.GetRequiredService<IWorkflowRunner>();
+        var result = await runner.RunAsync(activity, new RunWorkflowOptions(), CancellationToken.None);
+
+        var outputRegister = result.WorkflowExecutionContext.GetActivityOutputRegister();
+        var reason = outputRegister.FindOutputByActivityId(activityId, nameof(RunEvaluatorPrompt.Reason)) as string;
+        Assert.False(string.IsNullOrWhiteSpace(reason));
+
+        _output.WriteLine($"Statut workflow : {result.WorkflowState.Status}, raison : {reason}");
+    }
+
+    [Fact]
+    public async Task RunEvaluatorPrompt_VerdictNeedMoreInfo_ReportsReasonAndQuestions()
+    {
+        if (!_fixture.IsLlamaCppAvailable)
+        {
+            _output.WriteLine("llama.cpp indisponible sur ALVEUS_TEST_LLAMACPP_ENDPOINT — test ignoré.");
+            return;
+        }
+
+        const string activityId = "run-evaluator-prompt-needmoreinfo";
+
+        var activity = ActivatorUtilities.CreateInstance<RunEvaluatorPrompt>(_fixture.Services);
+        activity.Id = activityId;
+        activity.Prompt = new Input<string>(
+            "Appelle directement ton outil de fin de tâche (Finish) avec outcome='done', verdict='needmoreinfo', "
+            + "reason='les instructions d'utilisation de l'environnement ne précisent pas l'URL à tester' et "
+            + "questions=['Quelle est l'URL du serveur ?'].");
+
+        var runner = _fixture.Services.GetRequiredService<IWorkflowRunner>();
+        var result = await runner.RunAsync(activity, new RunWorkflowOptions(), CancellationToken.None);
+
+        var outputRegister = result.WorkflowExecutionContext.GetActivityOutputRegister();
+        var reason = outputRegister.FindOutputByActivityId(activityId, nameof(RunEvaluatorPrompt.Reason)) as string;
+        var questions = outputRegister.FindOutputByActivityId(activityId, nameof(RunEvaluatorPrompt.Questions)) as IReadOnlyList<string>;
+
+        Assert.False(string.IsNullOrWhiteSpace(reason));
+        Assert.NotNull(questions);
+        Assert.NotEmpty(questions!);
+
+        _output.WriteLine($"Statut workflow : {result.WorkflowState.Status}, raison : {reason}, questions : {string.Join(" | ", questions!)}");
     }
 }

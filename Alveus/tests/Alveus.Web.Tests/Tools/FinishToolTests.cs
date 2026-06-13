@@ -42,4 +42,23 @@ public sealed class FinishToolTests
 
         Assert.NotEmpty(result);
     }
+
+    [Theory]
+    [InlineData("pass")]
+    [InlineData("fail")]
+    [InlineData("needmoreinfo")]
+    [InlineData("Pass")]
+    [InlineData("NEEDMOREINFO")]
+    public void Finish_ValidVerdict_ReturnsConfirmation(string verdict)
+    {
+        var result = _tool.Finish("résumé", "done", verdict: verdict);
+
+        Assert.NotEmpty(result);
+    }
+
+    [Fact]
+    public void Finish_UnknownVerdict_Throws()
+    {
+        Assert.Throws<ArgumentException>(() => _tool.Finish("résumé", "done", verdict: "frobnicate"));
+    }
 }

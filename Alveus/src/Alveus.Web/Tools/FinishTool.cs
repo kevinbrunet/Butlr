@@ -21,7 +21,11 @@ public sealed class FinishTool
         [Description("Résumé de ce qui a été fait, ou de la situation actuelle si la tâche n'est pas terminée.")] string summary,
         [Description("Résultat : 'done', 'needsmoreinfo' ou 'blocked'.")] string outcome,
         [Description("Pour 'needsmoreinfo' ou 'blocked' : explique précisément le point de blocage.")] string? reason = null,
-        [Description("Pour 'needsmoreinfo' : questions précises à poser pour pouvoir continuer.")] IList<string>? questions = null)
+        [Description("Pour 'needsmoreinfo' : questions précises à poser pour pouvoir continuer.")] IList<string>? questions = null,
+        [Description("Uniquement si tu es l'agent EnvironmentManager ou Evaluator : ton jugement sur le résultat que "
+            + "tu viens de vérifier. 'pass' s'il est correct, 'fail' sinon (donne reason), 'needmoreinfo' si tu ne "
+            + "peux pas trancher sans information supplémentaire (donne reason et questions). Sans objet pour "
+            + "Alveus-Worker.")] string? verdict = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(summary);
         ArgumentException.ThrowIfNullOrWhiteSpace(outcome);
@@ -29,6 +33,11 @@ public sealed class FinishTool
         if (!Enum.TryParse<AgentTaskOutcome>(outcome, ignoreCase: true, out _))
         {
             throw new ArgumentException($"outcome inconnu : '{outcome}'. Attendu : done, needsmoreinfo ou blocked.", nameof(outcome));
+        }
+
+        if (verdict is not null && !Enum.TryParse<AgentVerdict>(verdict, ignoreCase: true, out _))
+        {
+            throw new ArgumentException($"verdict inconnu : '{verdict}'. Attendu : pass, fail ou needmoreinfo.", nameof(verdict));
         }
 
         return "Issue enregistrée.";

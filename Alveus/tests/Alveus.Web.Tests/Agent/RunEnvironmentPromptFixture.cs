@@ -1,0 +1,112 @@
+using System.ClientModel;
+using Alveus.Web.Activities;
+using Alveus.Web.Agents;
+using Alveus.Web.Tools;
+using Elsa.Extensions;
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
+using OpenAI;
+
+namespace Alveus.Web.Tests.Agent;
+
+/// <summary>
+/// Construit un conteneur DI minimal (Elsa workflow management + runtime, agent
+/// Alveus-EnvironmentManager) permettant d'exécuter <see cref="RunEnvironmentPrompt"/> via
+/// <see cref="Elsa.Workflows.IWorkflowRunner"/> — cf. ADR 0023. Contrairement à
+/// <see cref="EvaluatorFixture"/>, l'EnvironmentManager partage le même workspace et les mêmes
+/// outils que le Worker (pas d'isolation).
+/// </summary>
+public sealed class RunEnvironmentPromptFixture : IAsyncLifetime
+{
+    private const string AgentName = "AlveusEnvironmentManager";
+
+    public string WorkspaceRoot { get; } = Directory.CreateTempSubdirectory("alveus-workflow-envmanager-tests-").FullName;
+
+    public IServiceProvider Services { get; }
+
+    public bool IsLlamaCppAvailable { get; private set; }
+
+    private static Uri Endpoint => new(Environment.GetEnvironmentVariable("ALVEUS_TEST_LLAMACPP_ENDPOINT") ?? "http://127.0.0.1:8083/v1");
+
+    private static string Model => Environment.GetEnvironmentVariable("ALVEUS_TEST_LLAMACPP_MODEL") ?? "qwen2.5-7b-instruct";
+
+    public RunEnvironmentPromptFixture()
+    {
+        var services = new ServiceCollection();
+
+        services.AddElsa(elsa =>
+        {
+            elsa.UseWorkflowManagement(management => management.AddActivity<RunEnvironmentPrompt>());
+            elsa.UseWorkflowRuntime();
+        });
+
+        var openAiClient = new OpenAIClient(new ApiKeyCredential("not-needed"), new OpenAIClientOptions
+        {
+            Endpoint = Endpoint,
+        });
+
+        IChatClient chatClient = openAiClient.GetChatClient(Model).AsIChatClient();
+
+        services.AddSingleton(_ => new CmdRunTool(WorkspaceRoot));
+        services.AddSingleton(_ => new StrReplaceEditorTool(WorkspaceRoot));
+        services.AddSingleton<FinishTool>();
+        services.AddSingleton<IAgentSessionCompactionService, SummarizingAgentSessionCompactionService>();
+
+        services.AddKeyedSingleton<AIAgent>(AgentName, (sp, _) =>
+        {
+            var cmdRunTool = sp.GetRequiredService<CmdRunTool>();
+            var editorTool = sp.GetRequiredService<StrReplaceEditorTool>();
+            var finishTool = sp.GetRequiredService<FinishTool>();
+
+            var tools = new List<AITool>
+            {
+                AIFunctionFactory.Create(cmdRunTool.RunAsync),
+                AIFunctionFactory.Create(editorTool.Execute),
+                AIFunctionFactory.Create(finishTool.Finish),
+            };
+
+            return new ChatClientAgent(
+                chatClient,
+                instructions: "Tu es Alveus-EnvironmentManager, l'agent de gestion d'environnement de Butlr. Tu "
+                    + "interviens après que l'agent d'exécution (Alveus-Worker) a terminé sa tâche, dans le même "
+                    + "espace de travail et avec les mêmes outils que lui. Ton rôle : lancer ou relancer "
+                    + "l'environnement local décrit par la consigne pour qu'il soit utilisable par un autre agent. "
+                    + "Ton outil shell a un timeout de 30 secondes : lance les processus longue durée en arrière-plan "
+                    + "(ex. 'nohup <commande> > /tmp/env.log 2>&1 & disown') plutôt qu'au premier plan. Quand tu "
+                    + "arrêtes de travailler, appelle l'outil Finish avec outcome='done' et : verdict='pass' si "
+                    + "l'environnement est démarré — résume alors dans summary des instructions d'utilisation "
+                    + "précises (URL, ports, exemples de requêtes ou de commandes) destinées à un autre agent qui "
+                    + "n'a pas accès à ce système de fichiers ; verdict='fail' si le démarrage échoue (reason=détail "
+                    + "de l'échec) ; verdict='needmoreinfo' si la consigne ne précise pas comment démarrer "
+                    + "l'environnement (reason et questions).",
+                name: AgentName,
+                tools: tools);
+        });
+
+        Services = services.BuildServiceProvider();
+    }
+
+    public async Task InitializeAsync()
+    {
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+        try
+        {
+            // ~ llama.cpp expose /v1/models (API OpenAI-compatible) — utilisé ici uniquement
+            // comme sonde de disponibilité, pas pour vérifier le contenu de la réponse.
+            using var response = await client.GetAsync(new Uri($"{Endpoint.ToString().TrimEnd('/')}/models"));
+            IsLlamaCppAvailable = response.IsSuccessStatusCode;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            IsLlamaCppAvailable = false;
+        }
+    }
+
+    public Task DisposeAsync()
+    {
+        Services.GetRequiredService<CmdRunTool>().Dispose();
+        Directory.Delete(WorkspaceRoot, recursive: true);
+        return Task.CompletedTask;
+    }
+}

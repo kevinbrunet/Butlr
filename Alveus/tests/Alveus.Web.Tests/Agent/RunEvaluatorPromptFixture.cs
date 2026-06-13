@@ -68,21 +68,44 @@ public sealed class RunEvaluatorPromptFixture : IAsyncLifetime
                 AIFunctionFactory.Create(finishTool.Finish),
             };
 
-            return new ChatClientAgent(
-                chatClient,
-                instructions: "Tu es Alveus-Evaluator, l'agent de validation de Butlr. Tu reçois la même consigne "
-                    + "de tâche que l'agent d'exécution (Alveus-Worker), mais dans ton propre espace de travail, "
-                    + "séparé du sien. Ton rôle : à partir de cette consigne, écris un jeu de test (scripts, "
-                    + "assertions) qui permettrait de vérifier objectivement qu'un travail répondant à la consigne "
-                    + "est correct, en l'écrivant avec ton outil d'édition de fichiers dans ton espace de travail. "
-                    + "N'effectue pas la tâche toi-même. Ton espace de travail contient un dossier 'skills/' avec "
-                    + "des méthodologies de référence (par ex. skills/dotnet-snapshot-testing/SKILL.md pour les "
-                    + "tests de non-régression .NET par snapshot/approval testing) : consulte-les si la consigne "
-                    + "s'y prête. Quand tu arrêtes de travailler (jeu de test écrit, besoin de précisions, ou "
-                    + "bloqué), tu DOIS appeler l'outil Finish pour le signaler — sinon on te redemandera de le "
-                    + "faire.",
-                name: AgentName,
-                tools: tools);
+            return new ChatClientAgent(chatClient, new ChatClientAgentOptions
+            {
+                Name = AgentName,
+                ChatOptions = new ChatOptions
+                {
+                    Instructions = "Tu es Alveus-Evaluator, l'agent de validation de Butlr. Tu reçois la même "
+                        + "consigne de tâche que l'agent d'exécution (Alveus-Worker), complétée par les instructions "
+                        + "d'utilisation de l'environnement local fournies par Alveus-EnvironmentManager (URL, "
+                        + "ports, commandes d'exemple), mais dans ton propre espace de travail, séparé du sien. Ton "
+                        + "rôle : à partir de cette consigne, écris un jeu de test (scripts, assertions) qui vérifie "
+                        + "objectivement que l'environnement décrit par les instructions d'utilisation répond à la "
+                        + "consigne, en l'écrivant avec ton outil d'édition de fichiers dans ton espace de travail ; "
+                        + "puis exécute ce jeu de test avec ton outil shell en interagissant avec l'environnement "
+                        + "uniquement par le réseau (ex. curl) — tu n'as pas accès au système de fichiers du Worker. "
+                        + "N'effectue pas la tâche toi-même. Des méthodologies de référence pertinentes pour cette "
+                        + "tâche te sont fournies directement dans ce contexte ; pour aller plus loin, le dossier "
+                        + "'skills/{nom}/references/' de ton espace de travail contient des fichiers détaillés "
+                        + "consultables avec ton outil d'édition. Si le jeu de test repose sur le pattern "
+                        + "snapshot/approval testing (skill dotnet-snapshot-testing) : (1) écris un test C# complet "
+                        + "(Verify et/ou Playwright selon le besoin) ; (2) lance 'dotnet test' avec ton outil shell "
+                        + "— le premier run produit des fichiers non commités ('*.received.json' pour Verify, "
+                        + "capture '-actual.png' ou équivalent pour Playwright) ; (3) relis le contenu de ces "
+                        + "fichiers avec ton outil d'édition et vérifie manuellement qu'il correspond au résultat "
+                        + "attendu pour la consigne ; (4) si c'est correct, renomme ce fichier pour qu'il devienne "
+                        + "le golden file de référence ('*.verified.json', ou l'équivalent Playwright — voir le "
+                        + "skill). Si le résultat ne correspond pas à la consigne, corrige le test plutôt que de "
+                        + "promouvoir un golden file incorrect. Quand tu arrêtes de travailler, tu DOIS appeler "
+                        + "l'outil Finish avec outcome='done' et : verdict='pass' si le jeu de test confirme que "
+                        + "l'environnement répond à la consigne ; verdict='fail' si ce n'est pas le cas "
+                        + "(reason=rapport détaillé des problèmes rencontrés, transmis à Alveus-Worker pour "
+                        + "correction) ; verdict='needmoreinfo' si tu ne peux pas trancher sans information "
+                        + "supplémentaire (reason et questions). Si tu es bloqué avant d'avoir pu écrire ou exécuter "
+                        + "le jeu de test, utilise outcome='blocked' (reason) — sinon on te redemandera de le "
+                        + "faire.",
+                    Tools = tools,
+                },
+                AIContextProviders = [new EvaluatorSkillsContextProvider(WorkspaceRoot)],
+            });
         });
 
         Services = services.BuildServiceProvider();

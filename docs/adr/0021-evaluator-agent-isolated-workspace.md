@@ -50,3 +50,9 @@ Les deux agents partagent les mêmes classes d'outils `CmdRunTool`/`StrReplaceEd
 ## Révisions
 
 - 2026-06-13 — création.
+- 2026-06-13 — §3 (exposition des skills à l'Evaluator via une mention dans les instructions
+  statiques) complété par [ADR 0022](0022-evaluator-skill-injection-via-ai-context-provider.md) :
+  le contenu des `SKILL.md` est désormais injecté à chaque invocation via
+  `AIContextProvider`/`ChatClientAgentOptions.AIContextProviders`, en plus de la copie sur disque
+  (`EvaluatorSkills.CopyInto`, inchangée). L'isolation des workspaces (§2) et l'extraction de
+  `AgentPromptActivityBase` (§1) restent inchangées.

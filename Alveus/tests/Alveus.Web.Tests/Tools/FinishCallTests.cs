@@ -103,4 +103,55 @@ public sealed class FinishCallTests
     {
         Assert.Null(FinishCall.FromArguments(null));
     }
+
+    [Theory]
+    [InlineData("pass", AgentVerdict.Pass)]
+    [InlineData("fail", AgentVerdict.Fail)]
+    [InlineData("needmoreinfo", AgentVerdict.NeedMoreInfo)]
+    [InlineData("NeedMoreInfo", AgentVerdict.NeedMoreInfo)]
+    public void FromArguments_KnownVerdict_ParsesVerdict(string verdictRaw, AgentVerdict expected)
+    {
+        var arguments = new Dictionary<string, object?>
+        {
+            ["summary"] = "Environnement démarré.",
+            ["outcome"] = "done",
+            ["verdict"] = verdictRaw,
+        };
+
+        var finish = FinishCall.FromArguments(arguments);
+
+        Assert.NotNull(finish);
+        Assert.Equal(expected, finish!.Verdict);
+    }
+
+    [Fact]
+    public void FromArguments_MissingVerdict_VerdictIsNull()
+    {
+        var arguments = new Dictionary<string, object?>
+        {
+            ["summary"] = "Fichier créé.",
+            ["outcome"] = "done",
+        };
+
+        var finish = FinishCall.FromArguments(arguments);
+
+        Assert.NotNull(finish);
+        Assert.Null(finish!.Verdict);
+    }
+
+    [Fact]
+    public void FromArguments_UnknownVerdict_VerdictIsNull()
+    {
+        var arguments = new Dictionary<string, object?>
+        {
+            ["summary"] = "Fichier créé.",
+            ["outcome"] = "done",
+            ["verdict"] = "frobnicate",
+        };
+
+        var finish = FinishCall.FromArguments(arguments);
+
+        Assert.NotNull(finish);
+        Assert.Null(finish!.Verdict);
+    }
 }

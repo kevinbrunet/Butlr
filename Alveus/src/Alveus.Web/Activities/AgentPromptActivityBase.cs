@@ -107,6 +107,40 @@ public abstract class AgentPromptActivityBase : CodeActivity
     /// </summary>
     protected abstract ValueTask<string?> HandleDoneAsync(ActivityExecutionContext context, FinishCall finish);
 
+    /// <summary>
+    /// Traite <see cref="FinishCall.Verdict"/> pour les activités EnvironmentManager et Evaluator
+    /// (cf. ADR 0023) : <see cref="AgentVerdict.Pass"/> termine avec <paramref name="passOutcome"/>,
+    /// <see cref="AgentVerdict.Fail"/> avec "Failed" (en reportant <see cref="FinishCall.Reason"/>),
+    /// <see cref="AgentVerdict.NeedMoreInfo"/> avec "NeedsMoreInfo" (en reportant
+    /// <see cref="FinishCall.Reason"/> et <see cref="FinishCall.Questions"/>). Si
+    /// <see cref="FinishCall.Verdict"/> est absent, retourne un message de relance demandant à
+    /// l'agent de le préciser.
+    /// </summary>
+    protected async ValueTask<string?> HandleVerdictAsync(ActivityExecutionContext context, FinishCall finish, string passOutcome)
+    {
+        switch (finish.Verdict)
+        {
+            case AgentVerdict.Pass:
+                context.Set(Reason, null);
+                await context.CompleteActivityWithOutcomesAsync([passOutcome]);
+                return null;
+
+            case AgentVerdict.Fail:
+                context.Set(Reason, finish.Reason);
+                await context.CompleteActivityWithOutcomesAsync(["Failed"]);
+                return null;
+
+            case AgentVerdict.NeedMoreInfo:
+                context.Set(Reason, finish.Reason);
+                context.Set(Questions, finish.Questions);
+                await context.CompleteActivityWithOutcomesAsync(["NeedsMoreInfo"]);
+                return null;
+
+            default:
+                return "Précise verdict='pass', 'fail' ou 'needmoreinfo' dans ton appel Finish.";
+        }
+    }
+
     private static FinishCall? FindFinishCall(AgentResponse response)
     {
         foreach (var message in response.Messages)
