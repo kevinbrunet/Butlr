@@ -1,4 +1,5 @@
 using System.ClientModel;
+using Alveus.Web.Activities;
 using Alveus.Web.Tools;
 using Elsa.Extensions;
 using FastEndpoints;
@@ -16,7 +17,7 @@ builder.Services.AddOpenApi();
 // UseIdentity()/UseDefaultAuthentication() : requis par UseWorkflowsApi() (pipeline d'autorisation FastEndpoints).
 builder.Services.AddElsa(elsa =>
 {
-    elsa.UseWorkflowManagement();
+    elsa.UseWorkflowManagement(management => management.AddActivity<RunAgentPrompt>());
     elsa.UseWorkflowRuntime();
     elsa.UseHttp();
     elsa.UseJavaScript();
@@ -55,7 +56,12 @@ Directory.CreateDirectory(workspaceRoot);
 builder.Services.AddSingleton(_ => new CmdRunTool(workspaceRoot));
 builder.Services.AddSingleton(_ => new StrReplaceEditorTool(workspaceRoot));
 
-builder.Services.AddSingleton<AIAgent>(sp =>
+// Nom de l'agent : sert à la fois de Name pour le ChatClientAgent et de clé
+// d'enregistrement DI, pour que RunAgentPrompt puisse cibler l'agent par son nom.
+var agentName = builder.Configuration["Agent:Name"]
+    ?? throw new InvalidOperationException("Configuration manquante : Agent:Name");
+
+builder.Services.AddKeyedSingleton<AIAgent>(agentName, (sp, _) =>
 {
     var cmdRunTool = sp.GetRequiredService<CmdRunTool>();
     var editorTool = sp.GetRequiredService<StrReplaceEditorTool>();
@@ -68,10 +74,13 @@ builder.Services.AddSingleton<AIAgent>(sp =>
 
     return new ChatClientAgent(
         chatClient,
-        instructions: "Tu es Butlr, le majordome domotique de Kevin. Réponds de façon concise.",
-        name: "Butlr",
+        instructions: "Tu es Alveus-Worker, l'agent d'exécution technique de Butlr. Réponds de façon concise.",
+        name: agentName,
         tools: tools);
 });
+
+// Enregistrement non-keyed pour les endpoints qui n'ont besoin que de l'agent par défaut.
+builder.Services.AddSingleton(sp => sp.GetRequiredKeyedService<AIAgent>(agentName));
 
 var app = builder.Build();
 

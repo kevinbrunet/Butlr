@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-L'agent `ChatClientAgent` "Butlr" introduit dans `Alveus.Web` (cf. `Program.cs`) n'avait jusqu'ici aucun `AITool`. On veut lui donner deux capacités agentiques classiques :
+L'agent `ChatClientAgent` "AlveusWorker" introduit dans `Alveus.Web` (cf. `Program.cs`) n'avait jusqu'ici aucun `AITool`. On veut lui donner deux capacités agentiques classiques :
 
 - exécuter des commandes shell et lire leur sortie ;
 - lire/lister/créer/modifier des fichiers (équivalent d'un éditeur de type `str_replace_editor`, pattern répandu dans les agents de code ~).
