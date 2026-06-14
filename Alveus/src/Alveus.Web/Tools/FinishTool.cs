@@ -25,7 +25,11 @@ public sealed class FinishTool
         [Description("Uniquement si tu es l'agent EnvironmentManager ou Evaluator : ton jugement sur le résultat que "
             + "tu viens de vérifier. 'pass' s'il est correct, 'fail' sinon (donne reason), 'needmoreinfo' si tu ne "
             + "peux pas trancher sans information supplémentaire (donne reason et questions). Sans objet pour "
-            + "Alveus-Worker.")] string? verdict = null)
+            + "Alveus-Worker.")] string? verdict = null,
+        [Description("Instructions complémentaires pour un ou plusieurs agents en aval, en plus du ticket. "
+            + "Chaque instruction précise sa cible ('worker', 'evaluator' ou 'userdoc') et son contenu. "
+            + "Pertinent uniquement pour Alveus-Technical (cibles 'worker'/'userdoc') et Alveus-Qa (cible "
+            + "'evaluator') — sans objet pour les autres agents.")] IList<DownstreamInstruction>? downstreamInstructions = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(summary);
         ArgumentException.ThrowIfNullOrWhiteSpace(outcome);
@@ -38,6 +42,19 @@ public sealed class FinishTool
         if (verdict is not null && !Enum.TryParse<AgentVerdict>(verdict, ignoreCase: true, out _))
         {
             throw new ArgumentException($"verdict inconnu : '{verdict}'. Attendu : pass, fail ou needmoreinfo.", nameof(verdict));
+        }
+
+        if (downstreamInstructions is not null)
+        {
+            foreach (var instruction in downstreamInstructions)
+            {
+                if (!Enum.TryParse<DownstreamInstructionTarget>(instruction.Target, ignoreCase: true, out _))
+                {
+                    throw new ArgumentException(
+                        $"target d'instruction inconnue : '{instruction.Target}'. Attendu : worker, evaluator ou userdoc.",
+                        nameof(downstreamInstructions));
+                }
+            }
         }
 
         return "Issue enregistrée.";

@@ -24,6 +24,9 @@ builder.Services.AddElsa(elsa =>
         management.AddActivity<RunAgentPrompt>();
         management.AddActivity<RunEnvironmentPrompt>();
         management.AddActivity<RunEvaluatorPrompt>();
+        management.AddActivity<RunUserDocPrompt>();
+        management.AddActivity<RunPreTaskMeeting>();
+        management.AddActivity<RunFinalReviewMeeting>();
     });
     elsa.UseWorkflowRuntime(runtime => runtime.AddWorkflow<AlveusTaskWorkflow>());
     elsa.UseHttp();
@@ -63,6 +66,9 @@ Directory.CreateDirectory(workspaceRoot);
 builder.Services.AddSingleton(_ => new CmdRunTool(workspaceRoot));
 builder.Services.AddSingleton(_ => new StrReplaceEditorTool(workspaceRoot));
 builder.Services.AddSingleton<FinishTool>();
+
+// Outil de débat/vote des réunions de pré-tâche et finale — cf. ADR 0024.
+builder.Services.AddSingleton<MeetingTool>();
 
 // Stratégie de compactage de session injectée dans RunAgentPrompt — cf. ADR 0019.
 builder.Services.AddSingleton<IAgentSessionCompactionService, SummarizingAgentSessionCompactionService>();
@@ -204,6 +210,169 @@ builder.Services.AddKeyedSingleton<AIAgent>(evaluatorAgentName, (sp, key) =>
         },
         AIContextProviders = [new EvaluatorSkillsContextProvider(evaluatorWorkspaceRoot)],
     });
+});
+
+// Agent UserDoc : intervient après l'Evaluator pour mettre à jour la documentation utilisateur,
+// dans son propre espace de travail (Agent:UserDocWorkspaceRoot) — cf. ADR 0026. Le sous-dossier
+// 'business-rules/' de cet espace est celui d'Alveus-BusinessAnalyst (cf. ADR 0025).
+var userDocAgentName = builder.Configuration["Agent:UserDocName"]
+    ?? throw new InvalidOperationException("Configuration manquante : Agent:UserDocName");
+var userDocWorkspaceRootSetting = builder.Configuration["Agent:UserDocWorkspaceRoot"]
+    ?? throw new InvalidOperationException("Configuration manquante : Agent:UserDocWorkspaceRoot");
+var userDocWorkspaceRoot = Path.GetFullPath(userDocWorkspaceRootSetting, builder.Environment.ContentRootPath);
+Directory.CreateDirectory(userDocWorkspaceRoot);
+
+builder.Services.AddKeyedSingleton<CmdRunTool>(userDocAgentName, (_, _) => new CmdRunTool(userDocWorkspaceRoot));
+builder.Services.AddKeyedSingleton<StrReplaceEditorTool>(userDocAgentName, (_, _) => new StrReplaceEditorTool(userDocWorkspaceRoot));
+
+builder.Services.AddKeyedSingleton<AIAgent>(userDocAgentName, (sp, key) =>
+{
+    var cmdRunTool = sp.GetRequiredKeyedService<CmdRunTool>(key);
+    var editorTool = sp.GetRequiredKeyedService<StrReplaceEditorTool>(key);
+    var finishTool = sp.GetRequiredService<FinishTool>();
+
+    var tools = new List<AITool>
+    {
+        AIFunctionFactory.Create(cmdRunTool.RunAsync),
+        AIFunctionFactory.Create(editorTool.Execute),
+        AIFunctionFactory.Create(finishTool.Finish),
+    };
+
+    return new ChatClientAgent(
+        chatClient,
+        instructions: "Tu es Alveus-UserDoc, l'agent de documentation utilisateur de Butlr. Tu interviens après "
+            + "qu'Alveus-Evaluator a validé le travail d'Alveus-Worker. Ton rôle : mettre à jour la documentation "
+            + "utilisateur (markdown, à la racine de ton espace de travail) pour refléter ce qui change pour "
+            + "l'utilisateur final, à partir de la consigne de tâche et des instructions complémentaires éventuelles "
+            + "d'Alveus-Technical. Le sous-dossier 'business-rules/' appartient à Alveus-BusinessAnalyst : tu peux le "
+            + "consulter mais ne le modifie pas. Quand tu as terminé, appelle l'outil Finish avec outcome='done' "
+            + "(summary = ce qui a été documenté) ou outcome='needsmoreinfo'/'blocked' si tu ne peux pas avancer.",
+        name: userDocAgentName,
+        tools: tools);
+});
+
+// Agent Alveus-Technical : participe aux réunions de pré-tâche et finale (cf. ADR 0024), espace de
+// travail enraciné sur un sous-dossier de celui d'Alveus-Worker (cf. ADR 0025).
+var technicalAgentName = builder.Configuration["Agent:TechnicalName"]
+    ?? throw new InvalidOperationException("Configuration manquante : Agent:TechnicalName");
+var technicalWorkspaceSubdir = builder.Configuration["Agent:TechnicalWorkspaceSubdir"]
+    ?? throw new InvalidOperationException("Configuration manquante : Agent:TechnicalWorkspaceSubdir");
+var technicalWorkspaceRoot = Path.Combine(workspaceRoot, technicalWorkspaceSubdir);
+Directory.CreateDirectory(technicalWorkspaceRoot);
+
+builder.Services.AddKeyedSingleton<CmdRunTool>(technicalAgentName, (_, _) => new CmdRunTool(technicalWorkspaceRoot));
+builder.Services.AddKeyedSingleton<StrReplaceEditorTool>(technicalAgentName, (_, _) => new StrReplaceEditorTool(technicalWorkspaceRoot));
+
+builder.Services.AddKeyedSingleton<AIAgent>(technicalAgentName, (sp, key) =>
+{
+    var cmdRunTool = sp.GetRequiredKeyedService<CmdRunTool>(key);
+    var editorTool = sp.GetRequiredKeyedService<StrReplaceEditorTool>(key);
+    var finishTool = sp.GetRequiredService<FinishTool>();
+    var meetingTool = sp.GetRequiredService<MeetingTool>();
+
+    var tools = new List<AITool>
+    {
+        AIFunctionFactory.Create(cmdRunTool.RunAsync),
+        AIFunctionFactory.Create(editorTool.Execute),
+        AIFunctionFactory.Create(finishTool.Finish),
+        AIFunctionFactory.Create(meetingTool.Raise),
+        AIFunctionFactory.Create(meetingTool.Vote),
+    };
+
+    return new ChatClientAgent(
+        chatClient,
+        instructions: "Tu es Alveus-Technical, l'agent d'architecture de Butlr. Ton espace de travail est un "
+            + "sous-dossier de celui d'Alveus-Worker ('tech-docs/') où tu maintiens la documentation d'architecture "
+            + "et les ADR (cf. conventions '.claude/rules/adr-writing.md'). Tu participes à des réunions à 3 avec "
+            + "Alveus-BusinessAnalyst et Alveus-Qa : utilise l'outil Raise pour signaler un point de désaccord ou une "
+            + "question aux 2 autres participants, et Vote pour te positionner sur un topic ('agree'/'disagree', "
+            + "commentaire obligatoire si 'disagree'). Quand tu as terminé ton tour, appelle l'outil Finish avec "
+            + "outcome='done' (et, le cas échéant, downstreamInstructions pour Alveus-Worker et/ou Alveus-UserDoc) ou "
+            + "outcome='needsmoreinfo'/'blocked' si tu es bloqué.",
+        name: technicalAgentName,
+        tools: tools);
+});
+
+// Agent Alveus-Qa : participe aux réunions de pré-tâche et finale (cf. ADR 0024), espace de travail
+// enraciné sur un sous-dossier de celui d'Alveus-Evaluator (cf. ADR 0025).
+var qaAgentName = builder.Configuration["Agent:QaName"]
+    ?? throw new InvalidOperationException("Configuration manquante : Agent:QaName");
+var qaWorkspaceSubdir = builder.Configuration["Agent:QaWorkspaceSubdir"]
+    ?? throw new InvalidOperationException("Configuration manquante : Agent:QaWorkspaceSubdir");
+var qaWorkspaceRoot = Path.Combine(evaluatorWorkspaceRoot, qaWorkspaceSubdir);
+Directory.CreateDirectory(qaWorkspaceRoot);
+
+builder.Services.AddKeyedSingleton<CmdRunTool>(qaAgentName, (_, _) => new CmdRunTool(qaWorkspaceRoot));
+builder.Services.AddKeyedSingleton<StrReplaceEditorTool>(qaAgentName, (_, _) => new StrReplaceEditorTool(qaWorkspaceRoot));
+
+builder.Services.AddKeyedSingleton<AIAgent>(qaAgentName, (sp, key) =>
+{
+    var cmdRunTool = sp.GetRequiredKeyedService<CmdRunTool>(key);
+    var editorTool = sp.GetRequiredKeyedService<StrReplaceEditorTool>(key);
+    var finishTool = sp.GetRequiredService<FinishTool>();
+    var meetingTool = sp.GetRequiredService<MeetingTool>();
+
+    var tools = new List<AITool>
+    {
+        AIFunctionFactory.Create(cmdRunTool.RunAsync),
+        AIFunctionFactory.Create(editorTool.Execute),
+        AIFunctionFactory.Create(finishTool.Finish),
+        AIFunctionFactory.Create(meetingTool.Raise),
+        AIFunctionFactory.Create(meetingTool.Vote),
+    };
+
+    return new ChatClientAgent(
+        chatClient,
+        instructions: "Tu es Alveus-Qa, l'agent de plan de test de Butlr. Ton espace de travail est un sous-dossier "
+            + "de celui d'Alveus-Evaluator ('test-plan/') où tu maintiens le plan de test markdown (cas passants et "
+            + "non passants). Tu participes à des réunions à 3 avec Alveus-BusinessAnalyst et Alveus-Technical : "
+            + "utilise l'outil Raise pour signaler un point de désaccord ou une question aux 2 autres participants, "
+            + "et Vote pour te positionner sur un topic ('agree'/'disagree', commentaire obligatoire si 'disagree'). "
+            + "Quand tu as terminé ton tour, appelle l'outil Finish avec outcome='done' (et, le cas échéant, "
+            + "downstreamInstructions pour Alveus-Evaluator) ou outcome='needsmoreinfo'/'blocked' si tu es bloqué.",
+        name: qaAgentName,
+        tools: tools);
+});
+
+// Agent Alveus-BusinessAnalyst : participe aux réunions de pré-tâche et finale (cf. ADR 0024),
+// espace de travail enraciné sur un sous-dossier de celui d'Alveus-UserDoc (cf. ADR 0025).
+var businessAnalystAgentName = builder.Configuration["Agent:BusinessAnalystName"]
+    ?? throw new InvalidOperationException("Configuration manquante : Agent:BusinessAnalystName");
+var businessAnalystWorkspaceSubdir = builder.Configuration["Agent:BusinessAnalystWorkspaceSubdir"]
+    ?? throw new InvalidOperationException("Configuration manquante : Agent:BusinessAnalystWorkspaceSubdir");
+var businessAnalystWorkspaceRoot = Path.Combine(userDocWorkspaceRoot, businessAnalystWorkspaceSubdir);
+Directory.CreateDirectory(businessAnalystWorkspaceRoot);
+
+builder.Services.AddKeyedSingleton<CmdRunTool>(businessAnalystAgentName, (_, _) => new CmdRunTool(businessAnalystWorkspaceRoot));
+builder.Services.AddKeyedSingleton<StrReplaceEditorTool>(businessAnalystAgentName, (_, _) => new StrReplaceEditorTool(businessAnalystWorkspaceRoot));
+
+builder.Services.AddKeyedSingleton<AIAgent>(businessAnalystAgentName, (sp, key) =>
+{
+    var cmdRunTool = sp.GetRequiredKeyedService<CmdRunTool>(key);
+    var editorTool = sp.GetRequiredKeyedService<StrReplaceEditorTool>(key);
+    var finishTool = sp.GetRequiredService<FinishTool>();
+    var meetingTool = sp.GetRequiredService<MeetingTool>();
+
+    var tools = new List<AITool>
+    {
+        AIFunctionFactory.Create(cmdRunTool.RunAsync),
+        AIFunctionFactory.Create(editorTool.Execute),
+        AIFunctionFactory.Create(finishTool.Finish),
+        AIFunctionFactory.Create(meetingTool.Raise),
+        AIFunctionFactory.Create(meetingTool.Vote),
+    };
+
+    return new ChatClientAgent(
+        chatClient,
+        instructions: "Tu es Alveus-BusinessAnalyst, l'agent de règles métier de Butlr. Ton espace de travail est un "
+            + "sous-dossier de celui d'Alveus-UserDoc ('business-rules/') où tu maintiens la documentation des règles "
+            + "métier en markdown, organisée par domaine. Tu participes à des réunions à 3 avec Alveus-Qa et "
+            + "Alveus-Technical : utilise l'outil Raise pour signaler un point de désaccord ou une question aux 2 "
+            + "autres participants, et Vote pour te positionner sur un topic ('agree'/'disagree', commentaire "
+            + "obligatoire si 'disagree'). Quand tu as terminé ton tour, appelle l'outil Finish avec outcome='done' "
+            + "ou outcome='needsmoreinfo'/'blocked' si tu es bloqué.",
+        name: businessAnalystAgentName,
+        tools: tools);
 });
 
 var app = builder.Build();

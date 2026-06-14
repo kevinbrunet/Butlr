@@ -154,4 +154,70 @@ public sealed class FinishCallTests
         Assert.NotNull(finish);
         Assert.Null(finish!.Verdict);
     }
+
+    [Fact]
+    public void FromArguments_MissingDownstreamInstructions_IsNull()
+    {
+        var arguments = new Dictionary<string, object?>
+        {
+            ["summary"] = "Documentation mise à jour.",
+            ["outcome"] = "done",
+        };
+
+        var finish = FinishCall.FromArguments(arguments);
+
+        Assert.NotNull(finish);
+        Assert.Null(finish!.DownstreamInstructions);
+    }
+
+    [Fact]
+    public void FromArguments_DownstreamInstructions_ParsesTargetAndInstruction()
+    {
+        var arguments = new Dictionary<string, object?>
+        {
+            ["summary"] = "ADR 0027 ajouté.",
+            ["outcome"] = "done",
+            ["downstreamInstructions"] = new List<object?>
+            {
+                new Dictionary<string, object?> { ["target"] = "worker", ["instruction"] = "Utiliser le nouveau client HTTP." },
+                new Dictionary<string, object?> { ["target"] = "userdoc", ["instruction"] = "Documenter le nouveau endpoint." },
+            },
+        };
+
+        var finish = FinishCall.FromArguments(arguments);
+
+        Assert.NotNull(finish);
+        Assert.NotNull(finish!.DownstreamInstructions);
+        Assert.Equal(2, finish.DownstreamInstructions!.Count);
+        Assert.Equal(new DownstreamInstruction("worker", "Utiliser le nouveau client HTTP."), finish.DownstreamInstructions[0]);
+        Assert.Equal(new DownstreamInstruction("userdoc", "Documenter le nouveau endpoint."), finish.DownstreamInstructions[1]);
+    }
+
+    [Fact]
+    public void FromArguments_DownstreamInstructions_ArgumentsAsJsonElements_AreParsed()
+    {
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "summary": "s",
+              "outcome": "done",
+              "downstreamInstructions": [
+                {"target": "evaluator", "instruction": "Tester aussi le cas limite X."}
+              ]
+            }
+            """);
+
+        var arguments = new Dictionary<string, object?>
+        {
+            ["summary"] = document.RootElement.GetProperty("summary"),
+            ["outcome"] = document.RootElement.GetProperty("outcome"),
+            ["downstreamInstructions"] = document.RootElement.GetProperty("downstreamInstructions"),
+        };
+
+        var finish = FinishCall.FromArguments(arguments);
+
+        Assert.NotNull(finish);
+        Assert.NotNull(finish!.DownstreamInstructions);
+        Assert.Equal([new DownstreamInstruction("evaluator", "Tester aussi le cas limite X.")], finish.DownstreamInstructions);
+    }
 }

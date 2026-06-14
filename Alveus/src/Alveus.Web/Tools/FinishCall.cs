@@ -8,7 +8,13 @@ namespace Alveus.Web.Tools;
 /// <paramref name="Verdict"/> n'est renseigné que pour l'EnvironmentManager et l'Evaluator
 /// (cf. ADR 0023) — toujours <c>null</c> pour Alveus-Worker.
 /// </summary>
-public sealed record FinishCall(AgentTaskOutcome Outcome, string Summary, string? Reason, IReadOnlyList<string>? Questions, AgentVerdict? Verdict)
+public sealed record FinishCall(
+    AgentTaskOutcome Outcome,
+    string Summary,
+    string? Reason,
+    IReadOnlyList<string>? Questions,
+    AgentVerdict? Verdict,
+    IReadOnlyList<DownstreamInstruction>? DownstreamInstructions = null)
 {
     /// <summary>
     /// Construit un <see cref="FinishCall"/> à partir des arguments bruts d'un appel de fonction.
@@ -37,7 +43,9 @@ public sealed record FinishCall(AgentTaskOutcome Outcome, string Summary, string
             ? parsedVerdict
             : null;
 
-        return new FinishCall(outcome, summary, reason, questions, verdict);
+        var downstreamInstructions = ReadDownstreamInstructions(arguments, "downstreamInstructions");
+
+        return new FinishCall(outcome, summary, reason, questions, verdict, downstreamInstructions);
     }
 
     private static string? ReadString(IDictionary<string, object?> arguments, string key)
@@ -70,6 +78,56 @@ public sealed record FinishCall(AgentTaskOutcome Outcome, string Summary, string
         if (value is IEnumerable<object?> enumerable)
         {
             return enumerable.Select(o => o?.ToString() ?? string.Empty).ToList();
+        }
+
+        return null;
+    }
+
+    private static IReadOnlyList<DownstreamInstruction>? ReadDownstreamInstructions(IDictionary<string, object?> arguments, string key)
+    {
+        if (!arguments.TryGetValue(key, out var value) || value is null)
+        {
+            return null;
+        }
+
+        if (value is JsonElement { ValueKind: JsonValueKind.Array } element)
+        {
+            var result = new List<DownstreamInstruction>();
+            foreach (var item in element.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                var target = item.TryGetProperty("target", out var targetElement) ? targetElement.GetString() : null;
+                var instruction = item.TryGetProperty("instruction", out var instructionElement) ? instructionElement.GetString() : null;
+                if (target is not null && instruction is not null)
+                {
+                    result.Add(new DownstreamInstruction(target, instruction));
+                }
+            }
+
+            return result;
+        }
+
+        if (value is IEnumerable<object?> enumerable)
+        {
+            var result = new List<DownstreamInstruction>();
+            foreach (var item in enumerable)
+            {
+                if (item is IDictionary<string, object?> dict)
+                {
+                    var target = ReadString(dict, "target");
+                    var instruction = ReadString(dict, "instruction");
+                    if (target is not null && instruction is not null)
+                    {
+                        result.Add(new DownstreamInstruction(target, instruction));
+                    }
+                }
+            }
+
+            return result;
         }
 
         return null;

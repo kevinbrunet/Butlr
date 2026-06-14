@@ -24,10 +24,16 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
     private const string WorkerAgentName = "AlveusWorker";
     private const string EnvironmentManagerAgentName = "AlveusEnvironmentManager";
     private const string EvaluatorAgentName = "AlveusEvaluator";
+    private const string UserDocAgentName = "AlveusUserDoc";
+    private const string BusinessAnalystAgentName = "AlveusBusinessAnalyst";
+    private const string QaAgentName = "AlveusQa";
+    private const string TechnicalAgentName = "AlveusTechnical";
 
     public string WorkspaceRoot { get; } = Directory.CreateTempSubdirectory("alveus-workflow-task-tests-").FullName;
 
     public string EvaluatorWorkspaceRoot { get; } = Directory.CreateTempSubdirectory("alveus-workflow-task-evaluator-tests-").FullName;
+
+    public string UserDocWorkspaceRoot { get; } = Directory.CreateTempSubdirectory("alveus-workflow-task-userdoc-tests-").FullName;
 
     public IServiceProvider Services { get; }
 
@@ -50,6 +56,9 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
                 management.AddActivity<RunAgentPrompt>();
                 management.AddActivity<RunEnvironmentPrompt>();
                 management.AddActivity<RunEvaluatorPrompt>();
+                management.AddActivity<RunUserDocPrompt>();
+                management.AddActivity<RunPreTaskMeeting>();
+                management.AddActivity<RunFinalReviewMeeting>();
             });
             elsa.UseWorkflowRuntime(runtime => runtime.AddWorkflow<AlveusTaskWorkflow>());
         });
@@ -65,6 +74,7 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
         services.AddSingleton(_ => new CmdRunTool(WorkspaceRoot));
         services.AddSingleton(_ => new StrReplaceEditorTool(WorkspaceRoot));
         services.AddSingleton<FinishTool>();
+        services.AddSingleton<MeetingTool>();
         services.AddSingleton<IAgentSessionCompactionService, SummarizingAgentSessionCompactionService>();
         services.AddSingleton<IAgentWorkVerificationService>(_ => new CmdAgentWorkVerificationService(WorkspaceRoot, command: null));
 
@@ -175,7 +185,82 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
             });
         });
 
+        // UserDoc : workspace dédié (ADR 0026). Sous-dossier 'business-rules/' = workspace de BA (ADR 0025).
+        services.AddKeyedSingleton<CmdRunTool>(UserDocAgentName, (_, _) => new CmdRunTool(UserDocWorkspaceRoot));
+        services.AddKeyedSingleton<StrReplaceEditorTool>(UserDocAgentName, (_, _) => new StrReplaceEditorTool(UserDocWorkspaceRoot));
+
+        services.AddKeyedSingleton<AIAgent>(UserDocAgentName, (sp, key) =>
+        {
+            var cmdRunTool = sp.GetRequiredKeyedService<CmdRunTool>(key);
+            var editorTool = sp.GetRequiredKeyedService<StrReplaceEditorTool>(key);
+            var finishTool = sp.GetRequiredService<FinishTool>();
+
+            var tools = new List<AITool>
+            {
+                AIFunctionFactory.Create(cmdRunTool.RunAsync),
+                AIFunctionFactory.Create(editorTool.Execute),
+                AIFunctionFactory.Create(finishTool.Finish),
+            };
+
+            return new ChatClientAgent(
+                chatClient,
+                instructions: "Tu es Alveus-UserDoc, l'agent de documentation utilisateur de Butlr. Tu interviens "
+                    + "après qu'Alveus-Evaluator a validé le travail d'Alveus-Worker. Ton rôle : mettre à jour la "
+                    + "documentation utilisateur (markdown, à la racine de ton espace de travail) pour refléter ce "
+                    + "qui change pour l'utilisateur final. Quand tu as terminé, appelle l'outil Finish avec "
+                    + "outcome='done' (summary = ce qui a été documenté) ou outcome='needsmoreinfo'/'blocked' si tu "
+                    + "ne peux pas avancer.",
+                name: UserDocAgentName,
+                tools: tools);
+        });
+
+        // Alveus-BusinessAnalyst/Alveus-Qa/Alveus-Technical : participants aux réunions (ADR 0024), espaces de
+        // travail enracinés sur un sous-dossier respectivement de UserDoc, Evaluator et Worker (ADR 0025).
+        var businessAnalystWorkspaceRoot = Path.Combine(UserDocWorkspaceRoot, "business-rules");
+        Directory.CreateDirectory(businessAnalystWorkspaceRoot);
+        var qaWorkspaceRoot = Path.Combine(EvaluatorWorkspaceRoot, "test-plan");
+        Directory.CreateDirectory(qaWorkspaceRoot);
+        var technicalWorkspaceRoot = Path.Combine(WorkspaceRoot, "tech-docs");
+        Directory.CreateDirectory(technicalWorkspaceRoot);
+
+        AddMeetingAgent(services, chatClient, BusinessAnalystAgentName, businessAnalystWorkspaceRoot, "Alveus-BusinessAnalyst");
+        AddMeetingAgent(services, chatClient, QaAgentName, qaWorkspaceRoot, "Alveus-Qa");
+        AddMeetingAgent(services, chatClient, TechnicalAgentName, technicalWorkspaceRoot, "Alveus-Technical");
+
         Services = services.BuildServiceProvider();
+    }
+
+    private static void AddMeetingAgent(ServiceCollection services, IChatClient chatClient, string agentName, string workspaceRoot, string displayName)
+    {
+        services.AddKeyedSingleton<CmdRunTool>(agentName, (_, _) => new CmdRunTool(workspaceRoot));
+        services.AddKeyedSingleton<StrReplaceEditorTool>(agentName, (_, _) => new StrReplaceEditorTool(workspaceRoot));
+
+        services.AddKeyedSingleton<AIAgent>(agentName, (sp, key) =>
+        {
+            var cmdRunTool = sp.GetRequiredKeyedService<CmdRunTool>(key);
+            var editorTool = sp.GetRequiredKeyedService<StrReplaceEditorTool>(key);
+            var finishTool = sp.GetRequiredService<FinishTool>();
+            var meetingTool = sp.GetRequiredService<MeetingTool>();
+
+            var tools = new List<AITool>
+            {
+                AIFunctionFactory.Create(cmdRunTool.RunAsync),
+                AIFunctionFactory.Create(editorTool.Execute),
+                AIFunctionFactory.Create(finishTool.Finish),
+                AIFunctionFactory.Create(meetingTool.Raise),
+                AIFunctionFactory.Create(meetingTool.Vote),
+            };
+
+            return new ChatClientAgent(
+                chatClient,
+                instructions: $"Tu es {displayName}, un participant aux réunions de Butlr. Tu disposes des outils "
+                    + "Raise (signaler un point de désaccord ou une question aux 2 autres participants) et Vote "
+                    + "(te positionner sur un topic, 'agree'/'disagree', commentaire obligatoire si 'disagree'). "
+                    + "Quand tu as terminé ton tour, appelle l'outil Finish avec outcome='done' ou "
+                    + "outcome='needsmoreinfo'/'blocked' si tu es bloqué.",
+                name: agentName,
+                tools: tools);
+        });
     }
 
     public async Task InitializeAsync()
@@ -198,8 +283,13 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
     {
         Services.GetRequiredService<CmdRunTool>().Dispose();
         Services.GetRequiredKeyedService<CmdRunTool>(EvaluatorAgentName).Dispose();
+        Services.GetRequiredKeyedService<CmdRunTool>(UserDocAgentName).Dispose();
+        Services.GetRequiredKeyedService<CmdRunTool>(BusinessAnalystAgentName).Dispose();
+        Services.GetRequiredKeyedService<CmdRunTool>(QaAgentName).Dispose();
+        Services.GetRequiredKeyedService<CmdRunTool>(TechnicalAgentName).Dispose();
         Directory.Delete(WorkspaceRoot, recursive: true);
         Directory.Delete(EvaluatorWorkspaceRoot, recursive: true);
+        Directory.Delete(UserDocWorkspaceRoot, recursive: true);
         return Task.CompletedTask;
     }
 }

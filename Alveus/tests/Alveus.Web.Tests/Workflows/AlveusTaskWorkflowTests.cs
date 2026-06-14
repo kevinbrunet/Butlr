@@ -8,16 +8,29 @@ using Xunit.Abstractions;
 namespace Alveus.Web.Tests.Workflows;
 
 /// <summary>
-/// Test d'intégration de bout en bout de <see cref="AlveusTaskWorkflow"/> (cf. ADR 0023) : Worker
-/// → EnvironmentManager → Evaluator, avec verdicts "pass" déclenchés directement via FinishTool
-/// pour ne dépendre d'aucun environnement réel. Vérifie que le graphe Flowchart enchaîne
-/// correctement les trois activités jusqu'au verdict "Passed". Sauté (avec message dans la sortie
-/// de test) si ALVEUS_TEST_LLAMACPP_ENDPOINT n'est pas joignable.
+/// Test d'intégration de bout en bout de <see cref="AlveusTaskWorkflow"/> (cf. ADR 0023, étendu par
+/// ADR 0024/0026) : RunPreTaskMeeting → Worker → EnvironmentManager → Evaluator, avec verdicts
+/// "pass" déclenchés directement via FinishTool pour ne dépendre d'aucun environnement réel.
+/// Vérifie que le graphe Flowchart enchaîne correctement les activités jusqu'au verdict "Passed".
+/// Sauté (avec message dans la sortie de test) si ALVEUS_TEST_LLAMACPP_ENDPOINT n'est pas
+/// joignable.
 /// ⚠ Ce test dépend du comportement du LLM pour suivre des instructions multi-étapes — flakiness
 /// possible (cf. ADR 0021).
 /// </summary>
 public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFixture>
 {
+    /// <summary>
+    /// Instructions ajoutées à chaque <c>TaskPrompt</c> pour qu'Alveus-BusinessAnalyst/Alveus-Qa/
+    /// Alveus-Technical (réunions de pré-tâche et finale, cf. ADR 0024) confirment immédiatement
+    /// sans débat, afin que ces tests restent concentrés sur le cycle
+    /// Worker/EnvironmentManager/Evaluator (ADR 0023).
+    /// </summary>
+    private const string MeetingParticipantInstructions =
+        "Si tu es Alveus-BusinessAnalyst, Alveus-Qa ou Alveus-Technical : n'utilise pas Raise et ne modifie aucun "
+        + "fichier. Si on te demande de voter sur 'task-fulfilled', vote immédiatement avec decision='agree'. Dans "
+        + "tous les cas, appelle directement ton outil de fin de tour (Finish) avec outcome='done' et un résumé "
+        + "indiquant qu'il n'y a rien à signaler.";
+
     private readonly AlveusTaskWorkflowFixture _fixture;
     private readonly ITestOutputHelper _output;
 
@@ -42,9 +55,10 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
         {
             Input = new Dictionary<string, object>
             {
-                ["TaskPrompt"] = "Appelle directement ton outil de fin de tâche (Finish) avec outcome='done' et un "
-                    + "résumé indiquant qu'il n'y avait rien à faire. Si tu es Alveus-EnvironmentManager ou "
-                    + "Alveus-Evaluator, appelle Finish avec outcome='done' et verdict='pass'.",
+                ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle directement ton outil de fin de tâche (Finish) avec "
+                    + "outcome='done' et un résumé indiquant qu'il n'y avait rien à faire. Si tu es "
+                    + "Alveus-EnvironmentManager ou Alveus-Evaluator, appelle Finish avec outcome='done' et "
+                    + "verdict='pass'. " + MeetingParticipantInstructions,
             },
         };
 
@@ -79,8 +93,9 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
         {
             Input = new Dictionary<string, object>
             {
-                ["TaskPrompt"] = "Tu es Alveus-Worker. Tu es bloqué : appelle immédiatement Finish avec "
-                    + "outcome='blocked' et reason='Consigne ambiguë, impossible de continuer.'.",
+                ["TaskPrompt"] = "Si tu es Alveus-Worker, tu es bloqué : appelle immédiatement Finish avec "
+                    + "outcome='blocked' et reason='Consigne ambiguë, impossible de continuer.'. "
+                    + MeetingParticipantInstructions,
             },
         };
 
@@ -115,7 +130,7 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
                 ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle Finish avec outcome='done' et un résumé indiquant "
                     + "qu'il n'y avait rien à faire. Si tu es Alveus-EnvironmentManager, tu es bloqué : appelle "
                     + "Finish avec outcome='blocked' et reason='Impossible de déterminer comment démarrer "
-                    + "l'environnement.'.",
+                    + "l'environnement.'. " + MeetingParticipantInstructions,
             },
         };
 
@@ -152,7 +167,7 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
                 ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle Finish avec outcome='done'. Si tu es "
                     + "Alveus-EnvironmentManager, appelle Finish avec outcome='done' et verdict='pass'. Si tu es "
                     + "Alveus-Evaluator, tu es bloqué : appelle Finish avec outcome='blocked' et "
-                    + "reason='Impossible d'écrire le jeu de test.'.",
+                    + "reason='Impossible d'écrire le jeu de test.'. " + MeetingParticipantInstructions,
             },
         };
 
@@ -195,7 +210,7 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
                     + "qu'il n'y avait rien à faire, même si un rapport d'évaluation précédent est joint au message. "
                     + "Si tu es Alveus-EnvironmentManager, l'environnement ne démarre jamais : appelle "
                     + "systématiquement Finish avec outcome='done', verdict='fail' et reason='L'environnement ne "
-                    + "démarre pas.'. N'appelle jamais Alveus-Evaluator.",
+                    + "démarre pas.'. N'appelle jamais Alveus-Evaluator. " + MeetingParticipantInstructions,
             },
         };
 

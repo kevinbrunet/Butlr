@@ -61,4 +61,28 @@ public sealed class FinishToolTests
     {
         Assert.Throws<ArgumentException>(() => _tool.Finish("résumé", "done", verdict: "frobnicate"));
     }
+
+    [Theory]
+    [InlineData("worker")]
+    [InlineData("evaluator")]
+    [InlineData("userdoc")]
+    [InlineData("Worker")]
+    public void Finish_ValidDownstreamInstructionTarget_ReturnsConfirmation(string target)
+    {
+        var result = _tool.Finish(
+            "résumé",
+            "done",
+            downstreamInstructions: [new DownstreamInstruction(target, "Précision complémentaire.")]);
+
+        Assert.NotEmpty(result);
+    }
+
+    [Fact]
+    public void Finish_UnknownDownstreamInstructionTarget_Throws()
+    {
+        Assert.Throws<ArgumentException>(() => _tool.Finish(
+            "résumé",
+            "done",
+            downstreamInstructions: [new DownstreamInstruction("frobnicate", "Précision complémentaire.")]));
+    }
 }
