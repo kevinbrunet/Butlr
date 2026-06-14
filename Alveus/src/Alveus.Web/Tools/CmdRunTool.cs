@@ -22,6 +22,8 @@ public sealed class CmdRunTool : IDisposable
 
     private readonly Process _shell;
     private readonly SemaphoreSlim _lock = new(1, 1);
+    private readonly string? _bwrapKillSignature;
+    private bool _disposed;
 
     public static bool IsBwrapAvailable => BwrapAvailableLazy.Value;
 
@@ -36,6 +38,14 @@ public sealed class CmdRunTool : IDisposable
             StartInfo = BuildStartInfo(workspaceRoot, logger),
         };
         _shell.Start();
+
+        if (IsBwrapAvailable)
+        {
+            // Signature unique de cette sandbox (le bind read-write de workspaceRoot n'apparaît
+            // que dans les arguments de CE process bwrap). Sert de filet de sécurité dans
+            // Dispose() : cf. commentaire associé.
+            _bwrapKillSignature = $"--bind {workspaceRoot} {workspaceRoot}";
+        }
 
         // Fusionne stderr dans stdout pour tout le reste de la session : on n'a qu'un
         // seul flux à lire pour détecter la fin d'une commande.
@@ -94,7 +104,6 @@ public sealed class CmdRunTool : IDisposable
         startInfo.ArgumentList.Add("--chdir");
         startInfo.ArgumentList.Add(workspaceRoot);
         startInfo.ArgumentList.Add("--unshare-pid");
-        startInfo.ArgumentList.Add("--die-with-parent");
         startInfo.ArgumentList.Add("/bin/bash");
 
         return startInfo;
@@ -166,6 +175,13 @@ public sealed class CmdRunTool : IDisposable
 
     public void Dispose()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+
         try
         {
             if (!_shell.HasExited)
@@ -173,9 +189,38 @@ public sealed class CmdRunTool : IDisposable
                 _shell.Kill(entireProcessTree: true);
             }
         }
-        catch (InvalidOperationException)
+        catch (Exception)
         {
-            // Process déjà sorti entre le check et le Kill : rien à faire.
+            // Process déjà sorti entre le check et le Kill, ou un de ses descendants a
+            // disparu pendant le parcours de l'arbre (race) : le filet de sécurité
+            // ci-dessous (pkill par signature) prend le relais.
+        }
+
+        // Filet de sécurité : bwrap lance un process intermédiaire qui devient le PID 1 du
+        // nouveau namespace PID (cf. ADR 0029) — ce n'est pas toujours celui que _shell
+        // référence. Kill(entireProcessTree: true) sur _shell peut alors ne tuer qu'une
+        // partie de l'arbre et laisser le PID 1 du namespace (et ses enfants, ex. un
+        // `dotnet run` détaché) orphelins. On force la mort de tout process bwrap portant
+        // la signature unique de ce workspace : tuer le PID 1 d'un namespace PID fait que
+        // le noyau tue tout le reste du namespace (pid_namespaces(7)).
+        if (_bwrapKillSignature is not null)
+        {
+            try
+            {
+                // `--` avant le pattern : sans ça, getopt interprète le `--bind` du pattern
+                // comme une option de pkill et échoue (exit 2, affiche l'aide).
+                using var pkill = Process.Start(new ProcessStartInfo("pkill")
+                {
+                    ArgumentList = { "-9", "-f", "--", _bwrapKillSignature },
+                    UseShellExecute = false,
+                });
+                pkill?.WaitForExit(TimeSpan.FromSeconds(5));
+            }
+            catch (Exception)
+            {
+                // pkill indisponible ou échec : pas critique, _shell.Kill ci-dessus reste
+                // la voie principale.
+            }
         }
 
         _shell.Dispose();

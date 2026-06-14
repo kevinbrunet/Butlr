@@ -40,9 +40,11 @@ détecté une fois via `CmdRunTool.IsBwrapAvailable`) avec la politique suivante
   `WorkspaceRoot` (seul répertoire de travail de l'agent, lecture-écriture complète).
 - `--chdir WorkspaceRoot` : équivalent du `WorkingDirectory` précédent, mais à l'intérieur du
   sandbox.
-- `--unshare-pid --die-with-parent` : le shell devient l'init d'un namespace PID dédié. Quand
-  `Dispose()` tue ce process, le noyau détruit le namespace et **tue tous ses descendants**, y
-  compris les process `nohup`/`disown`-és.
+- `--unshare-pid` : le shell devient l'init d'un namespace PID dédié. Quand `Dispose()` tue ce
+  process (`Kill(entireProcessTree: true)`, avec un `pkill -9 -f` de secours sur la signature
+  `--bind WorkspaceRoot WorkspaceRoot`), le noyau détruit le namespace et **tue tous ses
+  descendants**, y compris les process `nohup`/`disown`-és (cf. révision 2026-06-15 pour
+  `--die-with-parent`, retiré).
 
 Si `bwrap` est absent du `PATH`, `CmdRunTool` retombe sur le comportement antérieur (`bash`
 direct, `WorkingDirectory = WorkspaceRoot`, scoping non garanti d'ADR 0017) et logue un
@@ -99,3 +101,17 @@ perte de la garantie.
 
 - 2026-06-14 — création, suite à l'incident `/home/kevin-brunet/TodoApp` (process orphelin créé
   hors workspace par Alveus-Worker).
+- 2026-06-15 — retrait de `--die-with-parent` : `PR_SET_PDEATHSIG` (utilisé par `bwrap` pour
+  implémenter ce flag) est attaché au *thread* appelant au moment du `fork()`, pas au process.
+  Avec le thread pool .NET, le thread qui a exécuté `Process.Start()` pour le shell `bwrap` peut
+  se terminer/être recyclé juste après — le noyau envoie alors `SIGKILL` au sandbox `bwrap`
+  **alors que le process hôte (`dotnet`) est toujours vivant**. Observé en CI : le test suivant
+  (`RunAsync_ForegroundProcessExceedingTimeout_IsKilledOnDispose`) voyait son `bwrap` tué
+  immédiatement (`exit code 137`) avant même d'exécuter sa commande. `--die-with-parent` était une
+  défense en profondeur (éviter les sandbox orphelins si `dotnet` lui-même crashe) ; `Dispose()`
+  (`Kill(entireProcessTree: true)` + `pkill -9 -f` sur la signature `--bind`) couvre déjà le cas
+  nominal de nettoyage, donc le retrait n'introduit pas de régression sur l'objectif premier de cet
+  ADR (processus détachés tués à `Dispose()`, toujours validé par
+  `RunAsync_NohupBackgroundProcess_IsKilledOnDispose`). Risque résiduel (mineur, accepté) : si
+  `dotnet` est tué par `SIGKILL` (pas de `Dispose()`), le sandbox `bwrap` peut survivre comme
+  orphelin — à surveiller, pas observé en pratique sur ce poste.

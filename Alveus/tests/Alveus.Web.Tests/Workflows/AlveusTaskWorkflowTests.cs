@@ -477,6 +477,13 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
                     + "terminée via une case à cocher ou un bouton (rechargement de page accepté). Les tâches "
                     + "sont conservées en mémoire (pas de base de données). Si tu es Alveus-Worker : une fois "
                     + "l'application créée et son démarrage local vérifié, appelle Finish avec outcome='done'. "
+                    + "Si tu es Alveus-Evaluator : écris, à la racine de ton espace de travail, un projet de "
+                    + "test xUnit C# (ex. 'dotnet new xunit') référençant le package NuGet Microsoft.Playwright "
+                    + "(cf. skills/dotnet-snapshot-testing/references/playwright-ui.md), avec au moins un test "
+                    + "qui pilote un navigateur contre la page d'accueil de l'application pour vérifier "
+                    + "l'affichage de la liste de tâches, l'ajout d'une nouvelle tâche via le formulaire, et le "
+                    + "marquage d'une tâche comme terminée. Exécute ce projet avec 'dotnet test' et n'appelle "
+                    + "Finish avec verdict='pass' que si ces tests Playwright passent. "
                     + "Si tu es Alveus-UserDoc : appelle directement Finish avec outcome='done'. "
                     + MeetingParticipantInstructions,
             },

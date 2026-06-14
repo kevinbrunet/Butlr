@@ -103,6 +103,31 @@ public sealed class CmdRunToolTests : IDisposable
             "le process en arrière-plan devrait être tué quand Dispose() détruit le namespace PID (cf. ADR 0029).");
     }
 
+    [Fact]
+    public async Task RunAsync_ForegroundProcessExceedingTimeout_IsKilledOnDispose()
+    {
+        if (!CmdRunTool.IsBwrapAvailable)
+        {
+            return;
+        }
+
+        // Commande au premier plan qui dépasse le CommandTimeout (30s) de RunAsync : le shell
+        // bash reste bloqué dans `wait()` sur ce process quand Dispose() est appelé.
+        var sleepDuration = $"601.{Random.Shared.Next(100000, 999999)}";
+        var runTask = _tool.RunAsync($"sleep {sleepDuration}");
+
+        Assert.True(await WaitUntilAsync(() => ProcessExistsAsync(sleepDuration).Result, TimeSpan.FromSeconds(30)),
+            "le process au premier plan devrait être démarré avant le timeout.");
+
+        var result = await runTask;
+        Assert.Contains("timeout", result);
+
+        _tool.Dispose();
+
+        Assert.True(await WaitUntilAsync(() => !ProcessExistsAsync(sleepDuration).Result, TimeSpan.FromSeconds(10)),
+            "le process au premier plan (bash bloqué dans wait()) devrait être tué quand Dispose() détruit le namespace PID.");
+    }
+
     private static async Task<bool> ProcessExistsAsync(string sleepDuration)
     {
         var startInfo = new ProcessStartInfo("pgrep")
