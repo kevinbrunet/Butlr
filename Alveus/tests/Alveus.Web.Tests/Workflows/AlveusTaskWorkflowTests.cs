@@ -1,4 +1,5 @@
 using Alveus.Web.Activities;
+using Alveus.Web.Conversations;
 using Alveus.Web.Workflows;
 using Elsa.Workflows;
 using Elsa.Workflows.Options;
@@ -182,6 +183,49 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
         Assert.Null(loopGuardIteration);
 
         _output.WriteLine($"Statut workflow : {result.WorkflowState.Status}, raison evaluator : {evaluatorReason}");
+    }
+
+    /// <summary>
+    /// ⚠ Vérifie que <see cref="AlveusTaskWorkflow.RunPreTaskMeeting"/> poste un item
+    /// <see cref="ConversationItemKind.MeetingRound"/> par round (cf. ADR 0027) dès qu'un
+    /// <c>CorrelationId</c> est fourni à <see cref="IWorkflowRunner.RunAsync"/> — propagé via
+    /// <c>WorkflowExecutionContext.CorrelationId</c> jusqu'à <see cref="IConversationContextAccessor"/>.
+    /// </summary>
+    [Fact]
+    public async Task AlveusTaskWorkflow_WithCorrelationId_PostsMeetingRoundItems()
+    {
+        if (!_fixture.IsLlamaCppAvailable)
+        {
+            _output.WriteLine("llama.cpp indisponible sur ALVEUS_TEST_LLAMACPP_ENDPOINT — test ignoré.");
+            return;
+        }
+
+        var workflow = ActivatorUtilities.CreateInstance<AlveusTaskWorkflow>(_fixture.Services);
+
+        var store = _fixture.Services.GetRequiredService<IConversationStore>();
+        var conversationId = store.Create().Id;
+
+        var options = new RunWorkflowOptions
+        {
+            CorrelationId = conversationId,
+            Input = new Dictionary<string, object>
+            {
+                ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle directement ton outil de fin de tâche (Finish) avec "
+                    + "outcome='done' et un résumé indiquant qu'il n'y avait rien à faire. Si tu es "
+                    + "Alveus-EnvironmentManager ou Alveus-Evaluator, appelle Finish avec outcome='done' et "
+                    + "verdict='pass'. " + MeetingParticipantInstructions,
+            },
+        };
+
+        var runner = _fixture.Services.GetRequiredService<IWorkflowRunner>();
+        var result = await runner.RunAsync(workflow, options, CancellationToken.None);
+
+        var items = store.GetItems(conversationId);
+
+        Assert.Contains(items, i => i.Kind == ConversationItemKind.MeetingRound
+            && i.Metadata.TryGetValue("meeting", out var meeting) && meeting == "RunPreTaskMeeting");
+
+        _output.WriteLine($"Statut workflow : {result.WorkflowState.Status}, items conversation : {items.Count}");
     }
 
     /// <summary>

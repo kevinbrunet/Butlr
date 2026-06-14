@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Alveus.Web.Agents;
+using Alveus.Web.Conversations;
 using Alveus.Web.Tools;
 using Elsa.Workflows;
 using Elsa.Workflows.Attributes;
@@ -58,6 +59,9 @@ public abstract class AgentPromptActivityBase : CodeActivity
 
     protected override async ValueTask ExecuteAsync(ActivityExecutionContext context)
     {
+        var conversationId = context.WorkflowExecutionContext.CorrelationId;
+        context.GetRequiredService<IConversationContextAccessor>().ConversationId = conversationId;
+
         var agentName = context.Get(AgentName);
         ArgumentException.ThrowIfNullOrWhiteSpace(agentName);
 

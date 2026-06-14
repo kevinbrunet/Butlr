@@ -26,7 +26,8 @@ backend llama.cpp que le reste de Butlr (✓ ADR 0006).
 ```
 RunPreTaskMeeting (BA + QA + Tech)
   --Done--> Alveus-Worker → Alveus-EnvironmentManager → Alveus-Evaluator
-                  ^                    |  Failed              |  Failed
+  --NeedsHelp--> AwaitPreTaskReply --Done--> PreTaskHelpLoopGuard --Continue--> RunPreTaskMeeting
+                  ^                    |  Failed              |  Failed                 --LimitReached--> fin (Blocked)
                   |                    v                      v
                   +---------------- LoopGuard <---------------+
 
@@ -34,6 +35,9 @@ Alveus-Evaluator --Passed--> Alveus-UserDoc --Done--> RunFinalReviewMeeting (BA 
                                                           --OK--> fin (succès)
                                                           --KO--> OuterLoopGuard --Continue--> RunPreTaskMeeting
                                                                                  --LimitReached--> fin (Blocked)
+                                                          --NeedsHelp--> AwaitFinalReviewReply --Done--> FinalReviewHelpLoopGuard
+                                                                                                          --Continue--> RunFinalReviewMeeting
+                                                                                                          --LimitReached--> fin (Blocked)
 ```
 
 0. **Réunion de pré-tâche** (`RunPreTaskMeeting`, ADR 0024/0025) : avant le Worker,
@@ -66,12 +70,21 @@ Alveus-Evaluator --Passed--> Alveus-UserDoc --Done--> RunFinalReviewMeeting (BA 
    workflow (succès). `"KO"` → chaque agent écrit un compte-rendu
    (`BaReport`/`QaReport`/`TechReport`) et `OuterLoopGuard` renvoie vers `RunPreTaskMeeting`
    (`ExtraContext` = ces comptes-rendus), jusqu'à `OuterLoopIterationGuard.MaxIterations` cycles
-   (constante = 3), puis fin de workflow (Blocked). `"NeedsHelp"` → fin de workflow (Blocked).
+   (constante = 3), puis fin de workflow (Blocked).
+8. **`"NeedsHelp"`** (issue globale de `RunPreTaskMeeting` ou `RunFinalReviewMeeting`, ADR 0027) :
+   au lieu de terminer le workflow, `AwaitConversationReply` **suspend réellement** l'exécution via
+   un bookmark Elsa natif — la réunion poste ses questions dans la conversation associée
+   (`item.metadata.kind == "needs_help_question"`), et attend une réponse `user` via
+   `POST /v1/conversations/{id}/items`. La reprise relance la même réunion
+   (`PreTaskHumanReply`/`FinalReviewHumanReply` injectés dans `ExtraContext`) via
+   `PreTaskHelpLoopGuard`/`FinalReviewHelpLoopGuard` (`MaxIterations = 5`), puis fin de workflow
+   (Blocked) si la limite est atteinte.
 
 Le graphe complet est défini en C# dans `AlveusTaskWorkflow`
 (`src/Alveus.Web/Workflows/AlveusTaskWorkflow.cs`), pas via le designer Elsa — cf. ADR 0023 pour le
-cycle Worker/EnvironmentManager/Evaluator et ADR 0024/0025/0026 pour les réunions, Alveus-UserDoc et
-la boucle externe. Ports utilisés :
+cycle Worker/EnvironmentManager/Evaluator, ADR 0024/0025/0026 pour les réunions, Alveus-UserDoc et la
+boucle externe, et ADR 0027 pour l'API de conversation et la suspension `NeedsHelp`. Ports
+utilisés :
 `Done`/`NeedsMoreInfo`/`Blocked`/`Passed`/`Failed`/`Continue`/`LimitReached`/`NeedsHelp`/`OK`/`KO`.
 
 ## 3. Agents
@@ -116,6 +129,11 @@ Alveus-Qa/Alveus-Technical ont en plus accès à `MeetingTool` (`Raise`/`Vote`, 
   Alveus-BusinessAnalyst/Alveus-Qa/Alveus-Technical pendant les réunions (ADR 0024). `Raise(topic,
   comment)` ouvre un point de discussion ; `Vote(topic, decision, comment?)` vote `agree`/`disagree`
   (`comment` obligatoire si `disagree`).
+- **`ConversationAwareStrReplaceEditorTool`** (`src/Alveus.Web/Tools/`, ADR 0027) — wrapper autour
+  de `StrReplaceEditorTool` (ne le modifie pas) : délègue `Execute(...)`, puis si `command !=
+  "view"` et qu'une conversation est active (`IConversationContextAccessor.ConversationId`), poste
+  un item `file_edit` (`agent`/`command`/`path`). Les 7 agents utilisent cette enveloppe au lieu de
+  `StrReplaceEditorTool` directement.
 
 ## 5. Activities (`src/Alveus.Web/Activities/`)
 
@@ -143,6 +161,17 @@ Alveus-Qa/Alveus-Technical ont en plus accès à `MeetingTool` (`Raise`/`Vote`, 
   `"task-fulfilled"` au vu des résumés Worker/EnvironmentManager/Evaluator/UserDoc et de leur
   propre documentation (ADR 0024/0026). Sorties `"OK"`/`"KO"` (+ `BaReport`/`QaReport`/`TechReport`
   si `"KO"`)/`"NeedsHelp"`.
+- **`AwaitConversationReply`** (ADR 0027) — `CodeActivity` qui suspend réellement le workflow via un
+  bookmark Elsa natif (`context.CreateBookmark(new CreateBookmarkArgs { Callback = OnResumeAsync,
+  AutoComplete = false })`) en réponse à une issue `"NeedsHelp"` : poste un item
+  `needs_help_question` (label de source + raison + questions), enregistre
+  `(workflowInstanceId, bookmarkId)` dans `IConversationStore.SetPendingBookmark`, et ne complète
+  pas l'activité. La reprise (`OnResumeAsync`, déclenchée par
+  `IWorkflowClient.RunInstanceAsync(... BookmarkId, Input = { "Reply" = text })`) poste un item
+  `human_reply`, fixe `Output<string> HumanReply`, et complète par `"Done"`. Le `ConversationId` est
+  résolu via `WorkflowExecutionContext.CorrelationId` (seul identifiant stable à travers la
+  suspension/reprise — ⚠ les `Input` du workflow ne survivent pas à la reprise, vérifié
+  empiriquement). Deux instances dans le graphe : `AwaitPreTaskReply`/`AwaitFinalReviewReply`.
 
 ## 6. Services (`src/Alveus.Web/Agents/`)
 
@@ -162,12 +191,17 @@ Alveus-Qa/Alveus-Technical ont en plus accès à `MeetingTool` (`Raise`/`Vote`, 
 
 - **`AlveusTaskWorkflow : WorkflowBase`** — graphe RunPreTaskMeeting → Worker →
   EnvironmentManager → Evaluator (boucle de correction interne) → UserDoc → RunFinalReviewMeeting
-  (boucle externe en cas de KO), enregistré via `elsa.UseWorkflowRuntime(runtime =>
-  runtime.AddWorkflow<AlveusTaskWorkflow>())`. Variables : `TaskPrompt` (entrée),
-  `EnvUsageInstructions`, `FailureReport`, `LoopCount` (ADR 0023) ; `WorkerInstructions`,
-  `EvaluatorInstructions`, `UserDocInstructions` (sorties de `RunPreTaskMeeting`, ADR 0025) ;
-  `BaReport`/`QaReport`/`TechReport` (sorties de `RunFinalReviewMeeting`, ADR 0026) ;
-  `OuterLoopCount` (ADR 0026). ⚠ Toute activité référencée uniquement comme cible d'une
+  (boucle externe en cas de KO ; suspension via bookmark en cas de NeedsHelp, ADR 0027), enregistré
+  via `elsa.UseWorkflowRuntime(runtime => runtime.AddWorkflow<AlveusTaskWorkflow>())`. Variables :
+  `TaskPrompt` (entrée), `EnvUsageInstructions`, `FailureReport`, `LoopCount` (ADR 0023) ;
+  `WorkerInstructions`, `EvaluatorInstructions`, `UserDocInstructions` (sorties de
+  `RunPreTaskMeeting`, ADR 0025) ; `BaReport`/`QaReport`/`TechReport` (sorties de
+  `RunFinalReviewMeeting`, ADR 0026) ; `OuterLoopCount` (ADR 0026) ;
+  `PreTaskHumanReply`/`FinalReviewHumanReply` (sorties de `AwaitPreTaskReply`/`AwaitFinalReviewReply`,
+  intégrées dans `ExtraContext`) et `PreTaskHelpLoopCount`/`FinalReviewHelpLoopCount` (ADR 0027).
+  L'input déclaré `ConversationId` (cf. ADR 0027) n'est lu par aucun code — seul
+  `WorkflowExecutionContext.CorrelationId` (positionné par `ConversationEndpoints` à
+  `CreateInstanceAsync`) fait foi. ⚠ Toute activité référencée uniquement comme cible d'une
   `Connection` doit figurer dans `Flowchart.Activities`, sinon `InvalidOperationException` au
   runtime (cf. ADR 0023).
 - **`LoopIterationGuard`** — `CodeActivity` minimal : incrémente `LoopCount`, sort par
@@ -175,6 +209,38 @@ Alveus-Qa/Alveus-Technical ont en plus accès à `MeetingTool` (`Raise`/`Vote`, 
   Worker/EnvironmentManager/Evaluator (ADR 0023).
 - **`OuterLoopIterationGuard`** — même principe, variable `OuterLoopCount`, `MaxIterations = 3`.
   Borne le cycle externe RunFinalReviewMeeting → RunPreTaskMeeting (ADR 0026).
+- **`HelpLoopIterationGuard`** (ADR 0027) — même principe, `MaxIterations = 5`. Deux instances
+  (`PreTaskHelpLoopGuard`/`FinalReviewHelpLoopGuard`), variables séparées
+  (`PreTaskHelpLoopCount`/`FinalReviewHelpLoopCount`) pour ne pas mélanger les deux budgets de
+  boucle d'aide humaine.
+
+## 7bis. API de conversation et observabilité (`src/Alveus.Web/Conversations/`, ADR 0027)
+
+API HTTP self-hosted au format OpenAI Conversations (sous-ensemble, aucun appel à
+`api.openai.com`) — point d'entrée, canal d'aide humaine et canal d'observabilité pour
+`AlveusTaskWorkflow` :
+
+- **`IConversationStore`/`ConversationStore`** — singleton en mémoire
+  (`ConcurrentDictionary<string, ConversationState>`). Items append-only par conversation
+  (`ConversationItem`/`ConversationItemKind` : `UserMessage`, `AssistantMessage`,
+  `ActivityTransition`, `FileEdit`, `MeetingRound`, `NeedsHelpQuestion`, `HumanReply`), statut
+  (`running|awaiting_input|completed|failed`), bookmark en attente
+  (`SetPendingBookmark`/`TryResolvePendingBookmark`), abonnés SSE (`SubscribeAsync`).
+- **`IConversationContextAccessor`/`ConversationContextAccessor`** — `AsyncLocal<string?>
+  ConversationId`, fixé en tête de `AgentPromptActivityBase.ExecuteAsync`/
+  `MeetingActivityBase.ExecuteAsync` depuis `WorkflowExecutionContext.CorrelationId`. ✓ traverse les
+  `await` d'une même chaîne (`ExecuteAsync → agent.RunAsync → tool call`) ; ne fuite pas entre
+  `Task.Run` indépendants (limitation documentée : une conversation à la fois par chaîne
+  d'exécution).
+- **`ConversationTransitionNotificationHandler`** — poste un item `activity_transition` au
+  démarrage et à la fin de chaque activité suivie du graphe (`TrackedActivityIds`).
+- **`ConversationEndpoints`** — `POST /v1/conversations`, `GET /v1/conversations/{id}`,
+  `GET /v1/conversations/{id}/items`, `POST /v1/conversations/{id}/items`,
+  `GET /v1/conversations/{id}/stream` (SSE). Démarre/reprend le workflow via
+  `IWorkflowRuntime.CreateClientAsync(...)` → `IWorkflowClient.CreateInstanceAsync`/
+  `RunInstanceAsync` (jamais `StartWorkflowAsync`/`ResumeWorkflowAsync`, dépréciées en 3.7.0). La
+  reprise après `"NeedsHelp"` résout `(workflowInstanceId, bookmarkId)` via
+  `IConversationStore.TryResolvePendingBookmark`, posé par `AwaitConversationReply`.
 
 ## 8. Configuration (`appsettings.json`)
 
@@ -218,6 +284,12 @@ tool-calling multi-tours, pas un bug du harnais. ADR 0024 documente le même ris
 réunions multi-agents (`RunPreTaskMeetingTests`/`RunFinalReviewMeetingTests`, fixture commune
 `MeetingFixture`).
 
+Tests ADR 0027 (`Conversations/`, `Activities/AwaitConversationReplyTests.cs`,
+`Tools/ConversationAwareStrReplaceEditorToolTests.cs`, `Workflows/HelpLoopIterationGuardTests.cs`) —
+sans LLM, registre Elsa minimal local (pas la fixture `AlveusTaskWorkflowFixture`). Les handlers
+`internal` de `ConversationEndpoints` sont appelés directement (`InternalsVisibleTo`), sans
+`WebApplicationFactory`.
+
 ---
 
 ## ADR liées
@@ -236,9 +308,12 @@ l'autre) :
 - [0024 — Réunions multi-agents hand-rolled dans Elsa (MeetingActivityBase)](adr/0024-hand-rolled-multi-agent-meetings.md)
 - [0025 — Workspaces imbriqués et instructions inter-agents via FinishTool](adr/0025-nested-workspaces-and-downstream-instructions.md)
 - [0026 — Agent Alveus-UserDoc, réunion finale et boucle de retour sur verdict KO](adr/0026-userdoc-agent-and-final-review-loop.md)
+- [0027 — API de conversation (format OpenAI, self-hosted), observabilité et aide humaine via bookmarks Elsa](adr/0027-conversation-api-and-help-bookmarks.md)
 
 ## Révisions
 
 - 2026-06-14 — création.
 - 2026-06-14 — extension pour les réunions multi-agents (pré-tâche et revue finale),
   Alveus-UserDoc, workspaces imbriqués et boucle externe (ADR 0024/0025/0026).
+- 2026-06-14 — API de conversation au format OpenAI self-hosted, suspension réelle sur
+  "NeedsHelp" via bookmarks Elsa, observabilité (transitions, rounds, édits de fichiers) (ADR 0027).

@@ -32,8 +32,16 @@ namespace Alveus.Web.Workflows;
 /// <item>"OK" termine le workflow (succès). "KO" renvoie à la réunion de pré-tâche avec les
 /// comptes-rendus des 3 participants, via <see cref="OuterLoopIterationGuard"/>.</item>
 /// </list>
-/// "NeedsMoreInfo"/"Blocked"/"NeedsHelp" à n'importe quelle étape terminent le workflow (consigne
-/// insuffisante ou absence de consensus, non rattrapable par une boucle).
+/// "NeedsMoreInfo"/"Blocked" à n'importe quelle étape terminent le workflow (consigne insuffisante
+/// ou absence de consensus, non rattrapable par une boucle) — ce comportement est inchangé pour les
+/// agents individuels (vote NeedsMoreInfo/Blocked).
+/// <para>
+/// "NeedsHelp" (issue globale de <see cref="RunPreTaskMeeting"/> ou <see cref="RunFinalReviewMeeting"/>)
+/// suspend en revanche réellement le workflow via <see cref="Activities.AwaitConversationReply"/> (cf.
+/// ADR 0027) : la réunion poste ses questions dans la conversation associée
+/// (<c>ConversationId</c>), attend une réponse humaine, puis relance la même réunion via
+/// <see cref="HelpLoopIterationGuard"/> (jusqu'à <see cref="HelpLoopIterationGuard.MaxIterations"/>).
+/// </para>
 /// </summary>
 public sealed class AlveusTaskWorkflow : WorkflowBase
 {
@@ -51,6 +59,7 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
         builder.WithDefinitionId("AlveusTaskWorkflow");
 
         builder.WithInput("TaskPrompt", typeof(string), "Consigne initiale de la tâche.");
+        builder.WithInput("ConversationId", typeof(string), "Identifiant de la conversation associée (cf. ADR 0027).");
 
         var envUsageInstructions = builder.WithVariable("EnvUsageInstructions", string.Empty);
         var failureReport = builder.WithVariable<string?>("FailureReport", null);
@@ -69,19 +78,31 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
         var qaReport = builder.WithVariable<string?>("QaReport", null);
         var techReport = builder.WithVariable<string?>("TechReport", null);
 
+        var preTaskReason = builder.WithVariable<string?>("PreTaskReason", null);
+        var preTaskQuestions = builder.WithVariable<IReadOnlyList<string>?>("PreTaskQuestions", null);
+        var preTaskHumanReply = builder.WithVariable("PreTaskHumanReply", string.Empty);
+        var preTaskHelpLoopCount = builder.WithVariable("PreTaskHelpLoopCount", 0);
+
+        var finalReviewReason = builder.WithVariable<string?>("FinalReviewReason", null);
+        var finalReviewQuestions = builder.WithVariable<IReadOnlyList<string>?>("FinalReviewQuestions", null);
+        var finalReviewHumanReply = builder.WithVariable("FinalReviewHumanReply", string.Empty);
+        var finalReviewHelpLoopCount = builder.WithVariable("FinalReviewHelpLoopCount", 0);
+
         var runPreTaskMeeting = new RunPreTaskMeeting(_compactionService)
         {
             Id = "RunPreTaskMeeting",
             Topic = new Input<string>(context => context.GetInput<string>("TaskPrompt")!),
             ExtraContext = new Input<string?>(context =>
             {
-                var reports = new[] { baReport.Get(context), qaReport.Get(context), techReport.Get(context) }
+                var reports = new[] { baReport.Get(context), qaReport.Get(context), techReport.Get(context), preTaskHumanReply.Get(context) }
                     .Where(r => !string.IsNullOrWhiteSpace(r));
                 return string.Join("\n\n---\n", reports);
             }),
             WorkerInstructions = new Output<string>(workerInstructions),
             EvaluatorInstructions = new Output<string>(evaluatorInstructions),
             UserDocInstructions = new Output<string>(userDocInstructions),
+            Reason = new Output<string?>(preTaskReason),
+            Questions = new Output<IReadOnlyList<string>?>(preTaskQuestions),
         };
 
         var runWorker = new RunAgentPrompt(_compactionService, _workVerificationService)
@@ -167,15 +188,48 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
                 + $"\n\n---\nInstructions d'utilisation de l'environnement (Alveus-EnvironmentManager) :\n{envUsageInstructions.Get(context)}"
                 + $"\n\n---\nRésumé Alveus-Evaluator :\n{evaluatorSummary.Get(context)}"
                 + $"\n\n---\nRésumé Alveus-UserDoc :\n{userDocSummary.Get(context)}"),
+            ExtraContext = new Input<string?>(context => finalReviewHumanReply.Get(context) ?? string.Empty),
             BaReport = new Output<string?>(baReport),
             QaReport = new Output<string?>(qaReport),
             TechReport = new Output<string?>(techReport),
+            Reason = new Output<string?>(finalReviewReason),
+            Questions = new Output<IReadOnlyList<string>?>(finalReviewQuestions),
         };
 
         var outerLoopGuard = new OuterLoopIterationGuard
         {
             Id = "OuterLoopGuard",
             OuterLoopCount = outerLoopCount,
+        };
+
+        var awaitPreTaskReply = new AwaitConversationReply
+        {
+            Id = "AwaitPreTaskReply",
+            SourceLabel = new Input<string>("RunPreTaskMeeting"),
+            Reason = new Input<string?>(context => preTaskReason.Get(context)),
+            Questions = new Input<IReadOnlyList<string>?>(context => preTaskQuestions.Get(context)),
+            HumanReply = new Output<string>(preTaskHumanReply),
+        };
+
+        var preTaskHelpGuard = new HelpLoopIterationGuard
+        {
+            Id = "PreTaskHelpLoopGuard",
+            HelpLoopCount = preTaskHelpLoopCount,
+        };
+
+        var awaitFinalReviewReply = new AwaitConversationReply
+        {
+            Id = "AwaitFinalReviewReply",
+            SourceLabel = new Input<string>("RunFinalReviewMeeting"),
+            Reason = new Input<string?>(context => finalReviewReason.Get(context)),
+            Questions = new Input<IReadOnlyList<string>?>(context => finalReviewQuestions.Get(context)),
+            HumanReply = new Output<string>(finalReviewHumanReply),
+        };
+
+        var finalReviewHelpGuard = new HelpLoopIterationGuard
+        {
+            Id = "FinalReviewHelpLoopGuard",
+            HelpLoopCount = finalReviewHelpLoopCount,
         };
 
         builder.Root = new Flowchart
@@ -191,6 +245,10 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
                 runUserDoc,
                 runFinalReviewMeeting,
                 outerLoopGuard,
+                awaitPreTaskReply,
+                preTaskHelpGuard,
+                awaitFinalReviewReply,
+                finalReviewHelpGuard,
             ],
             Connections =
             [
@@ -207,6 +265,14 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
 
                 new Connection(new Endpoint(runFinalReviewMeeting, "KO"), new Endpoint(outerLoopGuard)),
                 new Connection(new Endpoint(outerLoopGuard, "Continue"), new Endpoint(runPreTaskMeeting)),
+
+                new Connection(new Endpoint(runPreTaskMeeting, "NeedsHelp"), new Endpoint(awaitPreTaskReply)),
+                new Connection(new Endpoint(awaitPreTaskReply, "Done"), new Endpoint(preTaskHelpGuard)),
+                new Connection(new Endpoint(preTaskHelpGuard, "Continue"), new Endpoint(runPreTaskMeeting)),
+
+                new Connection(new Endpoint(runFinalReviewMeeting, "NeedsHelp"), new Endpoint(awaitFinalReviewReply)),
+                new Connection(new Endpoint(awaitFinalReviewReply, "Done"), new Endpoint(finalReviewHelpGuard)),
+                new Connection(new Endpoint(finalReviewHelpGuard, "Continue"), new Endpoint(runFinalReviewMeeting)),
             ],
         };
     }

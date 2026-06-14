@@ -1,6 +1,7 @@
 using System.ClientModel;
 using Alveus.Web.Activities;
 using Alveus.Web.Agents;
+using Alveus.Web.Conversations;
 using Alveus.Web.Tools;
 using Alveus.Web.Workflows;
 using Elsa.Extensions;
@@ -27,6 +28,7 @@ builder.Services.AddElsa(elsa =>
         management.AddActivity<RunUserDocPrompt>();
         management.AddActivity<RunPreTaskMeeting>();
         management.AddActivity<RunFinalReviewMeeting>();
+        management.AddActivity<AwaitConversationReply>();
     });
     elsa.UseWorkflowRuntime(runtime => runtime.AddWorkflow<AlveusTaskWorkflow>());
     elsa.UseHttp();
@@ -42,6 +44,12 @@ builder.Services.AddElsa(elsa =>
 });
 builder.Services.AddFastEndpoints();
 builder.Services.AddAuthorization();
+
+// API de conversation au format OpenAI (self-hosted, cf. ADR 0027) : point d'entrée et canal
+// d'aide humaine/observabilité pour AlveusTaskWorkflow.
+builder.Services.AddSingleton<IConversationStore, ConversationStore>();
+builder.Services.AddSingleton<IConversationContextAccessor, ConversationContextAccessor>();
+builder.Services.AddNotificationHandler<ConversationTransitionNotificationHandler>();
 
 // Agent IA branché sur llama.cpp server (endpoint OpenAI-compatible local, cf. ADR 0006).
 var llamaCppEndpoint = builder.Configuration["LlamaCpp:Endpoint"]
@@ -86,7 +94,11 @@ var agentName = builder.Configuration["Agent:Name"]
 builder.Services.AddKeyedSingleton<AIAgent>(agentName, (sp, _) =>
 {
     var cmdRunTool = sp.GetRequiredService<CmdRunTool>();
-    var editorTool = sp.GetRequiredService<StrReplaceEditorTool>();
+    var editorTool = new ConversationAwareStrReplaceEditorTool(
+        sp.GetRequiredService<StrReplaceEditorTool>(),
+        sp.GetRequiredService<IConversationContextAccessor>(),
+        sp.GetRequiredService<IConversationStore>(),
+        "Alveus-Worker");
     var finishTool = sp.GetRequiredService<FinishTool>();
 
     var tools = new List<AITool>
@@ -116,7 +128,11 @@ var environmentManagerAgentName = builder.Configuration["Agent:EnvironmentManage
 builder.Services.AddKeyedSingleton<AIAgent>(environmentManagerAgentName, (sp, _) =>
 {
     var cmdRunTool = sp.GetRequiredService<CmdRunTool>();
-    var editorTool = sp.GetRequiredService<StrReplaceEditorTool>();
+    var editorTool = new ConversationAwareStrReplaceEditorTool(
+        sp.GetRequiredService<StrReplaceEditorTool>(),
+        sp.GetRequiredService<IConversationContextAccessor>(),
+        sp.GetRequiredService<IConversationStore>(),
+        "Alveus-EnvironmentManager");
     var finishTool = sp.GetRequiredService<FinishTool>();
 
     var tools = new List<AITool>
@@ -165,7 +181,11 @@ EvaluatorSkills.CopyInto(evaluatorWorkspaceRoot, builder.Environment.ContentRoot
 builder.Services.AddKeyedSingleton<AIAgent>(evaluatorAgentName, (sp, key) =>
 {
     var cmdRunTool = sp.GetRequiredKeyedService<CmdRunTool>(key);
-    var editorTool = sp.GetRequiredKeyedService<StrReplaceEditorTool>(key);
+    var editorTool = new ConversationAwareStrReplaceEditorTool(
+        sp.GetRequiredKeyedService<StrReplaceEditorTool>(key),
+        sp.GetRequiredService<IConversationContextAccessor>(),
+        sp.GetRequiredService<IConversationStore>(),
+        "Alveus-Evaluator");
     var finishTool = sp.GetRequiredService<FinishTool>();
 
     var tools = new List<AITool>
@@ -228,7 +248,11 @@ builder.Services.AddKeyedSingleton<StrReplaceEditorTool>(userDocAgentName, (_, _
 builder.Services.AddKeyedSingleton<AIAgent>(userDocAgentName, (sp, key) =>
 {
     var cmdRunTool = sp.GetRequiredKeyedService<CmdRunTool>(key);
-    var editorTool = sp.GetRequiredKeyedService<StrReplaceEditorTool>(key);
+    var editorTool = new ConversationAwareStrReplaceEditorTool(
+        sp.GetRequiredKeyedService<StrReplaceEditorTool>(key),
+        sp.GetRequiredService<IConversationContextAccessor>(),
+        sp.GetRequiredService<IConversationStore>(),
+        "Alveus-UserDoc");
     var finishTool = sp.GetRequiredService<FinishTool>();
 
     var tools = new List<AITool>
@@ -266,7 +290,11 @@ builder.Services.AddKeyedSingleton<StrReplaceEditorTool>(technicalAgentName, (_,
 builder.Services.AddKeyedSingleton<AIAgent>(technicalAgentName, (sp, key) =>
 {
     var cmdRunTool = sp.GetRequiredKeyedService<CmdRunTool>(key);
-    var editorTool = sp.GetRequiredKeyedService<StrReplaceEditorTool>(key);
+    var editorTool = new ConversationAwareStrReplaceEditorTool(
+        sp.GetRequiredKeyedService<StrReplaceEditorTool>(key),
+        sp.GetRequiredService<IConversationContextAccessor>(),
+        sp.GetRequiredService<IConversationStore>(),
+        "Alveus-Technical");
     var finishTool = sp.GetRequiredService<FinishTool>();
     var meetingTool = sp.GetRequiredService<MeetingTool>();
 
@@ -308,7 +336,11 @@ builder.Services.AddKeyedSingleton<StrReplaceEditorTool>(qaAgentName, (_, _) => 
 builder.Services.AddKeyedSingleton<AIAgent>(qaAgentName, (sp, key) =>
 {
     var cmdRunTool = sp.GetRequiredKeyedService<CmdRunTool>(key);
-    var editorTool = sp.GetRequiredKeyedService<StrReplaceEditorTool>(key);
+    var editorTool = new ConversationAwareStrReplaceEditorTool(
+        sp.GetRequiredKeyedService<StrReplaceEditorTool>(key),
+        sp.GetRequiredService<IConversationContextAccessor>(),
+        sp.GetRequiredService<IConversationStore>(),
+        "Alveus-Qa");
     var finishTool = sp.GetRequiredService<FinishTool>();
     var meetingTool = sp.GetRequiredService<MeetingTool>();
 
@@ -349,7 +381,11 @@ builder.Services.AddKeyedSingleton<StrReplaceEditorTool>(businessAnalystAgentNam
 builder.Services.AddKeyedSingleton<AIAgent>(businessAnalystAgentName, (sp, key) =>
 {
     var cmdRunTool = sp.GetRequiredKeyedService<CmdRunTool>(key);
-    var editorTool = sp.GetRequiredKeyedService<StrReplaceEditorTool>(key);
+    var editorTool = new ConversationAwareStrReplaceEditorTool(
+        sp.GetRequiredKeyedService<StrReplaceEditorTool>(key),
+        sp.GetRequiredService<IConversationContextAccessor>(),
+        sp.GetRequiredService<IConversationStore>(),
+        "Alveus-BusinessAnalyst");
     var finishTool = sp.GetRequiredService<FinishTool>();
     var meetingTool = sp.GetRequiredService<MeetingTool>();
 
@@ -390,6 +426,8 @@ app.UseAuthorization();
 
 app.UseWorkflows();
 app.UseWorkflowsApi();
+
+app.MapConversationEndpoints();
 
 var summaries = new[]
 {

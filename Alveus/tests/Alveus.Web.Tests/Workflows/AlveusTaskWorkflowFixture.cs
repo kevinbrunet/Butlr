@@ -1,6 +1,7 @@
 using System.ClientModel;
 using Alveus.Web.Activities;
 using Alveus.Web.Agents;
+using Alveus.Web.Conversations;
 using Alveus.Web.Tools;
 using Alveus.Web.Workflows;
 using Elsa.Extensions;
@@ -59,9 +60,14 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
                 management.AddActivity<RunUserDocPrompt>();
                 management.AddActivity<RunPreTaskMeeting>();
                 management.AddActivity<RunFinalReviewMeeting>();
+                management.AddActivity<AwaitConversationReply>();
             });
             elsa.UseWorkflowRuntime(runtime => runtime.AddWorkflow<AlveusTaskWorkflow>());
         });
+
+        // API de conversation (cf. ADR 0027) : mêmes enregistrements que Program.cs.
+        services.AddSingleton<IConversationStore, ConversationStore>();
+        services.AddSingleton<IConversationContextAccessor, ConversationContextAccessor>();
 
         var openAiClient = new OpenAIClient(new ApiKeyCredential("not-needed"), new OpenAIClientOptions
         {
@@ -81,7 +87,11 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
         services.AddKeyedSingleton<AIAgent>(WorkerAgentName, (sp, _) =>
         {
             var cmdRunTool = sp.GetRequiredService<CmdRunTool>();
-            var editorTool = sp.GetRequiredService<StrReplaceEditorTool>();
+            var editorTool = new ConversationAwareStrReplaceEditorTool(
+                sp.GetRequiredService<StrReplaceEditorTool>(),
+                sp.GetRequiredService<IConversationContextAccessor>(),
+                sp.GetRequiredService<IConversationStore>(),
+                "Alveus-Worker");
             var finishTool = sp.GetRequiredService<FinishTool>();
 
             var tools = new List<AITool>
@@ -103,7 +113,11 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
         services.AddKeyedSingleton<AIAgent>(EnvironmentManagerAgentName, (sp, _) =>
         {
             var cmdRunTool = sp.GetRequiredService<CmdRunTool>();
-            var editorTool = sp.GetRequiredService<StrReplaceEditorTool>();
+            var editorTool = new ConversationAwareStrReplaceEditorTool(
+                sp.GetRequiredService<StrReplaceEditorTool>(),
+                sp.GetRequiredService<IConversationContextAccessor>(),
+                sp.GetRequiredService<IConversationStore>(),
+                "Alveus-EnvironmentManager");
             var finishTool = sp.GetRequiredService<FinishTool>();
 
             var tools = new List<AITool>
@@ -138,7 +152,11 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
         services.AddKeyedSingleton<AIAgent>(EvaluatorAgentName, (sp, key) =>
         {
             var cmdRunTool = sp.GetRequiredKeyedService<CmdRunTool>(key);
-            var editorTool = sp.GetRequiredKeyedService<StrReplaceEditorTool>(key);
+            var editorTool = new ConversationAwareStrReplaceEditorTool(
+                sp.GetRequiredKeyedService<StrReplaceEditorTool>(key),
+                sp.GetRequiredService<IConversationContextAccessor>(),
+                sp.GetRequiredService<IConversationStore>(),
+                "Alveus-Evaluator");
             var finishTool = sp.GetRequiredService<FinishTool>();
 
             var tools = new List<AITool>
@@ -192,7 +210,11 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
         services.AddKeyedSingleton<AIAgent>(UserDocAgentName, (sp, key) =>
         {
             var cmdRunTool = sp.GetRequiredKeyedService<CmdRunTool>(key);
-            var editorTool = sp.GetRequiredKeyedService<StrReplaceEditorTool>(key);
+            var editorTool = new ConversationAwareStrReplaceEditorTool(
+                sp.GetRequiredKeyedService<StrReplaceEditorTool>(key),
+                sp.GetRequiredService<IConversationContextAccessor>(),
+                sp.GetRequiredService<IConversationStore>(),
+                "Alveus-UserDoc");
             var finishTool = sp.GetRequiredService<FinishTool>();
 
             var tools = new List<AITool>
@@ -238,7 +260,11 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
         services.AddKeyedSingleton<AIAgent>(agentName, (sp, key) =>
         {
             var cmdRunTool = sp.GetRequiredKeyedService<CmdRunTool>(key);
-            var editorTool = sp.GetRequiredKeyedService<StrReplaceEditorTool>(key);
+            var editorTool = new ConversationAwareStrReplaceEditorTool(
+                sp.GetRequiredKeyedService<StrReplaceEditorTool>(key),
+                sp.GetRequiredService<IConversationContextAccessor>(),
+                sp.GetRequiredService<IConversationStore>(),
+                displayName);
             var finishTool = sp.GetRequiredService<FinishTool>();
             var meetingTool = sp.GetRequiredService<MeetingTool>();
 

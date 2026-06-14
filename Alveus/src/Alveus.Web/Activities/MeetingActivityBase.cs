@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Alveus.Web.Agents;
+using Alveus.Web.Conversations;
 using Alveus.Web.Tools;
 using Elsa.Workflows;
 using Elsa.Workflows.Attributes;
@@ -113,6 +114,10 @@ public abstract class MeetingActivityBase : CodeActivity
 
     protected override async ValueTask ExecuteAsync(ActivityExecutionContext context)
     {
+        var conversationId = context.WorkflowExecutionContext.CorrelationId;
+        context.GetRequiredService<IConversationContextAccessor>().ConversationId = conversationId;
+        var conversationStore = string.IsNullOrEmpty(conversationId) ? null : context.GetRequiredService<IConversationStore>();
+
         var topicText = context.Get(Topic);
         ArgumentException.ThrowIfNullOrWhiteSpace(topicText);
 
@@ -148,6 +153,7 @@ public abstract class MeetingActivityBase : CodeActivity
         for (var round = 1; round <= MaxRounds; round++)
         {
             var confirmedDone = new HashSet<string>();
+            var roundStartIndex = transcript.Count;
 
             foreach (var role in AgentRoles)
             {
@@ -203,6 +209,16 @@ public abstract class MeetingActivityBase : CodeActivity
                             return;
                     }
                 }
+            }
+
+            if (conversationStore is not null && transcript.Count > roundStartIndex)
+            {
+                conversationStore.AddItem(
+                    conversationId!,
+                    "assistant",
+                    string.Join("\n", transcript.Skip(roundStartIndex)),
+                    ConversationItemKind.MeetingRound,
+                    new Dictionary<string, string> { ["meeting"] = GetType().Name, ["round"] = round.ToString() });
             }
 
             var unresolvedAfterCorrection = false;
