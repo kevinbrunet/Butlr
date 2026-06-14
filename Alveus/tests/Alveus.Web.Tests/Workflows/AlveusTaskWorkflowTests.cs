@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Alveus.Web.Activities;
 using Alveus.Web.Conversations;
 using Alveus.Web.Workflows;
@@ -297,5 +298,259 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
 
         _output.WriteLine($"Statut workflow : {result.WorkflowState.Status}, itérations LoopGuard : {loopGuardIteration}, "
             + $"rapport d'échec : {failureReport}");
+    }
+
+    /// <summary>
+    /// Test de bout en bout : demande la création d'une application console .NET "Hello World",
+    /// vérifie que le workflow se termine (<see cref="WorkflowStatus.Finished"/>) puis exécute le
+    /// programme produit (<c>dotnet run</c> dans <see cref="AlveusTaskWorkflowFixture.WorkspaceRoot"/>)
+    /// pour confirmer qu'il affiche bien "Hello World" sur la sortie standard.
+    /// </summary>
+    [Fact]
+    public async Task AlveusTaskWorkflow_HelloWorldConsoleApp_CompletesAndProgramPrintsHelloWorld()
+    {
+        if (!_fixture.IsLlamaCppAvailable)
+        {
+            _output.WriteLine("llama.cpp indisponible sur ALVEUS_TEST_LLAMACPP_ENDPOINT — test ignoré.");
+            return;
+        }
+
+        var workflow = ActivatorUtilities.CreateInstance<AlveusTaskWorkflow>(_fixture.Services);
+
+        var options = new RunWorkflowOptions
+        {
+            Input = new Dictionary<string, object>
+            {
+                ["TaskPrompt"] = "Si tu es Alveus-Worker : à la racine de ton espace de travail, crée une "
+                    + "application console .NET (par exemple avec 'dotnet new console') dont le programme "
+                    + "affiche exactement 'Hello World' (sans virgule) sur la sortie standard, puis appelle "
+                    + "Finish avec outcome='done'. Si tu es Alveus-EnvironmentManager : il n'y a rien à démarrer "
+                    + "pour une application console, appelle directement Finish avec outcome='done' et "
+                    + "verdict='pass'. Si tu es Alveus-Evaluator : appelle directement Finish avec outcome='done' "
+                    + "et verdict='pass'. Si tu es Alveus-UserDoc : appelle directement Finish avec "
+                    + "outcome='done'. " + MeetingParticipantInstructions,
+            },
+        };
+
+        var runner = _fixture.Services.GetRequiredService<IWorkflowRunner>();
+        var result = await runner.RunAsync(workflow, options, CancellationToken.None);
+
+        var outputRegister = result.WorkflowExecutionContext.GetActivityOutputRegister();
+        var workerSummary = outputRegister.FindOutputByActivityId("RunWorker", nameof(RunAgentPrompt.Summary)) as string;
+
+        var allFiles = Directory.GetFiles(_fixture.WorkspaceRoot, "*", SearchOption.AllDirectories);
+        _output.WriteLine($"Statut workflow : {result.WorkflowState.Status}, résumé worker : {workerSummary}");
+        _output.WriteLine($"Fichiers dans l'espace de travail : {string.Join(", ", allFiles.Select(f => Path.GetRelativePath(_fixture.WorkspaceRoot, f)))}");
+
+        Assert.Equal(WorkflowStatus.Finished, result.WorkflowState.Status);
+
+        var csprojPath = allFiles.FirstOrDefault(f => f.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase));
+        Assert.False(string.IsNullOrEmpty(csprojPath), $"Aucun .csproj trouvé dans {_fixture.WorkspaceRoot}.");
+
+        var (exitCode, stdout, stderr) = await RunDotnetAsync(csprojPath, [], TimeSpan.FromMinutes(2));
+
+        _output.WriteLine($"sortie 'dotnet run' (code {exitCode}) : {stdout}{stderr}");
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Hello World", stdout);
+    }
+
+    /// <summary>
+    /// Test de bout en bout : demande la création d'une application console .NET de gestion de
+    /// liste de tâches (to-do list), pilotable via arguments de ligne de commande ('add', 'list',
+    /// 'done'), avec persistance entre exécutions. Vérifie que le workflow se termine
+    /// (<see cref="WorkflowStatus.Finished"/>) puis pilote l'application produite pour confirmer
+    /// que l'ajout, l'affichage et le marquage "terminé" fonctionnent réellement.
+    /// </summary>
+    [Fact]
+    public async Task AlveusTaskWorkflow_TodoListConsoleApp_CompletesAndCliWorks()
+    {
+        if (!_fixture.IsLlamaCppAvailable)
+        {
+            _output.WriteLine("llama.cpp indisponible sur ALVEUS_TEST_LLAMACPP_ENDPOINT — test ignoré.");
+            return;
+        }
+
+        var workflow = ActivatorUtilities.CreateInstance<AlveusTaskWorkflow>(_fixture.Services);
+
+        var options = new RunWorkflowOptions
+        {
+            Input = new Dictionary<string, object>
+            {
+                ["TaskPrompt"] = "Si tu es Alveus-Worker : à la racine de ton espace de travail, crée une "
+                    + "application console .NET de gestion de liste de tâches (to-do list), pilotable "
+                    + "uniquement via des arguments de ligne de commande (pas de mode interactif), avec les "
+                    + "commandes suivantes : 'add <description>' (ajoute une nouvelle tâche non terminée, "
+                    + "avec un identifiant entier commençant à 1 et incrémenté de 1 à chaque ajout) ; "
+                    + "'list' (affiche une ligne par tâche, au format exact '<id> [ ] <description>' pour "
+                    + "une tâche non terminée et '<id> [x] <description>' pour une tâche terminée) ; "
+                    + "'done <id>' (marque la tâche d'identifiant <id> comme terminée). Les tâches doivent "
+                    + "être persistées dans un fichier à côté du projet pour être conservées entre deux "
+                    + "exécutions. Une fois l'application créée et son bon fonctionnement vérifié, appelle "
+                    + "Finish avec outcome='done'. Si tu es Alveus-EnvironmentManager : il n'y a rien à "
+                    + "démarrer pour une application console, appelle directement Finish avec outcome='done' "
+                    + "et verdict='pass'. Si tu es Alveus-Evaluator : appelle directement Finish avec "
+                    + "outcome='done' et verdict='pass'. Si tu es Alveus-UserDoc : appelle directement Finish "
+                    + "avec outcome='done'. " + MeetingParticipantInstructions,
+            },
+        };
+
+        var runner = _fixture.Services.GetRequiredService<IWorkflowRunner>();
+        var result = await runner.RunAsync(workflow, options, CancellationToken.None);
+
+        var outputRegister = result.WorkflowExecutionContext.GetActivityOutputRegister();
+        var workerSummary = outputRegister.FindOutputByActivityId("RunWorker", nameof(RunAgentPrompt.Summary)) as string;
+
+        var allFiles = Directory.GetFiles(_fixture.WorkspaceRoot, "*", SearchOption.AllDirectories);
+        _output.WriteLine($"Statut workflow : {result.WorkflowState.Status}, résumé worker : {workerSummary}");
+        _output.WriteLine($"Fichiers dans l'espace de travail : {string.Join(", ", allFiles.Select(f => Path.GetRelativePath(_fixture.WorkspaceRoot, f)))}");
+
+        Assert.Equal(WorkflowStatus.Finished, result.WorkflowState.Status);
+
+        var csprojPath = allFiles.FirstOrDefault(f => f.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase));
+        Assert.False(string.IsNullOrEmpty(csprojPath), $"Aucun .csproj trouvé dans {_fixture.WorkspaceRoot}.");
+
+        var timeout = TimeSpan.FromMinutes(2);
+
+        var (addExit1, addOut1, addErr1) = await RunDotnetAsync(csprojPath, ["add", "Acheter du lait"], timeout);
+        _output.WriteLine($"add 1 (code {addExit1}) : {addOut1}{addErr1}");
+        Assert.Equal(0, addExit1);
+
+        var (addExit2, addOut2, addErr2) = await RunDotnetAsync(csprojPath, ["add", "Faire les courses"], timeout);
+        _output.WriteLine($"add 2 (code {addExit2}) : {addOut2}{addErr2}");
+        Assert.Equal(0, addExit2);
+
+        var (listExit1, listOut1, listErr1) = await RunDotnetAsync(csprojPath, ["list"], timeout);
+        _output.WriteLine($"list 1 (code {listExit1}) : {listOut1}{listErr1}");
+        Assert.Equal(0, listExit1);
+        Assert.Contains("Acheter du lait", listOut1);
+        Assert.Contains("Faire les courses", listOut1);
+        Assert.DoesNotContain("[x]", listOut1);
+
+        var (doneExit, doneOut, doneErr) = await RunDotnetAsync(csprojPath, ["done", "1"], timeout);
+        _output.WriteLine($"done 1 (code {doneExit}) : {doneOut}{doneErr}");
+        Assert.Equal(0, doneExit);
+
+        var (listExit2, listOut2, listErr2) = await RunDotnetAsync(csprojPath, ["list"], timeout);
+        _output.WriteLine($"list 2 (code {listExit2}) : {listOut2}{listErr2}");
+        Assert.Equal(0, listExit2);
+
+        var lines = listOut2.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var line1 = lines.Single(l => l.Contains("Acheter du lait"));
+        var line2 = lines.Single(l => l.Contains("Faire les courses"));
+        Assert.Contains("[x]", line1);
+        Assert.Contains("[ ]", line2);
+    }
+
+    /// <summary>
+    /// Test de bout en bout sur le pipeline complet (Worker, EnvironmentManager et Evaluator réels,
+    /// sans verdict forcé) : demande une application Web ASP.NET Core de gestion de liste de
+    /// tâches. Vérifie que le workflow se termine, que la tâche atteint <c>RunUserDoc</c> (donc que
+    /// l'Evaluator a rendu un verdict "pass" après avoir écrit et exécuté un jeu de test), qu'un
+    /// projet de tests référençant Microsoft.Playwright a bien été écrit dans l'espace de travail
+    /// de l'Evaluator (cf. skill <c>dotnet-snapshot-testing</c>, ADR 0021), et que ces tests
+    /// d'interface passent réellement lors d'une ré-exécution indépendante (<c>dotnet test</c>).
+    /// ⚠ Pipeline complet incluant l'écriture et l'exécution de tests Playwright (installation des
+    /// navigateurs comprise) — temps d'exécution potentiellement très long et flakiness élevée (cf.
+    /// ADR 0021).
+    /// </summary>
+    [Fact]
+    public async Task AlveusTaskWorkflow_AspNetTodoWebApp_HasWorkingUiTests()
+    {
+        if (!_fixture.IsLlamaCppAvailable)
+        {
+            _output.WriteLine("llama.cpp indisponible sur ALVEUS_TEST_LLAMACPP_ENDPOINT — test ignoré.");
+            return;
+        }
+
+        var workflow = ActivatorUtilities.CreateInstance<AlveusTaskWorkflow>(_fixture.Services);
+
+        var options = new RunWorkflowOptions
+        {
+            Input = new Dictionary<string, object>
+            {
+                ["TaskPrompt"] = "Crée, à la racine de ton espace de travail, une application Web ASP.NET Core "
+                    + "(Razor Pages ou Minimal API avec pages HTML, au choix) de gestion de liste de tâches "
+                    + "(to-do list), avec une page d'accueil unique qui : affiche la liste des tâches "
+                    + "existantes (description + statut terminé/à faire) ; propose un formulaire (champ texte "
+                    + "+ bouton 'Ajouter') pour créer une nouvelle tâche ; permet de marquer une tâche comme "
+                    + "terminée via une case à cocher ou un bouton (rechargement de page accepté). Les tâches "
+                    + "sont conservées en mémoire (pas de base de données). Si tu es Alveus-Worker : une fois "
+                    + "l'application créée et son démarrage local vérifié, appelle Finish avec outcome='done'. "
+                    + "Si tu es Alveus-UserDoc : appelle directement Finish avec outcome='done'. "
+                    + MeetingParticipantInstructions,
+            },
+        };
+
+        var runner = _fixture.Services.GetRequiredService<IWorkflowRunner>();
+        var result = await runner.RunAsync(workflow, options, CancellationToken.None);
+
+        var outputRegister = result.WorkflowExecutionContext.GetActivityOutputRegister();
+        var workerSummary = outputRegister.FindOutputByActivityId("RunWorker", nameof(RunAgentPrompt.Summary)) as string;
+        var envSummary = outputRegister.FindOutputByActivityId("RunEnvironmentManager", nameof(RunEnvironmentPrompt.Summary)) as string;
+        var evaluatorSummary = outputRegister.FindOutputByActivityId("RunEvaluator", nameof(RunEvaluatorPrompt.Summary)) as string;
+        var userDocSummary = outputRegister.FindOutputByActivityId("RunUserDoc", nameof(RunUserDocPrompt.Summary)) as string;
+
+        _output.WriteLine($"Statut workflow : {result.WorkflowState.Status}");
+        _output.WriteLine($"Résumé worker : {workerSummary}");
+        _output.WriteLine($"Résumé environment manager : {envSummary}");
+        _output.WriteLine($"Résumé evaluator : {evaluatorSummary}");
+        _output.WriteLine($"Résumé userdoc : {userDocSummary}");
+
+        Assert.Equal(WorkflowStatus.Finished, result.WorkflowState.Status);
+        Assert.False(string.IsNullOrWhiteSpace(userDocSummary), "Alveus-UserDoc jamais atteint — l'Evaluator n'a probablement pas rendu verdict='pass'.");
+
+        var evaluatorCsprojFiles = Directory.GetFiles(_fixture.EvaluatorWorkspaceRoot, "*.csproj", SearchOption.AllDirectories);
+        _output.WriteLine($"Projets de test trouvés : {string.Join(", ", evaluatorCsprojFiles.Select(f => Path.GetRelativePath(_fixture.EvaluatorWorkspaceRoot, f)))}");
+
+        var playwrightCsproj = evaluatorCsprojFiles.FirstOrDefault(f => File.ReadAllText(f).Contains("Playwright", StringComparison.OrdinalIgnoreCase));
+        Assert.False(string.IsNullOrEmpty(playwrightCsproj), $"Aucun projet de test référençant Playwright trouvé dans {_fixture.EvaluatorWorkspaceRoot}.");
+
+        var (exitCode, stdout, stderr) = await RunDotnetCommandAsync(Path.GetDirectoryName(playwrightCsproj)!, ["test"], TimeSpan.FromMinutes(5));
+        _output.WriteLine($"'dotnet test' (code {exitCode}) : {stdout}{stderr}");
+
+        Assert.Equal(0, exitCode);
+    }
+
+    /// <summary>
+    /// Exécute <c>dotnet run --project &lt;csprojPath&gt; -- &lt;arguments&gt;</c> dans le dossier du
+    /// projet, et retourne le code de sortie ainsi que la sortie standard/erreur.
+    /// </summary>
+    private static Task<(int ExitCode, string StdOut, string StdErr)> RunDotnetAsync(string csprojPath, IEnumerable<string> arguments, TimeSpan timeout)
+    {
+        var dotnetArguments = new List<string> { "run", "--project", csprojPath, "--" };
+        dotnetArguments.AddRange(arguments);
+
+        return RunDotnetCommandAsync(Path.GetDirectoryName(csprojPath)!, dotnetArguments, timeout);
+    }
+
+    /// <summary>
+    /// Exécute <c>dotnet &lt;arguments&gt;</c> dans <paramref name="workingDirectory"/>, et retourne
+    /// le code de sortie ainsi que la sortie standard/erreur.
+    /// </summary>
+    private static async Task<(int ExitCode, string StdOut, string StdErr)> RunDotnetCommandAsync(string workingDirectory, IEnumerable<string> arguments, TimeSpan timeout)
+    {
+        var startInfo = new ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(startInfo);
+        Assert.NotNull(process);
+
+        using var cts = new CancellationTokenSource(timeout);
+        var stdout = await process.StandardOutput.ReadToEndAsync(cts.Token);
+        var stderr = await process.StandardError.ReadToEndAsync(cts.Token);
+        await process.WaitForExitAsync(cts.Token);
+
+        return (process.ExitCode, stdout, stderr);
     }
 }
