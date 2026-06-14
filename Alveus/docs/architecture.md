@@ -121,10 +121,13 @@ Alveus-Qa/Alveus-Technical ont en plus accès à `MeetingTool` (`Raise`/`Vote`, 
 
 ## 4. Tools (`src/Alveus.Web/Tools/`)
 
-- **`CmdRunTool`** — shell persistant (`bash`), `WorkingDirectory` fixé au workspace de l'agent.
-  ⚠ Timeout de 30s : tout process longue durée doit être lancé en arrière-plan (`nohup ... &
-  disown`). Le scoping au workspace n'est qu'un point de départ, pas une garantie (`cd /` reste
-  possible) — cf. ADR 0017.
+- **`CmdRunTool`** — shell persistant (`bash`), `WorkingDirectory`/`--chdir` fixé au workspace de
+  l'agent. ⚠ Timeout de 30s : tout process longue durée doit être lancé en arrière-plan (`nohup
+  ... & disown`). Tourne dans une sandbox `bwrap` (si disponible) confinant l'écriture à
+  `WorkspaceRoot` (+ caches `~/.nuget`/`~/.dotnet`) avec le reste du filesystem en lecture seule,
+  et un namespace PID dédié pour que `Dispose()` tue aussi les process détachés — cette fois une
+  **garantie effective** (cf. ADR 0029, qui remplace le scoping non garanti d'ADR 0017). Si
+  `bwrap` est absent, fallback vers le comportement non sandboxé d'ADR 0017 (log d'avertissement).
 - **`StrReplaceEditorTool`** — lecture/liste/création/modification de fichiers, **confinée** au
   workspace : tout chemin résolu hors de `WorkspaceRoot` est rejeté sans toucher au disque. C'est
   une garantie effective, contrairement à `CmdRunTool` — cf. ADR 0017. Les workspaces imbriqués
@@ -344,6 +347,7 @@ l'autre) :
 - [0026 — Agent Alveus-UserDoc, réunion finale et boucle de retour sur verdict KO](adr/0026-userdoc-agent-and-final-review-loop.md)
 - [0027 — API de conversation (format OpenAI, self-hosted), observabilité et aide humaine via bookmarks Elsa](adr/0027-conversation-api-and-help-bookmarks.md)
 - [0028 — Escalade NeedsMoreInfo/Blocked des agents Worker/EnvironmentManager/Evaluator/UserDoc vers la réunion de pré-tâche](adr/0028-agent-escalation-to-pretask-meeting.md)
+- [0029 — Sandbox effective de CmdRunTool via bubblewrap](adr/0029-cmdruntool-bubblewrap-sandbox.md)
 
 ## Révisions
 
@@ -354,3 +358,6 @@ l'autre) :
   "NeedsHelp" via bookmarks Elsa, observabilité (transitions, rounds, édits de fichiers) (ADR 0027).
 - 2026-06-14 — escalade des issues "NeedsMoreInfo"/"Blocked" de Worker/EnvironmentManager/
   Evaluator/UserDoc vers RunPreTaskMeeting via Record*Escalation/AgentEscalationLoopGuard (ADR 0028).
+- 2026-06-14 — `CmdRunTool` tourne dans une sandbox `bwrap` (filesystem read-only hors
+  `WorkspaceRoot`/caches dotnet, namespace PID dédié) — le scoping au workspace devient une
+  garantie effective au lieu d'une simple commodité (ADR 0029).

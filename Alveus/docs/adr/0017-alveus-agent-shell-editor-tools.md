@@ -47,3 +47,6 @@ Le `WorkspaceRoot` par défaut (dev) est `Alveus/src/Alveus.Web/workspace/`, un 
 ## Révisions
 
 - 2026-06-13 — création.
+- 2026-06-14 — `CmdRunTool` tourne désormais dans une sandbox `bwrap` (filesystem read-only hors
+  `WorkspaceRoot`, namespace PID dédié) qui rend son scoping effectif au lieu d'être "une
+  commodité, pas une sandbox" — cf. [ADR 0029](0029-cmdruntool-bubblewrap-sandbox.md).

@@ -71,7 +71,7 @@ var workspaceRootSetting = builder.Configuration["Agent:WorkspaceRoot"]
 var workspaceRoot = Path.GetFullPath(workspaceRootSetting, builder.Environment.ContentRootPath);
 Directory.CreateDirectory(workspaceRoot);
 
-builder.Services.AddSingleton(_ => new CmdRunTool(workspaceRoot));
+builder.Services.AddSingleton(sp => new CmdRunTool(workspaceRoot, sp.GetRequiredService<ILogger<CmdRunTool>>()));
 builder.Services.AddSingleton(_ => new StrReplaceEditorTool(workspaceRoot));
 builder.Services.AddSingleton<FinishTool>();
 
@@ -171,7 +171,7 @@ var evaluatorWorkspaceRootSetting = builder.Configuration["Agent:EvaluatorWorksp
 var evaluatorWorkspaceRoot = Path.GetFullPath(evaluatorWorkspaceRootSetting, builder.Environment.ContentRootPath);
 Directory.CreateDirectory(evaluatorWorkspaceRoot);
 
-builder.Services.AddKeyedSingleton<CmdRunTool>(evaluatorAgentName, (_, _) => new CmdRunTool(evaluatorWorkspaceRoot));
+builder.Services.AddKeyedSingleton<CmdRunTool>(evaluatorAgentName, (sp, _) => new CmdRunTool(evaluatorWorkspaceRoot, sp.GetRequiredService<ILogger<CmdRunTool>>()));
 builder.Services.AddKeyedSingleton<StrReplaceEditorTool>(evaluatorAgentName, (_, _) => new StrReplaceEditorTool(evaluatorWorkspaceRoot));
 
 // Met à disposition de l'évaluateur les skills méthodologiques du repo (ex. snapshot testing
@@ -242,7 +242,7 @@ var userDocWorkspaceRootSetting = builder.Configuration["Agent:UserDocWorkspaceR
 var userDocWorkspaceRoot = Path.GetFullPath(userDocWorkspaceRootSetting, builder.Environment.ContentRootPath);
 Directory.CreateDirectory(userDocWorkspaceRoot);
 
-builder.Services.AddKeyedSingleton<CmdRunTool>(userDocAgentName, (_, _) => new CmdRunTool(userDocWorkspaceRoot));
+builder.Services.AddKeyedSingleton<CmdRunTool>(userDocAgentName, (sp, _) => new CmdRunTool(userDocWorkspaceRoot, sp.GetRequiredService<ILogger<CmdRunTool>>()));
 builder.Services.AddKeyedSingleton<StrReplaceEditorTool>(userDocAgentName, (_, _) => new StrReplaceEditorTool(userDocWorkspaceRoot));
 
 builder.Services.AddKeyedSingleton<AIAgent>(userDocAgentName, (sp, key) =>
@@ -284,7 +284,7 @@ var technicalWorkspaceSubdir = builder.Configuration["Agent:TechnicalWorkspaceSu
 var technicalWorkspaceRoot = Path.Combine(workspaceRoot, technicalWorkspaceSubdir);
 Directory.CreateDirectory(technicalWorkspaceRoot);
 
-builder.Services.AddKeyedSingleton<CmdRunTool>(technicalAgentName, (_, _) => new CmdRunTool(technicalWorkspaceRoot));
+builder.Services.AddKeyedSingleton<CmdRunTool>(technicalAgentName, (sp, _) => new CmdRunTool(technicalWorkspaceRoot, sp.GetRequiredService<ILogger<CmdRunTool>>()));
 builder.Services.AddKeyedSingleton<StrReplaceEditorTool>(technicalAgentName, (_, _) => new StrReplaceEditorTool(technicalWorkspaceRoot));
 
 builder.Services.AddKeyedSingleton<AIAgent>(technicalAgentName, (sp, key) =>
@@ -330,7 +330,7 @@ var qaWorkspaceSubdir = builder.Configuration["Agent:QaWorkspaceSubdir"]
 var qaWorkspaceRoot = Path.Combine(evaluatorWorkspaceRoot, qaWorkspaceSubdir);
 Directory.CreateDirectory(qaWorkspaceRoot);
 
-builder.Services.AddKeyedSingleton<CmdRunTool>(qaAgentName, (_, _) => new CmdRunTool(qaWorkspaceRoot));
+builder.Services.AddKeyedSingleton<CmdRunTool>(qaAgentName, (sp, _) => new CmdRunTool(qaWorkspaceRoot, sp.GetRequiredService<ILogger<CmdRunTool>>()));
 builder.Services.AddKeyedSingleton<StrReplaceEditorTool>(qaAgentName, (_, _) => new StrReplaceEditorTool(qaWorkspaceRoot));
 
 builder.Services.AddKeyedSingleton<AIAgent>(qaAgentName, (sp, key) =>
@@ -375,7 +375,7 @@ var businessAnalystWorkspaceSubdir = builder.Configuration["Agent:BusinessAnalys
 var businessAnalystWorkspaceRoot = Path.Combine(userDocWorkspaceRoot, businessAnalystWorkspaceSubdir);
 Directory.CreateDirectory(businessAnalystWorkspaceRoot);
 
-builder.Services.AddKeyedSingleton<CmdRunTool>(businessAnalystAgentName, (_, _) => new CmdRunTool(businessAnalystWorkspaceRoot));
+builder.Services.AddKeyedSingleton<CmdRunTool>(businessAnalystAgentName, (sp, _) => new CmdRunTool(businessAnalystWorkspaceRoot, sp.GetRequiredService<ILogger<CmdRunTool>>()));
 builder.Services.AddKeyedSingleton<StrReplaceEditorTool>(businessAnalystAgentName, (_, _) => new StrReplaceEditorTool(businessAnalystWorkspaceRoot));
 
 builder.Services.AddKeyedSingleton<AIAgent>(businessAnalystAgentName, (sp, key) =>
