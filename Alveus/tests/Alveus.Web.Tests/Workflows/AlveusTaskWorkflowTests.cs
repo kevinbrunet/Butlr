@@ -504,6 +504,27 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
         _output.WriteLine($"Résumé evaluator : {evaluatorSummary}");
         _output.WriteLine($"Résumé userdoc : {userDocSummary}");
 
+        // Diagnostics en cas d'échec : si l'Evaluator (ou un autre agent) sort par "NeedsMoreInfo"/"Blocked"
+        // au lieu de "Passed", AgentEscalationLoopGuard renvoie vers RunPreTaskMeeting jusqu'à
+        // AgentEscalationLoopGuard.MaxIterations (cf. ADR 0028), puis le workflow se termine sans
+        // jamais atteindre RunUserDoc — sans ces sorties, la cause (quel agent, pourquoi) est invisible.
+        if (string.IsNullOrWhiteSpace(userDocSummary))
+        {
+            var workerReason = outputRegister.FindOutputByActivityId("RunWorker", nameof(RunAgentPrompt.Reason)) as string;
+            var workerQuestions = outputRegister.FindOutputByActivityId("RunWorker", nameof(RunAgentPrompt.Questions)) as IReadOnlyList<string>;
+            var envReason = outputRegister.FindOutputByActivityId("RunEnvironmentManager", nameof(RunEnvironmentPrompt.Reason)) as string;
+            var evaluatorReason = outputRegister.FindOutputByActivityId("RunEvaluator", nameof(RunEvaluatorPrompt.Reason)) as string;
+            var evaluatorQuestions = outputRegister.FindOutputByActivityId("RunEvaluator", nameof(RunEvaluatorPrompt.Questions)) as IReadOnlyList<string>;
+            var escalationIteration = outputRegister.FindOutputByActivityId("AgentEscalationLoopGuard", nameof(AgentEscalationLoopGuard.Iteration));
+
+            _output.WriteLine($"[diag] Reason worker : {workerReason}");
+            _output.WriteLine($"[diag] Questions worker : {(workerQuestions is null ? null : string.Join(" | ", workerQuestions))}");
+            _output.WriteLine($"[diag] Reason environment manager : {envReason}");
+            _output.WriteLine($"[diag] Reason evaluator : {evaluatorReason}");
+            _output.WriteLine($"[diag] Questions evaluator : {(evaluatorQuestions is null ? null : string.Join(" | ", evaluatorQuestions))}");
+            _output.WriteLine($"[diag] Itération AgentEscalationLoopGuard : {escalationIteration}");
+        }
+
         Assert.Equal(WorkflowStatus.Finished, result.WorkflowState.Status);
         Assert.False(string.IsNullOrWhiteSpace(userDocSummary), "Alveus-UserDoc jamais atteint — l'Evaluator n'a probablement pas rendu verdict='pass'.");
 
