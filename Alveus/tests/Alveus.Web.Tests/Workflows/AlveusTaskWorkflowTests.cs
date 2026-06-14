@@ -40,7 +40,7 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
 
         var options = new RunWorkflowOptions
         {
-            Variables = new Dictionary<string, object>
+            Input = new Dictionary<string, object>
             {
                 ["TaskPrompt"] = "Appelle directement ton outil de fin de tâche (Finish) avec outcome='done' et un "
                     + "résumé indiquant qu'il n'y avait rien à faire. Si tu es Alveus-EnvironmentManager ou "
@@ -55,10 +55,6 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
         var workerSummary = outputRegister.FindOutputByActivityId("RunWorker", nameof(RunAgentPrompt.Summary)) as string;
         var envSummary = outputRegister.FindOutputByActivityId("RunEnvironmentManager", nameof(RunEnvironmentPrompt.Summary)) as string;
         var evaluatorSummary = outputRegister.FindOutputByActivityId("RunEvaluator", nameof(RunEvaluatorPrompt.Summary)) as string;
-
-        _output.WriteLine($"DEBUG Status: {result.WorkflowState.Status}, SubStatus: {result.WorkflowState.SubStatus}, incidents: {result.WorkflowState.Incidents.Count}");
-        foreach (var incident in result.WorkflowState.Incidents)
-            _output.WriteLine($"DEBUG incident: {incident.Message} / {incident.Exception}");
 
         Assert.False(string.IsNullOrWhiteSpace(workerSummary));
         Assert.False(string.IsNullOrWhiteSpace(envSummary));
@@ -81,7 +77,7 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
 
         var options = new RunWorkflowOptions
         {
-            Variables = new Dictionary<string, object>
+            Input = new Dictionary<string, object>
             {
                 ["TaskPrompt"] = "Tu es Alveus-Worker. Tu es bloqué : appelle immédiatement Finish avec "
                     + "outcome='blocked' et reason='Consigne ambiguë, impossible de continuer.'.",
@@ -114,7 +110,7 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
 
         var options = new RunWorkflowOptions
         {
-            Variables = new Dictionary<string, object>
+            Input = new Dictionary<string, object>
             {
                 ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle Finish avec outcome='done' et un résumé indiquant "
                     + "qu'il n'y avait rien à faire. Si tu es Alveus-EnvironmentManager, tu es bloqué : appelle "
@@ -151,7 +147,7 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
 
         var options = new RunWorkflowOptions
         {
-            Variables = new Dictionary<string, object>
+            Input = new Dictionary<string, object>
             {
                 ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle Finish avec outcome='done'. Si tu es "
                     + "Alveus-EnvironmentManager, appelle Finish avec outcome='done' et verdict='pass'. Si tu es "
@@ -193,7 +189,7 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
 
         var options = new RunWorkflowOptions
         {
-            Variables = new Dictionary<string, object>
+            Input = new Dictionary<string, object>
             {
                 ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle Finish avec outcome='done' et un résumé indiquant "
                     + "qu'il n'y avait rien à faire, même si un rapport d'évaluation précédent est joint au message. "

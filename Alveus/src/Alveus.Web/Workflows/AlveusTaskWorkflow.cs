@@ -53,7 +53,7 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
             Id = "RunWorker",
             Prompt = new Input<string>(context =>
             {
-                var taskPrompt = context.GetInput<string>("TaskPrompt");
+                var taskPrompt = context.GetInput<string>("TaskPrompt")!;
                 var report = failureReport.Get(context);
                 return string.IsNullOrEmpty(report)
                     ? taskPrompt
@@ -64,7 +64,7 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
         var runEnvironmentManager = new RunEnvironmentPrompt(_compactionService)
         {
             Id = "RunEnvironmentManager",
-            Prompt = new Input<string>(context => context.GetInput<string>("TaskPrompt")),
+            Prompt = new Input<string>(context => context.GetInput<string>("TaskPrompt")!),
             Summary = new Output<string>(envUsageInstructions),
             Reason = new Output<string?>(failureReport),
         };
@@ -86,6 +86,7 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
         builder.Root = new Flowchart
         {
             Start = runWorker,
+            Activities = [runWorker, runEnvironmentManager, runEvaluator, loopGuard],
             Connections =
             [
                 new Connection(new Endpoint(runWorker, "Done"), new Endpoint(runEnvironmentManager)),

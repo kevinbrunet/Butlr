@@ -112,6 +112,13 @@ de `elsa.UseWorkflowRuntime(runtime => runtime.AddWorkflow<T>())`.
    directement sur les variables `EnvUsageInstructions`/`FailureReport` via
    `new Output<T>(variable)`, sans code de câblage explicite.
 
+   ✓ `Flowchart` (`Elsa.Workflows.Activities.Container`) expose une collection `Activities`
+   distincte de `Start`/`Connections` : toute activité référencée uniquement comme cible d'une
+   `Connection` (donc pas `Start`) **doit** y figurer, sinon le scheduler lève
+   `InvalidOperationException: "The specified activity is not part of the workflow."` au moment
+   de router vers cette activité. `AlveusTaskWorkflow` déclare donc
+   `Activities = [runWorker, runEnvironmentManager, runEvaluator, loopGuard]`.
+
 6. **`LoopIterationGuard`** (`Alveus.Web.Workflows`), `CodeActivity` minimal : incrémente
    `LoopCount` et complète avec `"Continue"` tant que `LoopCount <= MaxIterations` (constante = 5),
    sinon `"LimitReached"`. Garde-fou global distinct du `MaxIterations` interne à chaque activité
@@ -182,3 +189,10 @@ de `elsa.UseWorkflowRuntime(runtime => runtime.AddWorkflow<T>())`.
   "Continue" → "LimitReached") et, dans `AlveusTaskWorkflowTests`, de tests couvrant le cycle de
   correction complet (`RunEnvironmentManager` en échec permanent jusqu'à `LimitReached`) et les
   issues "Blocked" à chaque étape (Worker, EnvironmentManager, Evaluator).
+- 2026-06-14 — `AlveusTaskWorkflowTests` exécutés contre un vrai serveur llama.cpp (Qwen3.6 35B) :
+  les 5 tests passent. Au passage, deux corrections nécessaires pour que l'exécution réelle
+  fonctionne (pas seulement la compilation) : `TaskPrompt` doit être déclaré via
+  `builder.WithInput(...)` et lu via `context.GetInput<string>(...)` (un
+  `builder.WithVariable("TaskPrompt", ...)` n'est pas alimenté par
+  `RunWorkflowOptions.Input`/`Variables`) ; et `Flowchart.Activities` doit lister explicitement
+  toutes les activités non-`Start` (cf. point 5).
