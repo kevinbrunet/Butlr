@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 using Alveus.Web.Activities;
 using Alveus.Web.Conversations;
 using Alveus.Web.Workflows;
@@ -523,6 +524,30 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
             _output.WriteLine($"[diag] Reason evaluator : {evaluatorReason}");
             _output.WriteLine($"[diag] Questions evaluator : {(evaluatorQuestions is null ? null : string.Join(" | ", evaluatorQuestions))}");
             _output.WriteLine($"[diag] Itération AgentEscalationLoopGuard : {escalationIteration}");
+
+            // Liste brute (réflexion) des (ActivityId, OutputName) pour lesquels une sortie a été
+            // enregistrée — permet de voir jusqu'où le flowchart a réellement progressé même quand
+            // les accesseurs typés ci-dessus renvoient tous null/vide.
+            var recordsField = outputRegister.GetType().GetField("_recordsByActivityIdAndOutputName", BindingFlags.NonPublic | BindingFlags.Instance);
+            if (recordsField?.GetValue(outputRegister) is System.Collections.IDictionary records)
+            {
+                var keys = records.Keys.Cast<object>().Select(k => k.ToString());
+                _output.WriteLine($"[diag] Sorties enregistrées (ActivityId:OutputName) : {string.Join(", ", keys)}");
+            }
+
+            // SubStatus + incidents : un incident (ex. exception non gérée dans une activité)
+            // laisse WorkflowStatus="Finished" mais SubStatus peut signaler "Faulted" — invisible
+            // sans ça.
+            _output.WriteLine($"[diag] SubStatus workflow : {result.WorkflowState.SubStatus}");
+            foreach (var incident in result.WorkflowState.Incidents)
+            {
+                _output.WriteLine($"[diag] Incident sur {incident.ActivityId} ({incident.ActivityType}) : {incident.Message}");
+                if (incident.Exception is not null)
+                {
+                    _output.WriteLine($"[diag]   Exception : {incident.Exception.Type} - {incident.Exception.Message}");
+                    _output.WriteLine($"[diag]   StackTrace : {incident.Exception.StackTrace}");
+                }
+            }
         }
 
         Assert.Equal(WorkflowStatus.Finished, result.WorkflowState.Status);
