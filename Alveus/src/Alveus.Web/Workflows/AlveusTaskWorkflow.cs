@@ -31,10 +31,14 @@ namespace Alveus.Web.Workflows;
 /// la tâche est correctement remplie.</item>
 /// <item>"OK" termine le workflow (succès). "KO" renvoie à la réunion de pré-tâche avec les
 /// comptes-rendus des 3 participants, via <see cref="OuterLoopIterationGuard"/>.</item>
+/// <item>"NeedsMoreInfo"/"Blocked" issus de <see cref="RunAgentPrompt"/> (Worker),
+/// <see cref="RunEnvironmentPrompt"/> (EnvironmentManager), <see cref="RunEvaluatorPrompt"/>
+/// (Evaluator) ou <see cref="RunUserDocPrompt"/> (UserDoc) sont mis en forme par
+/// <see cref="RecordAgentEscalation"/> puis renvoient à <see cref="RunPreTaskMeeting"/> (via
+/// <see cref="AgentEscalationLoopGuard"/>, jusqu'à <see cref="AgentEscalationLoopGuard.MaxIterations"/>)
+/// pour qu'Alveus-BusinessAnalyst/Alveus-Qa/Alveus-Technical traitent le sujet conjointement (cf.
+/// ADR 0028).</item>
 /// </list>
-/// "NeedsMoreInfo"/"Blocked" à n'importe quelle étape terminent le workflow (consigne insuffisante
-/// ou absence de consensus, non rattrapable par une boucle) — ce comportement est inchangé pour les
-/// agents individuels (vote NeedsMoreInfo/Blocked).
 /// <para>
 /// "NeedsHelp" (issue globale de <see cref="RunPreTaskMeeting"/> ou <see cref="RunFinalReviewMeeting"/>)
 /// suspend en revanche réellement le workflow via <see cref="Activities.AwaitConversationReply"/> (cf.
@@ -88,13 +92,26 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
         var finalReviewHumanReply = builder.WithVariable("FinalReviewHumanReply", string.Empty);
         var finalReviewHelpLoopCount = builder.WithVariable("FinalReviewHelpLoopCount", 0);
 
+        var workerEscalationReason = builder.WithVariable<string?>("WorkerEscalationReason", null);
+        var workerEscalationQuestions = builder.WithVariable<IReadOnlyList<string>?>("WorkerEscalationQuestions", null);
+        var envManagerEscalationQuestions = builder.WithVariable<IReadOnlyList<string>?>("EnvManagerEscalationQuestions", null);
+        var evaluatorEscalationQuestions = builder.WithVariable<IReadOnlyList<string>?>("EvaluatorEscalationQuestions", null);
+        var userDocEscalationReason = builder.WithVariable<string?>("UserDocEscalationReason", null);
+        var userDocEscalationQuestions = builder.WithVariable<IReadOnlyList<string>?>("UserDocEscalationQuestions", null);
+        var agentEscalationReport = builder.WithVariable<string?>("AgentEscalationReport", null);
+        var agentEscalationLoopCount = builder.WithVariable("AgentEscalationLoopCount", 0);
+
         var runPreTaskMeeting = new RunPreTaskMeeting(_compactionService)
         {
             Id = "RunPreTaskMeeting",
             Topic = new Input<string>(context => context.GetInput<string>("TaskPrompt")!),
             ExtraContext = new Input<string?>(context =>
             {
-                var reports = new[] { baReport.Get(context), qaReport.Get(context), techReport.Get(context), preTaskHumanReply.Get(context) }
+                var reports = new[]
+                    {
+                        baReport.Get(context), qaReport.Get(context), techReport.Get(context), preTaskHumanReply.Get(context),
+                        agentEscalationReport.Get(context),
+                    }
                     .Where(r => !string.IsNullOrWhiteSpace(r));
                 return string.Join("\n\n---\n", reports);
             }),
@@ -128,6 +145,8 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
                 return result;
             }),
             Summary = new Output<string>(workerSummary),
+            Reason = new Output<string?>(workerEscalationReason),
+            Questions = new Output<IReadOnlyList<string>?>(workerEscalationQuestions),
         };
 
         var runEnvironmentManager = new RunEnvironmentPrompt(_compactionService)
@@ -136,6 +155,7 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
             Prompt = new Input<string>(context => context.GetInput<string>("TaskPrompt")!),
             Summary = new Output<string>(envUsageInstructions),
             Reason = new Output<string?>(failureReport),
+            Questions = new Output<IReadOnlyList<string>?>(envManagerEscalationQuestions),
         };
 
         var runEvaluator = new RunEvaluatorPrompt(_compactionService)
@@ -154,6 +174,7 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
             }),
             Summary = new Output<string>(evaluatorSummary),
             Reason = new Output<string?>(failureReport),
+            Questions = new Output<IReadOnlyList<string>?>(evaluatorEscalationQuestions),
         };
 
         var loopGuard = new LoopIterationGuard
@@ -177,6 +198,8 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
                 return result;
             }),
             Summary = new Output<string>(userDocSummary),
+            Reason = new Output<string?>(userDocEscalationReason),
+            Questions = new Output<IReadOnlyList<string>?>(userDocEscalationQuestions),
         };
 
         var runFinalReviewMeeting = new RunFinalReviewMeeting(_compactionService)
@@ -232,6 +255,48 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
             HelpLoopCount = finalReviewHelpLoopCount,
         };
 
+        var recordWorkerEscalation = new RecordAgentEscalation
+        {
+            Id = "RecordWorkerEscalation",
+            SourceLabel = new Input<string>("Alveus-Worker"),
+            Reason = new Input<string?>(context => workerEscalationReason.Get(context)),
+            Questions = new Input<IReadOnlyList<string>?>(context => workerEscalationQuestions.Get(context)),
+            Report = agentEscalationReport,
+        };
+
+        var recordEnvironmentManagerEscalation = new RecordAgentEscalation
+        {
+            Id = "RecordEnvironmentManagerEscalation",
+            SourceLabel = new Input<string>("Alveus-EnvironmentManager"),
+            Reason = new Input<string?>(context => failureReport.Get(context)),
+            Questions = new Input<IReadOnlyList<string>?>(context => envManagerEscalationQuestions.Get(context)),
+            Report = agentEscalationReport,
+        };
+
+        var recordEvaluatorEscalation = new RecordAgentEscalation
+        {
+            Id = "RecordEvaluatorEscalation",
+            SourceLabel = new Input<string>("Alveus-Evaluator"),
+            Reason = new Input<string?>(context => failureReport.Get(context)),
+            Questions = new Input<IReadOnlyList<string>?>(context => evaluatorEscalationQuestions.Get(context)),
+            Report = agentEscalationReport,
+        };
+
+        var recordUserDocEscalation = new RecordAgentEscalation
+        {
+            Id = "RecordUserDocEscalation",
+            SourceLabel = new Input<string>("Alveus-UserDoc"),
+            Reason = new Input<string?>(context => userDocEscalationReason.Get(context)),
+            Questions = new Input<IReadOnlyList<string>?>(context => userDocEscalationQuestions.Get(context)),
+            Report = agentEscalationReport,
+        };
+
+        var agentEscalationLoopGuard = new AgentEscalationLoopGuard
+        {
+            Id = "AgentEscalationLoopGuard",
+            AgentEscalationLoopCount = agentEscalationLoopCount,
+        };
+
         builder.Root = new Flowchart
         {
             Start = runPreTaskMeeting,
@@ -249,6 +314,11 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
                 preTaskHelpGuard,
                 awaitFinalReviewReply,
                 finalReviewHelpGuard,
+                recordWorkerEscalation,
+                recordEnvironmentManagerEscalation,
+                recordEvaluatorEscalation,
+                recordUserDocEscalation,
+                agentEscalationLoopGuard,
             ],
             Connections =
             [
@@ -273,6 +343,21 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
                 new Connection(new Endpoint(runFinalReviewMeeting, "NeedsHelp"), new Endpoint(awaitFinalReviewReply)),
                 new Connection(new Endpoint(awaitFinalReviewReply, "Done"), new Endpoint(finalReviewHelpGuard)),
                 new Connection(new Endpoint(finalReviewHelpGuard, "Continue"), new Endpoint(runFinalReviewMeeting)),
+
+                new Connection(new Endpoint(runWorker, "NeedsMoreInfo"), new Endpoint(recordWorkerEscalation)),
+                new Connection(new Endpoint(runWorker, "Blocked"), new Endpoint(recordWorkerEscalation)),
+                new Connection(new Endpoint(runEnvironmentManager, "NeedsMoreInfo"), new Endpoint(recordEnvironmentManagerEscalation)),
+                new Connection(new Endpoint(runEnvironmentManager, "Blocked"), new Endpoint(recordEnvironmentManagerEscalation)),
+                new Connection(new Endpoint(runEvaluator, "NeedsMoreInfo"), new Endpoint(recordEvaluatorEscalation)),
+                new Connection(new Endpoint(runEvaluator, "Blocked"), new Endpoint(recordEvaluatorEscalation)),
+                new Connection(new Endpoint(runUserDoc, "NeedsMoreInfo"), new Endpoint(recordUserDocEscalation)),
+                new Connection(new Endpoint(runUserDoc, "Blocked"), new Endpoint(recordUserDocEscalation)),
+
+                new Connection(new Endpoint(recordWorkerEscalation, "Done"), new Endpoint(agentEscalationLoopGuard)),
+                new Connection(new Endpoint(recordEnvironmentManagerEscalation, "Done"), new Endpoint(agentEscalationLoopGuard)),
+                new Connection(new Endpoint(recordEvaluatorEscalation, "Done"), new Endpoint(agentEscalationLoopGuard)),
+                new Connection(new Endpoint(recordUserDocEscalation, "Done"), new Endpoint(agentEscalationLoopGuard)),
+                new Connection(new Endpoint(agentEscalationLoopGuard, "Continue"), new Endpoint(runPreTaskMeeting)),
             ],
         };
     }

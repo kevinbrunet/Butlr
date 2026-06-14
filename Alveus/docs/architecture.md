@@ -38,6 +38,11 @@ Alveus-Evaluator --Passed--> Alveus-UserDoc --Done--> RunFinalReviewMeeting (BA 
                                                           --NeedsHelp--> AwaitFinalReviewReply --Done--> FinalReviewHelpLoopGuard
                                                                                                           --Continue--> RunFinalReviewMeeting
                                                                                                           --LimitReached--> fin (Blocked)
+
+Alveus-Worker / Alveus-EnvironmentManager / Alveus-Evaluator / Alveus-UserDoc
+  --NeedsMoreInfo/Blocked--> Record*Escalation --Done--> AgentEscalationLoopGuard
+                                                            --Continue--> RunPreTaskMeeting
+                                                            --LimitReached--> fin (Blocked)
 ```
 
 0. **Réunion de pré-tâche** (`RunPreTaskMeeting`, ADR 0024/0025) : avant le Worker,
@@ -79,12 +84,20 @@ Alveus-Evaluator --Passed--> Alveus-UserDoc --Done--> RunFinalReviewMeeting (BA 
    (`PreTaskHumanReply`/`FinalReviewHumanReply` injectés dans `ExtraContext`) via
    `PreTaskHelpLoopGuard`/`FinalReviewHelpLoopGuard` (`MaxIterations = 5`), puis fin de workflow
    (Blocked) si la limite est atteinte.
+9. **`"NeedsMoreInfo"`/`"Blocked"` d'un agent individuel** (Alveus-Worker,
+   Alveus-EnvironmentManager, Alveus-Evaluator ou Alveus-UserDoc, ADR 0028) : au lieu de terminer le
+   workflow, `Record*Escalation` met en forme `Reason`/`Questions` de l'agent dans
+   `AgentEscalationReport` (préfixé par le nom de l'agent), puis `AgentEscalationLoopGuard`
+   (`MaxIterations = 3`, budget séparé de `OuterLoopIterationGuard`) renvoie à `RunPreTaskMeeting`
+   (`AgentEscalationReport` injecté dans `ExtraContext`) pour qu'Alveus-BusinessAnalyst/Alveus-Qa/
+   Alveus-Technical traitent le sujet conjointement, jusqu'à `MaxIterations` cycles, puis fin de
+   workflow (Blocked) si la limite est atteinte.
 
 Le graphe complet est défini en C# dans `AlveusTaskWorkflow`
 (`src/Alveus.Web/Workflows/AlveusTaskWorkflow.cs`), pas via le designer Elsa — cf. ADR 0023 pour le
 cycle Worker/EnvironmentManager/Evaluator, ADR 0024/0025/0026 pour les réunions, Alveus-UserDoc et la
-boucle externe, et ADR 0027 pour l'API de conversation et la suspension `NeedsHelp`. Ports
-utilisés :
+boucle externe, ADR 0027 pour l'API de conversation et la suspension `NeedsHelp`, et ADR 0028 pour
+l'escalade des agents individuels vers la réunion de pré-tâche. Ports utilisés :
 `Done`/`NeedsMoreInfo`/`Blocked`/`Passed`/`Failed`/`Continue`/`LimitReached`/`NeedsHelp`/`OK`/`KO`.
 
 ## 3. Agents
@@ -198,7 +211,12 @@ Alveus-Qa/Alveus-Technical ont en plus accès à `MeetingTool` (`Raise`/`Vote`, 
   `RunPreTaskMeeting`, ADR 0025) ; `BaReport`/`QaReport`/`TechReport` (sorties de
   `RunFinalReviewMeeting`, ADR 0026) ; `OuterLoopCount` (ADR 0026) ;
   `PreTaskHumanReply`/`FinalReviewHumanReply` (sorties de `AwaitPreTaskReply`/`AwaitFinalReviewReply`,
-  intégrées dans `ExtraContext`) et `PreTaskHelpLoopCount`/`FinalReviewHelpLoopCount` (ADR 0027).
+  intégrées dans `ExtraContext`) et `PreTaskHelpLoopCount`/`FinalReviewHelpLoopCount` (ADR 0027) ;
+  `WorkerEscalationReason`/`WorkerEscalationQuestions`, `EnvManagerEscalationQuestions`,
+  `EvaluatorEscalationQuestions`, `UserDocEscalationReason`/`UserDocEscalationQuestions` (sorties
+  `Reason`/`Questions` de Worker/EnvironmentManager/Evaluator/UserDoc — `Reason` d'EnvironmentManager
+  et Evaluator reste lié à `FailureReport`), `AgentEscalationReport` (sortie de
+  `Record*Escalation`, intégrée dans `ExtraContext`) et `AgentEscalationLoopCount` (ADR 0028).
   L'input déclaré `ConversationId` (cf. ADR 0027) n'est lu par aucun code — seul
   `WorkflowExecutionContext.CorrelationId` (positionné par `ConversationEndpoints` à
   `CreateInstanceAsync`) fait foi. ⚠ Toute activité référencée uniquement comme cible d'une
@@ -213,6 +231,15 @@ Alveus-Qa/Alveus-Technical ont en plus accès à `MeetingTool` (`Raise`/`Vote`, 
   (`PreTaskHelpLoopGuard`/`FinalReviewHelpLoopGuard`), variables séparées
   (`PreTaskHelpLoopCount`/`FinalReviewHelpLoopCount`) pour ne pas mélanger les deux budgets de
   boucle d'aide humaine.
+- **`RecordAgentEscalation`** (ADR 0028) — `CodeActivity` minimal : met en forme
+  `Reason`/`Questions` d'un agent (`SourceLabel` + raison + questions formatées) dans
+  `AgentEscalationReport`, complète par `"Done"`. Quatre instances
+  (`RecordWorkerEscalation`/`RecordEnvironmentManagerEscalation`/`RecordEvaluatorEscalation`/
+  `RecordUserDocEscalation`), une par agent source, toutes écrivant dans la même variable
+  `AgentEscalationReport`.
+- **`AgentEscalationLoopGuard`** (ADR 0028) — même principe que les autres gardes, variable
+  `AgentEscalationLoopCount`, `MaxIterations = 3`. Borne le cycle "escalade d'un agent individuel →
+  RunPreTaskMeeting", budget séparé de `OuterLoopIterationGuard` (cycle "verdict KO → RunPreTaskMeeting").
 
 ## 7bis. API de conversation et observabilité (`src/Alveus.Web/Conversations/`, ADR 0027)
 
@@ -290,6 +317,13 @@ sans LLM, registre Elsa minimal local (pas la fixture `AlveusTaskWorkflowFixture
 `internal` de `ConversationEndpoints` sont appelés directement (`InternalsVisibleTo`), sans
 `WebApplicationFactory`.
 
+Tests ADR 0028 (`Workflows/RecordAgentEscalationTests.cs`, `Workflows/AgentEscalationLoopGuardTests.cs`)
+— sans LLM, même registre Elsa minimal local. Les 3 tests gated existants vérifiant qu'un
+`"Blocked"` individuel termine le workflow (`AlveusTaskWorkflow_WorkerBlocked_*`,
+`..._EnvironmentManagerBlocked_*`, `..._EvaluatorBlocked_*`) bouclent désormais jusqu'à
+`AgentEscalationLoopGuard.MaxIterations + 1` cycles via `RunPreTaskMeeting` avant de réellement se
+terminer — ~4× plus lents, flakiness accrue (ADR 0021/0028).
+
 ---
 
 ## ADR liées
@@ -309,6 +343,7 @@ l'autre) :
 - [0025 — Workspaces imbriqués et instructions inter-agents via FinishTool](adr/0025-nested-workspaces-and-downstream-instructions.md)
 - [0026 — Agent Alveus-UserDoc, réunion finale et boucle de retour sur verdict KO](adr/0026-userdoc-agent-and-final-review-loop.md)
 - [0027 — API de conversation (format OpenAI, self-hosted), observabilité et aide humaine via bookmarks Elsa](adr/0027-conversation-api-and-help-bookmarks.md)
+- [0028 — Escalade NeedsMoreInfo/Blocked des agents Worker/EnvironmentManager/Evaluator/UserDoc vers la réunion de pré-tâche](adr/0028-agent-escalation-to-pretask-meeting.md)
 
 ## Révisions
 
@@ -317,3 +352,5 @@ l'autre) :
   Alveus-UserDoc, workspaces imbriqués et boucle externe (ADR 0024/0025/0026).
 - 2026-06-14 — API de conversation au format OpenAI self-hosted, suspension réelle sur
   "NeedsHelp" via bookmarks Elsa, observabilité (transitions, rounds, édits de fichiers) (ADR 0027).
+- 2026-06-14 — escalade des issues "NeedsMoreInfo"/"Blocked" de Worker/EnvironmentManager/
+  Evaluator/UserDoc vers RunPreTaskMeeting via Record*Escalation/AgentEscalationLoopGuard (ADR 0028).

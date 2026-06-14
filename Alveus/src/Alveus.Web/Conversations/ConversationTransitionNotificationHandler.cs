@@ -35,6 +35,11 @@ public sealed class ConversationTransitionNotificationHandler :
         "AwaitFinalReviewReply",
         "FinalReviewHelpLoopGuard",
         "OuterLoopGuard",
+        "RecordWorkerEscalation",
+        "RecordEnvironmentManagerEscalation",
+        "RecordEvaluatorEscalation",
+        "RecordUserDocEscalation",
+        "AgentEscalationLoopGuard",
     };
 
     private readonly IConversationStore _store;

@@ -79,6 +79,14 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
             + $"résumé worker : {workerSummary}, résumé env : {envSummary}, résumé evaluator : {evaluatorSummary}");
     }
 
+    /// <summary>
+    /// ⚠ Depuis ADR 0028, "Blocked" sur Alveus-Worker renvoie à <c>RunPreTaskMeeting</c> via
+    /// <see cref="RecordAgentEscalation"/>/<see cref="AgentEscalationLoopGuard"/> au lieu de
+    /// terminer immédiatement le workflow. Comme le prompt rebloque Alveus-Worker à chaque
+    /// itération, le workflow boucle jusqu'à <see cref="AgentEscalationLoopGuard.MaxIterations"/>
+    /// avant de réellement se terminer — assertions inchangées (EnvironmentManager jamais atteint),
+    /// mais temps d'exécution ~<c>AgentEscalationLoopGuard.MaxIterations + 1</c> fois plus long.
+    /// </summary>
     [Fact]
     public async Task AlveusTaskWorkflow_WorkerBlocked_EndsWithoutEnvironmentManager()
     {
@@ -113,6 +121,14 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
         _output.WriteLine($"Statut workflow : {result.WorkflowState.Status}, raison worker : {workerReason}");
     }
 
+    /// <summary>
+    /// ⚠ Depuis ADR 0028, "Blocked" sur Alveus-EnvironmentManager renvoie à
+    /// <c>RunPreTaskMeeting</c> via <see cref="RecordAgentEscalation"/>/
+    /// <see cref="AgentEscalationLoopGuard"/> au lieu de terminer immédiatement le workflow. Le
+    /// workflow boucle jusqu'à <see cref="AgentEscalationLoopGuard.MaxIterations"/> avant de
+    /// réellement se terminer — assertions inchangées (Evaluator jamais atteint), mais temps
+    /// d'exécution ~<c>AgentEscalationLoopGuard.MaxIterations + 1</c> fois plus long.
+    /// </summary>
     [Fact]
     public async Task AlveusTaskWorkflow_EnvironmentManagerBlocked_EndsWithoutEvaluator()
     {
@@ -150,6 +166,15 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
         _output.WriteLine($"Statut workflow : {result.WorkflowState.Status}, raison env : {envReason}");
     }
 
+    /// <summary>
+    /// ⚠ Depuis ADR 0028, "Blocked" sur Alveus-Evaluator renvoie à <c>RunPreTaskMeeting</c> via
+    /// <see cref="RecordAgentEscalation"/>/<see cref="AgentEscalationLoopGuard"/> au lieu de
+    /// terminer immédiatement le workflow — <see cref="LoopIterationGuard"/> (cycle interne
+    /// Worker/EnvironmentManager/Evaluator, ADR 0023) reste bien inutilisé (nom du test conservé),
+    /// mais le workflow boucle désormais jusqu'à <see cref="AgentEscalationLoopGuard.MaxIterations"/>
+    /// via le nouveau garde avant de réellement se terminer — temps d'exécution
+    /// ~<c>AgentEscalationLoopGuard.MaxIterations + 1</c> fois plus long.
+    /// </summary>
     [Fact]
     public async Task AlveusTaskWorkflow_EvaluatorBlocked_EndsWithoutLooping()
     {
