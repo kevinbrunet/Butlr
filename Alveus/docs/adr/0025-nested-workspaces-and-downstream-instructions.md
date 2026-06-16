@@ -125,3 +125,8 @@ participé à la réunion — par exemple une contrainte technique découverte e
 ## Révisions
 
 - 2026-06-14 — création.
+- 2026-06-15 — [ADR 0030](0030-generic-specialist-agents.md) généralise Alveus-BusinessAnalyst en
+  un catalogue de rôles "spécialiste" interchangeables/cumulables (`SpecialistRoleCatalog`,
+  `Agent:SpecialistRoleKeys`). La relation d'imbrication des workspaces décrite ici
+  (`{spécialiste} ⊂ Alveus-UserDoc`, `Alveus-Qa ⊂ Alveus-Evaluator`, `Alveus-Technical ⊂
+  Alveus-Worker`) reste valide, simplement généralisée à N spécialistes au lieu d'un seul BA.

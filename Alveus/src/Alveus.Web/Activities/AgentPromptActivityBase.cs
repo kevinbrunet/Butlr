@@ -42,8 +42,11 @@ public abstract class AgentPromptActivityBase : CodeActivity
         AgentName = new Input<string>(defaultAgentName);
     }
 
-    [Input(Description = "Nom de l'agent à appeler (clé d'enregistrement DI, cf. configuration Agent:* ).")]
+    [Input(Description = "Nom de l'agent à appeler (clé d'enregistrement DI, format \"{TeamName}:{role}\").")]
     public Input<string> AgentName { get; set; }
+
+    [Input(Description = "Nom de l'équipe (TeamConfig:Name), utilisé pour résoudre les services DI à clé par équipe (vérification, etc.).")]
+    public Input<string> TeamName { get; set; } = new(string.Empty);
 
     [Input(Description = "Prompt envoyé à l'agent.")]
     public Input<string> Prompt { get; set; } = default!;

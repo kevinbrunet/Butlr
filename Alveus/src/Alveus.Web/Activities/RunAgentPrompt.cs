@@ -2,6 +2,7 @@ using Alveus.Web.Agents;
 using Alveus.Web.Tools;
 using Elsa.Workflows;
 using Elsa.Workflows.Attributes;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Alveus.Web.Activities;
 
@@ -22,18 +23,28 @@ public sealed class RunAgentPrompt : AgentPromptActivityBase
         "La vérification automatique du travail a échoué. Corrige le problème décrit ci-dessous, puis rappelle "
         + "l'outil Finish.\n\n";
 
-    private readonly IAgentWorkVerificationService _workVerificationService;
-
-    public RunAgentPrompt(IAgentSessionCompactionService compactionService, IAgentWorkVerificationService workVerificationService)
+    public RunAgentPrompt(IAgentSessionCompactionService compactionService)
         : base(compactionService, DefaultAgentName)
     {
-        ArgumentNullException.ThrowIfNull(workVerificationService);
-        _workVerificationService = workVerificationService;
     }
 
     protected override async ValueTask<string?> HandleDoneAsync(ActivityExecutionContext context, FinishCall finish)
     {
-        var verification = await _workVerificationService.VerifyAsync(context.CancellationToken);
+        // Résolution tardive : essaie d'abord la clé équipe, se rabat sur le service non-keyed (tests, usage isolé).
+        var sp = context.GetRequiredService<IServiceProvider>();
+        var teamName = context.Get(TeamName);
+        var verificationService = (!string.IsNullOrEmpty(teamName)
+            ? sp.GetKeyedService<IAgentWorkVerificationService>(teamName)
+            : null)
+            ?? sp.GetService<IAgentWorkVerificationService>();
+
+        if (verificationService is null)
+        {
+            await context.CompleteActivityWithOutcomesAsync(["Done"]);
+            return null;
+        }
+
+        var verification = await verificationService.VerifyAsync(context.CancellationToken);
         if (verification.Success)
         {
             await context.CompleteActivityWithOutcomesAsync(["Done"]);

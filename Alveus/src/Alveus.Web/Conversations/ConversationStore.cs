@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Threading.Channels;
+using Alveus.Web.Logging;
 
 namespace Alveus.Web.Conversations;
 
@@ -7,6 +8,9 @@ namespace Alveus.Web.Conversations;
 public sealed class ConversationStore : IConversationStore
 {
     private readonly ConcurrentDictionary<string, ConversationState> _conversations = new();
+    private readonly ITaskLogger _logger;
+
+    public ConversationStore(ITaskLogger logger) => _logger = logger;
 
     public ConversationState Create()
     {
@@ -45,6 +49,7 @@ public sealed class ConversationStore : IConversationStore
             channel.Writer.TryWrite(item);
         }
 
+        _logger.OnItem(item);
         return item;
     }
 
@@ -109,16 +114,19 @@ public sealed class ConversationStore : IConversationStore
 
     public void Complete(string conversationId, bool failed = false)
     {
+        var status = failed ? "failed" : "completed";
         var state = GetRequired(conversationId);
         lock (state.Lock)
         {
-            state.Status = failed ? "failed" : "completed";
+            state.Status = status;
         }
 
         foreach (var channel in state.Subscribers.Values)
         {
             channel.Writer.TryComplete();
         }
+
+        _logger.OnCompleted(conversationId, status);
     }
 
     public async IAsyncEnumerable<ConversationItem> SubscribeAsync(

@@ -45,9 +45,10 @@ Alveus-Worker / Alveus-EnvironmentManager / Alveus-Evaluator / Alveus-UserDoc
                                                             --LimitReached--> fin (Blocked)
 ```
 
-0. **Réunion de pré-tâche** (`RunPreTaskMeeting`, ADR 0024/0025) : avant le Worker,
-   Alveus-BusinessAnalyst/Alveus-Qa/Alveus-Technical lisent `TaskPrompt`, mettent à jour leur
-   documentation respective (règles métier, plan de test, architecture/ADRs), débattent
+0. **Réunion de pré-tâche** (`RunPreTaskMeeting`, ADR 0024/0025/0030) : avant le Worker, les
+   spécialistes configurés (`Teams[].SpecialistRoles`, ex. `{team}:BusinessAnalyst`),
+   `{team}:Qa` et `{team}:Technical` lisent `TaskPrompt`, mettent à jour leur
+   documentation respective (règles métier, UX, plan de test, architecture/ADRs, etc.), débattent
    (`Raise`/`Vote`) et préparent des instructions complémentaires (`WorkerInstructions`,
    `EvaluatorInstructions`, `UserDocInstructions`) pour les étapes en aval. Sortie `"Done"` →
    Worker ; `"NeedsHelp"` → fin (Blocked).
@@ -69,11 +70,11 @@ Alveus-Worker / Alveus-EnvironmentManager / Alveus-Evaluator / Alveus-UserDoc
 6. Verdict `pass` → **Alveus-UserDoc** (ADR 0026) met à jour la documentation utilisateur
    (`Agent:UserDocWorkspaceRoot` + `UserDocInstructions`), sortie `"Done"` →
    **réunion finale** ; `"NeedsMoreInfo"/"Blocked"` → fin de workflow.
-7. **Réunion finale** (`RunFinalReviewMeeting`, ADR 0024/0026) : Alveus-BusinessAnalyst/Alveus-Qa/
-   Alveus-Technical votent sur le topic implicite `"task-fulfilled"` au vu des résumés de
+7. **Réunion finale** (`RunFinalReviewMeeting`, ADR 0024/0026/0030) : les spécialistes configurés,
+   `{team}:Qa` et `{team}:Technical` votent sur le topic implicite `"task-fulfilled"` au vu des résumés de
    Worker/EnvironmentManager/Evaluator/UserDoc et de leur propre documentation. `"OK"` → fin de
    workflow (succès). `"KO"` → chaque agent écrit un compte-rendu
-   (`BaReport`/`QaReport`/`TechReport`) et `OuterLoopGuard` renvoie vers `RunPreTaskMeeting`
+   (`SpecialistReports`/`QaReport`/`TechReport`) et `OuterLoopGuard` renvoie vers `RunPreTaskMeeting`
    (`ExtraContext` = ces comptes-rendus), jusqu'à `OuterLoopIterationGuard.MaxIterations` cycles
    (constante = 3), puis fin de workflow (Blocked).
 8. **`"NeedsHelp"`** (issue globale de `RunPreTaskMeeting` ou `RunFinalReviewMeeting`, ADR 0027) :
@@ -89,9 +90,9 @@ Alveus-Worker / Alveus-EnvironmentManager / Alveus-Evaluator / Alveus-UserDoc
    workflow, `Record*Escalation` met en forme `Reason`/`Questions` de l'agent dans
    `AgentEscalationReport` (préfixé par le nom de l'agent), puis `AgentEscalationLoopGuard`
    (`MaxIterations = 3`, budget séparé de `OuterLoopIterationGuard`) renvoie à `RunPreTaskMeeting`
-   (`AgentEscalationReport` injecté dans `ExtraContext`) pour qu'Alveus-BusinessAnalyst/Alveus-Qa/
-   Alveus-Technical traitent le sujet conjointement, jusqu'à `MaxIterations` cycles, puis fin de
-   workflow (Blocked) si la limite est atteinte.
+   (`AgentEscalationReport` injecté dans `ExtraContext`) pour que les spécialistes configurés,
+   Alveus-Qa et Alveus-Technical traitent le sujet conjointement, jusqu'à `MaxIterations` cycles,
+   puis fin de workflow (Blocked) si la limite est atteinte.
 
 Le graphe complet est défini en C# dans `AlveusTaskWorkflow`
 (`src/Alveus.Web/Workflows/AlveusTaskWorkflow.cs`), pas via le designer Elsa — cf. ADR 0023 pour le
@@ -102,22 +103,24 @@ l'escalade des agents individuels vers la réunion de pré-tâche. Ports utilis�
 
 ## 3. Agents
 
-Sept `ChatClientAgent` (Microsoft.Agents.AI ✓ 1.10.0), enregistrés en DI dans `Program.cs`,
-partageant le même `IChatClient` (llama.cpp) :
+Par équipe (`Teams[].Name`, ex. `"default"`), six `ChatClientAgent` + N spécialistes
+(Microsoft.Agents.AI ✓ 1.10.0), enregistrés en DI dans `Program.cs` sous la clé
+`"{teamName}:{role}"`, partageant le même `IChatClient` (llama.cpp) :
 
-| Agent | Nom config | Workspace | Rôle |
+| Rôle DI | Clé DI | Workspace | Rôle |
 |---|---|---|---|
-| Alveus-Worker | `Agent:Name` | `Agent:WorkspaceRoot` | Exécute la tâche. |
-| Alveus-EnvironmentManager | `Agent:EnvironmentManagerName` | `Agent:WorkspaceRoot` (partagé avec le Worker) | (Re)lance l'environnement local après le Worker. |
-| Alveus-Evaluator | `Agent:EvaluatorName` | `Agent:EvaluatorWorkspaceRoot` (isolé) | Écrit et exécute un jeu de test contre l'environnement, sans accès filesystem au workspace du Worker. |
-| Alveus-UserDoc | `Agent:UserDocName` | `Agent:UserDocWorkspaceRoot` | Met à jour la documentation utilisateur après le verdict `pass` de l'Evaluator (ADR 0026). |
-| Alveus-BusinessAnalyst | `Agent:BusinessAnalystName` | `{UserDocWorkspaceRoot}/{Agent:BusinessAnalystWorkspaceSubdir}` (sous-répertoire de UserDoc) | Règles métier (markdown), participant aux réunions (ADR 0024/0025). |
-| Alveus-Qa | `Agent:QaName` | `{EvaluatorWorkspaceRoot}/{Agent:QaWorkspaceSubdir}` (sous-répertoire de l'Evaluator) | Plan de test (markdown), participant aux réunions (ADR 0024/0025). |
-| Alveus-Technical | `Agent:TechnicalName` | `{WorkspaceRoot}/{Agent:TechnicalWorkspaceSubdir}` (sous-répertoire du Worker) | Documentation d'architecture/ADRs, participant aux réunions (ADR 0024/0025). |
+| Worker | `{team}:Worker` | `Teams[].WorkspaceRoot` | Exécute la tâche. |
+| EnvironmentManager | `{team}:EnvironmentManager` | `Teams[].WorkspaceRoot` (partagé avec le Worker) | (Re)lance l'environnement local après le Worker. |
+| Evaluator | `{team}:Evaluator` | `Teams[].EvaluatorWorkspaceRoot` (isolé) | Écrit et exécute un jeu de test contre l'environnement, sans accès filesystem au workspace du Worker. |
+| UserDoc | `{team}:UserDoc` | `Teams[].UserDocWorkspaceRoot` | Met à jour la documentation utilisateur après le verdict `pass` de l'Evaluator (ADR 0026). |
+| Qa | `{team}:Qa` | `{EvaluatorWorkspaceRoot}/test-plan` (sous-répertoire de l'Evaluator) | Plan de test (markdown), participant aux réunions (ADR 0024/0025). |
+| Technical | `{team}:Technical` | `{WorkspaceRoot}/tech-docs` (sous-répertoire du Worker) | Documentation d'architecture/ADRs, participant aux réunions (ADR 0024/0025). |
+| Spécialistes (`Teams[].SpecialistRoles`, ex. `BusinessAnalyst`) | `{team}:{clé}` (catalogue `SpecialistRoleCatalog`) | `{UserDocWorkspaceRoot}/{WorkspaceSubdir}` (sous-répertoire de UserDoc, un par rôle activé) | Documentation spécialisée (règles métier, UX, etc.), participants aux réunions (ADR 0024/0025/0030). |
 
 Tous partagent les mêmes classes d'outils (`CmdRunTool`, `StrReplaceEditorTool`, `FinishTool`) —
-seule la racine du workspace varie (cf. ADR 0017, ADR 0021, ADR 0025). Alveus-BusinessAnalyst/
-Alveus-Qa/Alveus-Technical ont en plus accès à `MeetingTool` (`Raise`/`Vote`, ADR 0024).
+seule la racine du workspace varie (cf. ADR 0017, ADR 0021, ADR 0025). Les spécialistes
+configurés, Alveus-Qa et Alveus-Technical ont en plus accès à `MeetingTool` (`Raise`/`Vote`, ADR
+0024).
 
 ## 4. Tools (`src/Alveus.Web/Tools/`)
 
@@ -141,15 +144,15 @@ Alveus-Qa/Alveus-Technical ont en plus accès à `MeetingTool` (`Raise`/`Vote`, 
   `downstreamInstructions` optionnel (liste de `DownstreamInstruction { Target, Instruction }`,
   cibles `worker`/`evaluator`/`userdoc`, cf. ADR 0025) pertinent pour Alveus-Technical et
   Alveus-Qa pendant la réunion de pré-tâche.
-- **`MeetingTool`** (`Raise`/`Vote`) — outil de débat/vote exposé uniquement à
-  Alveus-BusinessAnalyst/Alveus-Qa/Alveus-Technical pendant les réunions (ADR 0024). `Raise(topic,
+- **`MeetingTool`** (`Raise`/`Vote`) — outil de débat/vote exposé uniquement aux spécialistes
+  configurés, à Alveus-Qa et à Alveus-Technical pendant les réunions (ADR 0024). `Raise(topic,
   comment)` ouvre un point de discussion ; `Vote(topic, decision, comment?)` vote `agree`/`disagree`
   (`comment` obligatoire si `disagree`).
 - **`ConversationAwareStrReplaceEditorTool`** (`src/Alveus.Web/Tools/`, ADR 0027) — wrapper autour
   de `StrReplaceEditorTool` (ne le modifie pas) : délègue `Execute(...)`, puis si `command !=
   "view"` et qu'une conversation est active (`IConversationContextAccessor.ConversationId`), poste
-  un item `file_edit` (`agent`/`command`/`path`). Les 7 agents utilisent cette enveloppe au lieu de
-  `StrReplaceEditorTool` directement.
+  un item `file_edit` (`agent`/`command`/`path`). Tous les agents utilisent cette enveloppe au lieu
+  de `StrReplaceEditorTool` directement.
 
 ## 5. Activities (`src/Alveus.Web/Activities/`)
 
@@ -165,18 +168,20 @@ Alveus-Qa/Alveus-Technical ont en plus accès à `MeetingTool` (`Raise`/`Vote`, 
   `passOutcome = "Passed"`, sans étape de vérification déterministe (ADR 0021, ADR 0023).
 - **`RunUserDocPrompt`** — implémente `HandleDoneAsync` par une sortie directe `"Done"`, sans
   vérification (ADR 0026), même schéma que `RunEvaluatorPrompt` sans verdict.
-- **`MeetingActivityBase`** — base commune aux réunions multi-agents hand-rolled (ADR 0024) :
-  orchestration round-robin à 3 sessions (`AgentSession::{agentName}`, même mécanisme que
-  `AgentPromptActivityBase`), protocole `Raise`/`Vote`/tally (`MaxRounds = 4`), points
-  d'extension abstraits `GetRoleTask`/`SeedOpenTopics`/`OnAgentFinishAsync`/`FinalizeAsync`.
-- **`RunPreTaskMeeting`** — réunion de pré-tâche : BA/QA/Tech mettent à jour leur documentation
-  (`business-rules/`/`test-plan/`/`tech-docs/`), débattent, et produisent
-  `WorkerInstructions`/`EvaluatorInstructions`/`UserDocInstructions` via
-  `DownstreamInstruction` (ADR 0024/0025). Sorties `"Done"`/`"NeedsHelp"`.
-- **`RunFinalReviewMeeting`** — réunion finale : BA/QA/Tech votent sur le topic implicite
-  `"task-fulfilled"` au vu des résumés Worker/EnvironmentManager/Evaluator/UserDoc et de leur
-  propre documentation (ADR 0024/0026). Sorties `"OK"`/`"KO"` (+ `BaReport`/`QaReport`/`TechReport`
-  si `"KO"`)/`"NeedsHelp"`.
+- **`MeetingActivityBase`** — base commune aux réunions multi-agents hand-rolled (ADR 0024/0030) :
+  orchestration round-robin à N sessions (`AgentSession::{agentName}`, même mécanisme que
+  `AgentPromptActivityBase`) — les spécialistes configurés (`SpecialistRoleKeys`, défaut
+  `["BusinessAnalyst"]`) plus Alveus-Qa et Alveus-Technical —, protocole `Raise`/`Vote`/tally
+  (`MaxRounds = 4`), points d'extension abstraits
+  `GetRoleTask`/`SeedOpenTopics`/`OnAgentFinishAsync`/`FinalizeAsync`.
+- **`RunPreTaskMeeting`** — réunion de pré-tâche : les spécialistes configurés, Alveus-Qa et
+  Alveus-Technical mettent à jour leur documentation (`{subdir}/`/`test-plan/`/`tech-docs/`),
+  débattent, et produisent `WorkerInstructions`/`EvaluatorInstructions`/`UserDocInstructions` via
+  `DownstreamInstruction` (ADR 0024/0025/0030). Sorties `"Done"`/`"NeedsHelp"`.
+- **`RunFinalReviewMeeting`** — réunion finale : les spécialistes configurés, Alveus-Qa et
+  Alveus-Technical votent sur le topic implicite `"task-fulfilled"` au vu des résumés
+  Worker/EnvironmentManager/Evaluator/UserDoc et de leur propre documentation (ADR 0024/0026/0030).
+  Sorties `"OK"`/`"KO"` (+ `SpecialistReports`/`QaReport`/`TechReport` si `"KO"`)/`"NeedsHelp"`.
 - **`AwaitConversationReply`** (ADR 0027) — `CodeActivity` qui suspend réellement le workflow via un
   bookmark Elsa natif (`context.CreateBookmark(new CreateBookmarkArgs { Callback = OnResumeAsync,
   AutoComplete = false })`) en réponse à une issue `"NeedsHelp"` : poste un item
@@ -264,9 +269,10 @@ API HTTP self-hosted au format OpenAI Conversations (sous-ensemble, aucun appel 
   d'exécution).
 - **`ConversationTransitionNotificationHandler`** — poste un item `activity_transition` au
   démarrage et à la fin de chaque activité suivie du graphe (`TrackedActivityIds`).
-- **`ConversationEndpoints`** — `POST /v1/conversations`, `GET /v1/conversations/{id}`,
-  `GET /v1/conversations/{id}/items`, `POST /v1/conversations/{id}/items`,
-  `GET /v1/conversations/{id}/stream` (SSE). Démarre/reprend le workflow via
+- **`ConversationEndpoints`** — routes enregistrées par équipe : `POST /teams/{name}/v1/conversations`,
+  `GET /teams/{name}/v1/conversations/{id}`, `GET .../items`, `POST .../items`, `GET .../stream` (SSE).
+  `teamName` est injecté dans les inputs du workflow (`["TeamName"]`) pour que toutes les activités
+  résolvent leurs agents via la clé DI `"{teamName}:{role}"`. Démarre/reprend le workflow via
   `IWorkflowRuntime.CreateClientAsync(...)` → `IWorkflowClient.CreateInstanceAsync`/
   `RunInstanceAsync` (jamais `StartWorkflowAsync`/`ResumeWorkflowAsync`, dépréciées en 3.7.0). La
   reprise après `"NeedsHelp"` résout `(workflowInstanceId, bookmarkId)` via
@@ -274,26 +280,38 @@ API HTTP self-hosted au format OpenAI Conversations (sous-ensemble, aucun appel 
 
 ## 8. Configuration (`appsettings.json`)
 
-Clés requises (toutes lèvent une `InvalidOperationException` au démarrage si absentes, sauf
-mention contraire) :
+Structure depuis ADR 0031 (remplace l'ancienne section `Agent:*`) :
+
+```json
+{
+  "LlamaCpp": { "Endpoint": "http://...", "Model": "..." },
+  "Teams": [
+    {
+      "Name": "default",
+      "MissionPrompt": "Contexte projet injecté en préfixe de toutes les instructions des agents.",
+      "WorkspaceRoot": "workspace",
+      "EvaluatorWorkspaceRoot": "workspace-evaluator",
+      "UserDocWorkspaceRoot": "workspace-userdoc",
+      "VerificationCommand": null,
+      "SpecialistRoles": [
+        { "Key": "BusinessAnalyst", "AdditionalInstructions": null }
+      ]
+    }
+  ]
+}
+```
 
 | Clé | Rôle |
 |---|---|
-| `LlamaCpp:Endpoint`, `LlamaCpp:Model` | Backend LLM (cf. ADR 0006). |
-| `Agent:Name` | Nom de l'agent Worker (DI + ciblage par `RunAgentPrompt`). |
-| `Agent:WorkspaceRoot` | Racine du workspace Worker/EnvironmentManager (défaut dev : `workspace/`). |
-| `Agent:EnvironmentManagerName` | Nom de l'agent EnvironmentManager. |
-| `Agent:EvaluatorName` | Nom de l'agent Evaluator. |
-| `Agent:EvaluatorWorkspaceRoot` | Racine du workspace isolé de l'Evaluator (défaut dev : `workspace-evaluator/`). |
-| `Agent:VerificationCommand` | Optionnelle — commande de vérification du Worker (ADR 0020). Non configurée = no-op. |
-| `Agent:UserDocName` | Nom de l'agent Alveus-UserDoc (ADR 0026). |
-| `Agent:UserDocWorkspaceRoot` | Racine du workspace Alveus-UserDoc (défaut dev : `workspace-userdoc/`). |
-| `Agent:BusinessAnalystName` | Nom de l'agent Alveus-BusinessAnalyst (ADR 0024/0025). |
-| `Agent:BusinessAnalystWorkspaceSubdir` | Sous-répertoire de `UserDocWorkspaceRoot` réservé à Alveus-BusinessAnalyst (défaut dev : `business-rules`). |
-| `Agent:QaName` | Nom de l'agent Alveus-Qa (ADR 0024/0025). |
-| `Agent:QaWorkspaceSubdir` | Sous-répertoire de `EvaluatorWorkspaceRoot` réservé à Alveus-Qa (défaut dev : `test-plan`). |
-| `Agent:TechnicalName` | Nom de l'agent Alveus-Technical (ADR 0024/0025). |
-| `Agent:TechnicalWorkspaceSubdir` | Sous-répertoire de `WorkspaceRoot` réservé à Alveus-Technical (défaut dev : `tech-docs`). |
+| `LlamaCpp:Endpoint`, `LlamaCpp:Model` | Backend LLM partagé entre toutes les équipes (cf. ADR 0006). |
+| `Teams[].Name` | Identifiant de l'équipe — préfixe des clés DI (`{name}:{role}`) et des routes (`/teams/{name}/v1/conversations`). |
+| `Teams[].MissionPrompt` | Contexte projet injecté en préfixe des instructions système de tous les agents de l'équipe (ADR 0031). |
+| `Teams[].WorkspaceRoot` | Racine du workspace Worker/EnvironmentManager (défaut dev : `workspace/`). |
+| `Teams[].EvaluatorWorkspaceRoot` | Racine du workspace isolé Evaluator + sous-répertoire Qa (défaut dev : `workspace-evaluator/`). |
+| `Teams[].UserDocWorkspaceRoot` | Racine du workspace UserDoc + sous-répertoires spécialistes (défaut dev : `workspace-userdoc/`). |
+| `Teams[].VerificationCommand` | Optionnelle — commande de vérification du Worker (ADR 0020). Non configurée = no-op. |
+| `Teams[].SpecialistRoles[].Key` | Clé du catalogue `SpecialistRoleCatalog` (ADR 0030). Lève `InvalidOperationException` au démarrage si inconnue. |
+| `Teams[].SpecialistRoles[].AdditionalInstructions` | Optionnelle — texte injecté en suffixe des instructions C# du spécialiste (ADR 0031). |
 | `Elsa:Identity:SigningKey` | Signing key pour `UseIdentity()` (API Elsa). |
 
 ## 9. Skills (`skils/`)
@@ -348,6 +366,8 @@ l'autre) :
 - [0027 — API de conversation (format OpenAI, self-hosted), observabilité et aide humaine via bookmarks Elsa](adr/0027-conversation-api-and-help-bookmarks.md)
 - [0028 — Escalade NeedsMoreInfo/Blocked des agents Worker/EnvironmentManager/Evaluator/UserDoc vers la réunion de pré-tâche](adr/0028-agent-escalation-to-pretask-meeting.md)
 - [0029 — Sandbox effective de CmdRunTool via bubblewrap](adr/0029-cmdruntool-bubblewrap-sandbox.md)
+- [0030 — Catalogue de rôles "spécialiste" générique et multi-spécialistes](adr/0030-generic-specialist-agents.md)
+- [0031 — Équipes paramétrables via configuration (multi-team, multi-endpoint)](adr/0031-config-driven-teams.md)
 
 ## Révisions
 
@@ -361,3 +381,8 @@ l'autre) :
 - 2026-06-14 — `CmdRunTool` tourne dans une sandbox `bwrap` (filesystem read-only hors
   `WorkspaceRoot`/caches dotnet, namespace PID dédié) — le scoping au workspace devient une
   garantie effective au lieu d'une simple commodité (ADR 0029).
+- 2026-06-15 — catalogue de rôles spécialistes générique (`SpecialistRoleCatalog`), N spécialistes
+  configurables, `SpecialistReports` en lieu et place du `BaReport` unique (ADR 0030).
+- 2026-06-16 — architecture multi-équipes : section `Teams[]` dans `appsettings.json`, clés DI
+  `{teamName}:{role}`, endpoint `/teams/{name}/v1/conversations` par équipe, `MissionPrompt` et
+  `AdditionalInstructions` per-spécialiste (ADR 0031).

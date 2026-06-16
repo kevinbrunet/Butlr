@@ -27,21 +27,21 @@ public enum MeetingOutcome
 
 /// <summary>
 /// Base commune aux réunions multi-agents hand-rolled (<c>RunPreTaskMeeting</c>,
-/// <c>RunFinalReviewMeeting</c>) — cf. ADR 0024. Orchestre un débat round-robin entre 3
-/// participants (Alveus-BusinessAnalyst, Alveus-Qa, Alveus-Technical), chacun avec sa propre
-/// <see cref="AgentSession"/> persistée (même mécanisme que
-/// <see cref="AgentPromptActivityBase"/> — ADR 0018), outillés avec <see cref="FinishTool"/> et
-/// <see cref="MeetingTool"/> (<c>Raise</c>/<c>Vote</c>).
+/// <c>RunFinalReviewMeeting</c>) — cf. ADR 0024. Orchestre un débat round-robin entre N
+/// participants : les spécialistes configurés (<see cref="SpecialistRoleKeys"/>, cf. ADR 0030),
+/// Alveus-Qa et Alveus-Technical, chacun avec sa propre <see cref="AgentSession"/> persistée
+/// (même mécanisme que <see cref="AgentPromptActivityBase"/> — ADR 0018), outillés avec
+/// <see cref="FinishTool"/> et <see cref="MeetingTool"/> (<c>Raise</c>/<c>Vote</c>).
 ///
-/// Déroulement : à chaque round, les 3 participants s'expriment dans l'ordre BusinessAnalyst → Qa
-/// → Technical. Un <c>Raise(topic, ...)</c> ouvre un topic ; un <c>Vote(topic, decision, ...)</c>
-/// y répond. Un topic ayant reçu un vote des 3 participants est tranché : unanime → résolu et
-/// retiré des topics ouverts ; 2 contre 1 → les votes sont effacés et le topic repasse en "round de
-/// correction" (les participants sont invités à reconsidérer) ; encore 2 contre 1 après correction
-/// → <see cref="MeetingOutcome.NeedsHelp"/> immédiat. La réunion se termine par
-/// <see cref="MeetingOutcome.Done"/> dès qu'un round voit les 3 participants confirmer
-/// "Finish(done)" sans topic ouvert restant, ou par <see cref="MeetingOutcome.NeedsHelp"/> si
-/// <see cref="MaxRounds"/> est atteint.
+/// Déroulement : à chaque round, les participants s'expriment dans l'ordre des spécialistes
+/// configurés, puis Qa, puis Technical. Un <c>Raise(topic, ...)</c> ouvre un topic ; un
+/// <c>Vote(topic, decision, ...)</c> y répond. Un topic ayant reçu un vote de tous les
+/// participants est tranché : unanime → résolu et retiré des topics ouverts ; partagé → les votes
+/// sont effacés et le topic repasse en "round de correction" (les participants sont invités à
+/// reconsidérer) ; encore partagé après correction → <see cref="MeetingOutcome.NeedsHelp"/>
+/// immédiat. La réunion se termine par <see cref="MeetingOutcome.Done"/> dès qu'un round voit tous
+/// les participants confirmer "Finish(done)" sans topic ouvert restant, ou par
+/// <see cref="MeetingOutcome.NeedsHelp"/> si <see cref="MaxRounds"/> est atteint.
 /// </summary>
 public abstract class MeetingActivityBase : CodeActivity
 {
@@ -50,8 +50,6 @@ public abstract class MeetingActivityBase : CodeActivity
     /// <summary>Nombre maximal de rounds de débat avant de sortir en "NeedsHelp".</summary>
     public const int MaxRounds = 4;
 
-    private static readonly string[] AgentRoles = ["BusinessAnalyst", "Qa", "Technical"];
-
     private readonly IAgentSessionCompactionService _compactionService;
 
     protected MeetingActivityBase(IAgentSessionCompactionService compactionService)
@@ -59,19 +57,19 @@ public abstract class MeetingActivityBase : CodeActivity
         ArgumentNullException.ThrowIfNull(compactionService);
         _compactionService = compactionService;
 
-        BusinessAnalystAgentName = new Input<string>("AlveusBusinessAnalyst");
-        QaAgentName = new Input<string>("AlveusQa");
-        TechnicalAgentName = new Input<string>("AlveusTechnical");
+        SpecialistRoleKeys = new Input<IReadOnlyList<string>>(["BusinessAnalyst"]);
+        TeamName = new Input<string>(string.Empty);
     }
 
-    [Input(Description = "Nom de l'agent Alveus-BusinessAnalyst (clé d'enregistrement DI, cf. Agent:BusinessAnalystName).")]
-    public Input<string> BusinessAnalystAgentName { get; set; }
+    [Input(Description = "Clés des rôles spécialistes participant à la réunion (catalogue SpecialistRoleCatalog, cf. Teams[*].SpecialistRoles et ADR 0030/0031).")]
+    public Input<IReadOnlyList<string>> SpecialistRoleKeys { get; set; }
 
-    [Input(Description = "Nom de l'agent Alveus-Qa (clé d'enregistrement DI, cf. Agent:QaName).")]
-    public Input<string> QaAgentName { get; set; }
-
-    [Input(Description = "Nom de l'agent Alveus-Technical (clé d'enregistrement DI, cf. Agent:TechnicalName).")]
-    public Input<string> TechnicalAgentName { get; set; }
+    /// <summary>
+    /// Nom de l'équipe (cf. <c>TeamConfig.Name</c>, ADR 0031) utilisé pour dériver les clés DI des
+    /// agents (<c>"{TeamName}:{role}"</c>). Vide = nommage legacy <c>"Alveus{role}"</c> (tests isolés).
+    /// </summary>
+    [Input(Description = "Nom de l'équipe (TeamConfig:Name). Vide = fallback sur les noms d'agents legacy Alveus*.")]
+    public Input<string> TeamName { get; set; }
 
     [Input(Description = "Sujet de la réunion (ticket / consigne de tâche).")]
     public Input<string> Topic { get; set; } = default!;
@@ -123,17 +121,23 @@ public abstract class MeetingActivityBase : CodeActivity
 
         var extraContext = context.Get(ExtraContext) ?? string.Empty;
 
-        var agentNames = new Dictionary<string, string>
+        var specialistRoleKeys = context.Get(SpecialistRoleKeys) ?? [];
+        var roles = specialistRoleKeys.Concat(["Qa", "Technical"]).ToList();
+
+        var teamName = context.Get(TeamName) ?? string.Empty;
+        var agentNames = new Dictionary<string, string>();
+        foreach (var roleKey in specialistRoleKeys)
         {
-            ["BusinessAnalyst"] = context.Get(BusinessAnalystAgentName) ?? string.Empty,
-            ["Qa"] = context.Get(QaAgentName) ?? string.Empty,
-            ["Technical"] = context.Get(TechnicalAgentName) ?? string.Empty,
-        };
+            agentNames[roleKey] = string.IsNullOrEmpty(teamName) ? "Alveus" + roleKey : $"{teamName}:{roleKey}";
+        }
+
+        agentNames["Qa"] = string.IsNullOrEmpty(teamName) ? "AlveusQa" : $"{teamName}:Qa";
+        agentNames["Technical"] = string.IsNullOrEmpty(teamName) ? "AlveusTechnical" : $"{teamName}:Technical";
 
         var serviceProvider = context.GetRequiredService<IServiceProvider>();
         var agents = new Dictionary<string, AIAgent>();
         var sessions = new Dictionary<string, AgentSession>();
-        foreach (var role in AgentRoles)
+        foreach (var role in roles)
         {
             var agent = serviceProvider.GetRequiredKeyedService<AIAgent>(agentNames[role]);
             agents[role] = agent;
@@ -141,7 +145,7 @@ public abstract class MeetingActivityBase : CodeActivity
         }
 
         var transcript = new List<string>();
-        var lastSeenIndex = AgentRoles.ToDictionary(role => role, _ => 0);
+        var lastSeenIndex = roles.ToDictionary(role => role, _ => 0);
         var topics = new Dictionary<string, MeetingTopicState>();
         foreach (var seeded in SeedOpenTopics())
         {
@@ -155,7 +159,7 @@ public abstract class MeetingActivityBase : CodeActivity
             var confirmedDone = new HashSet<string>();
             var roundStartIndex = transcript.Count;
 
-            foreach (var role in AgentRoles)
+            foreach (var role in roles)
             {
                 var message = BuildMessage(role, round, topicText, extraContext, transcript, lastSeenIndex, topics);
                 lastSeenIndex[role] = transcript.Count;
@@ -224,7 +228,7 @@ public abstract class MeetingActivityBase : CodeActivity
             var unresolvedAfterCorrection = false;
             foreach (var state in topics.Values)
             {
-                if (state.Resolved || state.Votes.Count < AgentRoles.Length)
+                if (state.Resolved || state.Votes.Count < roles.Count)
                 {
                     continue;
                 }
@@ -256,7 +260,7 @@ public abstract class MeetingActivityBase : CodeActivity
             }
 
             var hasOpenTopics = topics.Values.Any(state => !state.Resolved);
-            if (confirmedDone.Count == AgentRoles.Length && !hasOpenTopics)
+            if (confirmedDone.Count == roles.Count && !hasOpenTopics)
             {
                 await FinalizeAsync(context, MeetingOutcome.Done, BuildTallies(topics), finishSummaries);
                 return;

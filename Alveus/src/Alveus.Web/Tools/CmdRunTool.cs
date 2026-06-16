@@ -167,6 +167,14 @@ public sealed class CmdRunTool : IDisposable
         {
             return $"[timeout après {CommandTimeout.TotalSeconds}s — la commande continue peut-être en arrière-plan et perturber l'appel suivant]";
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return $"Erreur shell : {ex.Message}";
+        }
         finally
         {
             _lock.Release();

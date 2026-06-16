@@ -38,6 +38,7 @@ public sealed class RunPreTaskMeetingTests : IClassFixture<MeetingFixture>
 
         var activity = ActivatorUtilities.CreateInstance<RunPreTaskMeeting>(_fixture.Services);
         activity.Id = activityId;
+        activity.TeamName = new Input<string>(MeetingFixture.TeamName);
         activity.Topic = new Input<string>(
             "Ticket : aucune mise à jour de documentation n'est nécessaire pour ce ticket. Quel que soit ton rôle, "
             + "n'utilise pas Raise et appelle directement ton outil de fin de tour (Finish) avec outcome='done' et "

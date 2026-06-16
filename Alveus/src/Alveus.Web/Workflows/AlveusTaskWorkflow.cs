@@ -1,5 +1,6 @@
 using Alveus.Web.Activities;
 using Alveus.Web.Agents;
+using Alveus.Web.Configuration;
 using Alveus.Web.Tools;
 using Elsa.Extensions;
 using Elsa.Workflows;
@@ -7,6 +8,8 @@ using Elsa.Workflows.Activities.Flowchart.Activities;
 using Elsa.Workflows.Activities.Flowchart.Models;
 using Elsa.Workflows.Memory;
 using Elsa.Workflows.Models;
+using Elsa.Expressions.Models;
+using Microsoft.Extensions.Configuration;
 using Endpoint = Elsa.Workflows.Activities.Flowchart.Models.Endpoint;
 
 namespace Alveus.Web.Workflows;
@@ -14,9 +17,10 @@ namespace Alveus.Web.Workflows;
 /// <summary>
 /// Orchestration de bout en bout d'une tâche Alveus (cf. ADR 0023, étendue par ADR 0024/0025/0026) :
 /// <list type="number">
-/// <item>Réunion de pré-tâche (<see cref="RunPreTaskMeeting"/>) : Alveus-BusinessAnalyst,
-/// Alveus-Qa et Alveus-Technical lisent le ticket, mettent à jour leur documentation et préparent
-/// des instructions complémentaires pour le Worker/Evaluator/UserDoc.</item>
+/// <item>Réunion de pré-tâche (<see cref="RunPreTaskMeeting"/>) : les spécialistes configurés
+/// (<c>Agent:SpecialistRoleKeys</c>, cf. ADR 0030), Alveus-Qa et Alveus-Technical lisent le ticket,
+/// mettent à jour leur documentation et préparent des instructions complémentaires pour le
+/// Worker/Evaluator/UserDoc.</item>
 /// <item>Alveus-Worker (<see cref="RunAgentPrompt"/>) exécute la tâche dans son workspace.</item>
 /// <item>Si "Done", Alveus-EnvironmentManager (<see cref="RunEnvironmentPrompt"/>) (re)lance
 /// l'environnement local décrit par la consigne, dans le même workspace que le Worker.</item>
@@ -30,14 +34,14 @@ namespace Alveus.Web.Workflows;
 /// utilisateur, puis la réunion finale (<see cref="RunFinalReviewMeeting"/>) vote sur le fait que
 /// la tâche est correctement remplie.</item>
 /// <item>"OK" termine le workflow (succès). "KO" renvoie à la réunion de pré-tâche avec les
-/// comptes-rendus des 3 participants, via <see cref="OuterLoopIterationGuard"/>.</item>
+/// comptes-rendus des participants, via <see cref="OuterLoopIterationGuard"/>.</item>
 /// <item>"NeedsMoreInfo"/"Blocked" issus de <see cref="RunAgentPrompt"/> (Worker),
 /// <see cref="RunEnvironmentPrompt"/> (EnvironmentManager), <see cref="RunEvaluatorPrompt"/>
 /// (Evaluator) ou <see cref="RunUserDocPrompt"/> (UserDoc) sont mis en forme par
 /// <see cref="RecordAgentEscalation"/> puis renvoient à <see cref="RunPreTaskMeeting"/> (via
 /// <see cref="AgentEscalationLoopGuard"/>, jusqu'à <see cref="AgentEscalationLoopGuard.MaxIterations"/>)
-/// pour qu'Alveus-BusinessAnalyst/Alveus-Qa/Alveus-Technical traitent le sujet conjointement (cf.
-/// ADR 0028).</item>
+/// pour que les spécialistes configurés, Alveus-Qa et Alveus-Technical traitent le sujet
+/// conjointement (cf. ADR 0028).</item>
 /// </list>
 /// <para>
 /// "NeedsHelp" (issue globale de <see cref="RunPreTaskMeeting"/> ou <see cref="RunFinalReviewMeeting"/>)
@@ -50,12 +54,13 @@ namespace Alveus.Web.Workflows;
 public sealed class AlveusTaskWorkflow : WorkflowBase
 {
     private readonly IAgentSessionCompactionService _compactionService;
-    private readonly IAgentWorkVerificationService _workVerificationService;
+    private readonly IReadOnlyDictionary<string, TeamConfig> _teams;
 
-    public AlveusTaskWorkflow(IAgentSessionCompactionService compactionService, IAgentWorkVerificationService workVerificationService)
+    public AlveusTaskWorkflow(IAgentSessionCompactionService compactionService, IConfiguration configuration)
     {
         _compactionService = compactionService;
-        _workVerificationService = workVerificationService;
+        _teams = (configuration.GetSection("Teams").Get<TeamConfig[]>() ?? [])
+            .ToDictionary(t => t.Name);
     }
 
     protected override void Build(IWorkflowBuilder builder)
@@ -64,6 +69,7 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
 
         builder.WithInput("TaskPrompt", typeof(string), "Consigne initiale de la tâche.");
         builder.WithInput("ConversationId", typeof(string), "Identifiant de la conversation associée (cf. ADR 0027).");
+        builder.WithInput("TeamName", typeof(string), "Nom de l'équipe (TeamConfig:Name, cf. ADR 0031).");
 
         var envUsageInstructions = builder.WithVariable("EnvUsageInstructions", string.Empty);
         var failureReport = builder.WithVariable<string?>("FailureReport", null);
@@ -78,7 +84,7 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
         var evaluatorSummary = builder.WithVariable("EvaluatorSummary", string.Empty);
         var userDocSummary = builder.WithVariable("UserDocSummary", string.Empty);
 
-        var baReport = builder.WithVariable<string?>("BaReport", null);
+        var specialistReports = builder.WithVariable<IReadOnlyDictionary<string, string>?>("SpecialistReports", null);
         var qaReport = builder.WithVariable<string?>("QaReport", null);
         var techReport = builder.WithVariable<string?>("TechReport", null);
 
@@ -101,17 +107,28 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
         var agentEscalationReport = builder.WithVariable<string?>("AgentEscalationReport", null);
         var agentEscalationLoopCount = builder.WithVariable("AgentEscalationLoopCount", 0);
 
+        IReadOnlyList<string> GetSpecialistRoleKeys(string teamName)
+            => _teams.TryGetValue(teamName, out var team)
+                ? team.SpecialistRoles.Select(s => s.Key).ToList()
+                : ["BusinessAnalyst"];
+
+        string AgentKey(ExpressionExecutionContext ctx, string role)
+        {
+            var teamName = ctx.GetInput<string>("TeamName") ?? string.Empty;
+            return string.IsNullOrEmpty(teamName) ? $"Alveus{role}" : $"{teamName}:{role}";
+        }
+
         var runPreTaskMeeting = new RunPreTaskMeeting(_compactionService)
         {
             Id = "RunPreTaskMeeting",
+            TeamName = new Input<string>(context => context.GetInput<string>("TeamName") ?? string.Empty),
+            SpecialistRoleKeys = new Input<IReadOnlyList<string>>(context =>
+                GetSpecialistRoleKeys(context.GetInput<string>("TeamName") ?? string.Empty)),
             Topic = new Input<string>(context => context.GetInput<string>("TaskPrompt")!),
             ExtraContext = new Input<string?>(context =>
             {
-                var reports = new[]
-                    {
-                        baReport.Get(context), qaReport.Get(context), techReport.Get(context), preTaskHumanReply.Get(context),
-                        agentEscalationReport.Get(context),
-                    }
+                var reports = (specialistReports.Get(context)?.Values ?? [])
+                    .Concat([qaReport.Get(context), techReport.Get(context), preTaskHumanReply.Get(context), agentEscalationReport.Get(context)])
                     .Where(r => !string.IsNullOrWhiteSpace(r));
                 return string.Join("\n\n---\n", reports);
             }),
@@ -122,9 +139,11 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
             Questions = new Output<IReadOnlyList<string>?>(preTaskQuestions),
         };
 
-        var runWorker = new RunAgentPrompt(_compactionService, _workVerificationService)
+        var runWorker = new RunAgentPrompt(_compactionService)
         {
             Id = "RunWorker",
+            AgentName = new Input<string>(context => AgentKey(context, "Worker")),
+            TeamName = new Input<string>(context => context.GetInput<string>("TeamName") ?? string.Empty),
             Prompt = new Input<string>(context =>
             {
                 var taskPrompt = context.GetInput<string>("TaskPrompt")!;
@@ -152,6 +171,8 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
         var runEnvironmentManager = new RunEnvironmentPrompt(_compactionService)
         {
             Id = "RunEnvironmentManager",
+            AgentName = new Input<string>(context => AgentKey(context, "EnvironmentManager")),
+            TeamName = new Input<string>(context => context.GetInput<string>("TeamName") ?? string.Empty),
             Prompt = new Input<string>(context => context.GetInput<string>("TaskPrompt")!),
             Summary = new Output<string>(envUsageInstructions),
             Reason = new Output<string?>(failureReport),
@@ -161,6 +182,8 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
         var runEvaluator = new RunEvaluatorPrompt(_compactionService)
         {
             Id = "RunEvaluator",
+            AgentName = new Input<string>(context => AgentKey(context, "Evaluator")),
+            TeamName = new Input<string>(context => context.GetInput<string>("TeamName") ?? string.Empty),
             Prompt = new Input<string>(context =>
             {
                 var result = $"{context.GetInput<string>("TaskPrompt")}\n\n---\nInstructions d'utilisation de l'environnement :\n{envUsageInstructions.Get(context)}";
@@ -186,6 +209,8 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
         var runUserDoc = new RunUserDocPrompt(_compactionService)
         {
             Id = "RunUserDoc",
+            AgentName = new Input<string>(context => AgentKey(context, "UserDoc")),
+            TeamName = new Input<string>(context => context.GetInput<string>("TeamName") ?? string.Empty),
             Prompt = new Input<string>(context =>
             {
                 var result = context.GetInput<string>("TaskPrompt")!;
@@ -205,6 +230,9 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
         var runFinalReviewMeeting = new RunFinalReviewMeeting(_compactionService)
         {
             Id = "RunFinalReviewMeeting",
+            TeamName = new Input<string>(context => context.GetInput<string>("TeamName") ?? string.Empty),
+            SpecialistRoleKeys = new Input<IReadOnlyList<string>>(context =>
+                GetSpecialistRoleKeys(context.GetInput<string>("TeamName") ?? string.Empty)),
             Topic = new Input<string>(context =>
                 $"{context.GetInput<string>("TaskPrompt")}"
                 + $"\n\n---\nRésumé Alveus-Worker :\n{workerSummary.Get(context)}"
@@ -212,7 +240,7 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
                 + $"\n\n---\nRésumé Alveus-Evaluator :\n{evaluatorSummary.Get(context)}"
                 + $"\n\n---\nRésumé Alveus-UserDoc :\n{userDocSummary.Get(context)}"),
             ExtraContext = new Input<string?>(context => finalReviewHumanReply.Get(context) ?? string.Empty),
-            BaReport = new Output<string?>(baReport),
+            SpecialistReports = new Output<IReadOnlyDictionary<string, string>?>(specialistReports),
             QaReport = new Output<string?>(qaReport),
             TechReport = new Output<string?>(techReport),
             Reason = new Output<string?>(finalReviewReason),

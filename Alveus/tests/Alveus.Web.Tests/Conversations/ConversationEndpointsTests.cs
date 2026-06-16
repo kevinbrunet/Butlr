@@ -61,7 +61,7 @@ public sealed class ConversationEndpointsTests
             new ConversationItemRequest("user", [new ConversationContentPart("input_text", "Bonjour")]),
         ]);
 
-        var createResult = await ConversationEndpoints.CreateConversationAsync(createRequest, store, runtime, CancellationToken.None);
+        var createResult = await ConversationEndpoints.CreateConversationAsync(createRequest, "default", store, runtime, CancellationToken.None);
         var created = Assert.IsType<ConversationResponse>(GetOkValue(createResult));
 
         Assert.Equal("awaiting_input", created.Status);

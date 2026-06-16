@@ -20,19 +20,32 @@ public static class ConversationEndpoints
 {
     internal const string WorkflowDefinitionId = "AlveusTaskWorkflow";
 
-    public static IEndpointRouteBuilder MapConversationEndpoints(this IEndpointRouteBuilder app)
+    /// <summary>
+    /// Enregistre les routes de conversation pour chaque équipe déclarée (cf. ADR 0031).
+    /// Chaque équipe obtient un préfixe <c>/teams/{teamName}/v1/conversations</c>.
+    /// </summary>
+    public static IEndpointRouteBuilder MapConversationEndpoints(this IEndpointRouteBuilder app, IEnumerable<string> teamNames)
     {
-        app.MapPost("/v1/conversations", CreateConversationAsync).WithName("CreateConversation");
-        app.MapGet("/v1/conversations/{id}", GetConversation).WithName("GetConversation");
-        app.MapGet("/v1/conversations/{id}/items", ListConversationItems).WithName("ListConversationItems");
-        app.MapPost("/v1/conversations/{id}/items", AddConversationItemsAsync).WithName("AddConversationItems");
-        app.MapGet("/v1/conversations/{id}/stream", StreamConversationAsync).WithName("StreamConversation");
+        foreach (var teamName in teamNames)
+        {
+            var prefix = $"/teams/{teamName}";
+            var tag = teamName;
+            app.MapPost($"{prefix}/v1/conversations",
+                (CreateConversationRequest req, IConversationStore store, IWorkflowRuntime runtime, CancellationToken ct) =>
+                    CreateConversationAsync(req, tag, store, runtime, ct))
+                .WithName($"CreateConversation-{teamName}");
+            app.MapGet($"{prefix}/v1/conversations/{{id}}", GetConversation).WithName($"GetConversation-{teamName}");
+            app.MapGet($"{prefix}/v1/conversations/{{id}}/items", ListConversationItems).WithName($"ListConversationItems-{teamName}");
+            app.MapPost($"{prefix}/v1/conversations/{{id}}/items", AddConversationItemsAsync).WithName($"AddConversationItems-{teamName}");
+            app.MapGet($"{prefix}/v1/conversations/{{id}}/stream", StreamConversationAsync).WithName($"StreamConversation-{teamName}");
+        }
 
         return app;
     }
 
     internal static async Task<IResult> CreateConversationAsync(
         CreateConversationRequest request,
+        string teamName,
         IConversationStore store,
         IWorkflowRuntime runtime,
         CancellationToken cancellationToken)
@@ -56,6 +69,7 @@ public static class ConversationEndpoints
             {
                 ["TaskPrompt"] = taskPrompt,
                 ["ConversationId"] = conversation.Id,
+                ["TeamName"] = teamName,
             },
         }, cancellationToken);
 
@@ -173,7 +187,7 @@ public static class ConversationEndpoints
     }
 
     private static string ExtractText(ConversationItemRequest item)
-        => string.Join("\n", item.Content.Where(c => c.Type is "input_text" or "output_text").Select(c => c.Text));
+        => string.Join("\n", item.Content.Where(c => c.Type is "input_text" or "output_text" or "text").Select(c => c.Text));
 
     private static ConversationResponse ToConversationResponse(ConversationState conversation)
         => new(conversation.Id, "conversation", conversation.CreatedAt.ToUnixTimeSeconds(), conversation.Status, new Dictionary<string, object>());
@@ -200,6 +214,8 @@ public static class ConversationEndpoints
         ConversationItemKind.MeetingRound => "meeting_round",
         ConversationItemKind.NeedsHelpQuestion => "needs_help_question",
         ConversationItemKind.HumanReply => "human_reply",
+        ConversationItemKind.ExpertQuestion => "expert_question",
+        ConversationItemKind.ExpertAnswer => "expert_answer",
         _ => "unknown",
     };
 }

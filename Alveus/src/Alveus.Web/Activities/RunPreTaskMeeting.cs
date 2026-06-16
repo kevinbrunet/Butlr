@@ -7,15 +7,16 @@ using Elsa.Workflows.Models;
 namespace Alveus.Web.Activities;
 
 /// <summary>
-/// Réunion de pré-tâche (cf. ADR 0024/0025) : avant qu'Alveus-Worker ne commence, Alveus-BusinessAnalyst,
-/// Alveus-Qa et Alveus-Technical lisent le ticket (<see cref="MeetingActivityBase.Topic"/>), mettent à
-/// jour leur documentation respective (règles métier, plan de test, architecture/ADRs) et débattent
+/// Réunion de pré-tâche (cf. ADR 0024/0025/0030) : avant qu'Alveus-Worker ne commence, les
+/// spécialistes configurés (<see cref="MeetingActivityBase.SpecialistRoleKeys"/>), Alveus-Qa et
+/// Alveus-Technical lisent le ticket (<see cref="MeetingActivityBase.Topic"/>), mettent à jour leur
+/// documentation respective (règles métier, UX, plan de test, architecture/ADRs, etc.) et débattent
 /// (<c>Raise</c>/<c>Vote</c>) des points de contention. Alveus-Technical et Alveus-Qa peuvent émettre des
 /// <see cref="DownstreamInstruction"/> via <see cref="FinishTool.Finish"/>, routées vers
 /// <see cref="WorkerInstructions"/>/<see cref="UserDocInstructions"/>/<see cref="EvaluatorInstructions"/>.
-/// Sortie "Done" si les 3 participants confirment sans topic ouvert, "NeedsHelp" sinon (escalade).
+/// Sortie "Done" si tous les participants confirment sans topic ouvert, "NeedsHelp" sinon (escalade).
 /// </summary>
-[Activity("Alveus", "AI", "Réunion de pré-tâche : Alveus-BusinessAnalyst/Alveus-Qa/Alveus-Technical mettent à jour leur documentation, débattent et préparent des instructions pour le Worker/Evaluator/UserDoc.")]
+[Activity("Alveus", "AI", "Réunion de pré-tâche : les spécialistes configurés, Alveus-Qa et Alveus-Technical mettent à jour leur documentation, débattent et préparent des instructions pour le Worker/Evaluator/UserDoc.")]
 public sealed class RunPreTaskMeeting : MeetingActivityBase
 {
     private readonly List<string> _workerInstructions = [];
@@ -47,28 +48,24 @@ public sealed class RunPreTaskMeeting : MeetingActivityBase
 
     protected override string GetRoleTask(string agentRole) => agentRole switch
     {
-        "BusinessAnalyst" => "Tu es Alveus-BusinessAnalyst. Lis le ticket ci-dessous. S'il fait évoluer une règle "
-            + "métier existante, mets à jour l'arborescence markdown de 'business-rules/' (un fichier par domaine "
-            + "métier) pour refléter ce changement. S'il introduit une nouvelle règle, documente-la dans la même "
-            + "arborescence. Si la mise à jour soulève un point à trancher avec Alveus-Qa ou Alveus-Technical "
-            + "(ambiguïté, incohérence avec une règle existante), utilise Raise pour le signaler.",
-
         "Qa" => "Tu es Alveus-Qa. Lis le ticket ci-dessous. S'il fait évoluer un comportement existant, mets à jour "
             + "le plan de test markdown de 'test-plan/' (cas passants et non passants concernés). S'il introduit un "
             + "nouveau comportement, ajoute les cas de test correspondants. Si la mise à jour soulève un point à "
-            + "trancher avec Alveus-BusinessAnalyst ou Alveus-Technical, utilise Raise. Si Alveus-Evaluator a besoin "
-            + "d'instructions complémentaires pour vérifier ce ticket (cas limites à tester, scénarios spécifiques), "
-            + "précise-les dans downstreamInstructions de ton Finish final, avec target='evaluator'.",
+            + "trancher avec un autre participant, utilise Raise. Si Alveus-Evaluator a besoin d'instructions "
+            + "complémentaires pour vérifier ce ticket (cas limites à tester, scénarios spécifiques), précise-les "
+            + "dans downstreamInstructions de ton Finish final, avec target='evaluator'.",
 
         "Technical" => "Tu es Alveus-Technical. Lis le ticket ci-dessous. S'il fait évoluer l'architecture, mets à "
             + "jour la documentation et les ADR de 'tech-docs/' (cf. conventions ADR du repo : un ADR par décision "
             + "non-triviale, numérotation monotone croissante). Si la mise à jour soulève un point à trancher avec "
-            + "Alveus-BusinessAnalyst ou Alveus-Qa, utilise Raise. Dans ton Finish final, utilise "
-            + "downstreamInstructions pour donner à Alveus-Worker (target='worker') des précisions techniques "
-            + "nécessaires à l'implémentation, et/ou à Alveus-UserDoc (target='userdoc') des précisions pour la "
-            + "documentation utilisateur — uniquement si nécessaire.",
+            + "un autre participant, utilise Raise. Dans ton Finish final, utilise downstreamInstructions pour "
+            + "donner à Alveus-Worker (target='worker') des précisions techniques nécessaires à l'implémentation, "
+            + "et/ou à Alveus-UserDoc (target='userdoc') des précisions pour la documentation utilisateur — "
+            + "uniquement si nécessaire.",
 
-        _ => throw new ArgumentOutOfRangeException(nameof(agentRole), agentRole, "Rôle de réunion inconnu."),
+        _ => SpecialistRoleCatalog.Roles.TryGetValue(agentRole, out var def)
+            ? def.PreTaskRoleTask
+            : throw new ArgumentOutOfRangeException(nameof(agentRole), agentRole, "Rôle de réunion inconnu."),
     };
 
     protected override ValueTask OnAgentFinishAsync(ActivityExecutionContext context, string agentRole, FinishCall finish)

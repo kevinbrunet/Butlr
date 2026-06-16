@@ -38,6 +38,7 @@ public sealed class RunFinalReviewMeetingTests : IClassFixture<MeetingFixture>
 
         var activity = ActivatorUtilities.CreateInstance<RunFinalReviewMeeting>(_fixture.Services);
         activity.Id = activityId;
+        activity.TeamName = new Input<string>(MeetingFixture.TeamName);
         activity.Topic = new Input<string>(
             "Résumé du travail effectué : la tâche a été correctement réalisée par Alveus-Worker, "
             + "Alveus-EnvironmentManager, Alveus-Evaluator et Alveus-UserDoc. Quel que soit ton rôle, vote "
@@ -71,6 +72,7 @@ public sealed class RunFinalReviewMeetingTests : IClassFixture<MeetingFixture>
 
         var activity = ActivatorUtilities.CreateInstance<RunFinalReviewMeeting>(_fixture.Services);
         activity.Id = activityId;
+        activity.TeamName = new Input<string>(MeetingFixture.TeamName);
         activity.Topic = new Input<string>(
             "Résumé du travail effectué : la tâche n'a PAS été correctement réalisée (rapport fictif pour ce test). "
             + "Quel que soit ton rôle, vote immédiatement sur le topic 'task-fulfilled' avec decision='disagree' et "
@@ -82,7 +84,8 @@ public sealed class RunFinalReviewMeetingTests : IClassFixture<MeetingFixture>
 
         var outputRegister = result.WorkflowExecutionContext.GetActivityOutputRegister();
         var finalVerdict = outputRegister.FindOutputByActivityId(activityId, nameof(RunFinalReviewMeeting.FinalVerdict)) as string;
-        var baReport = outputRegister.FindOutputByActivityId(activityId, nameof(RunFinalReviewMeeting.BaReport)) as string;
+        var specialistReports = outputRegister.FindOutputByActivityId(activityId, nameof(RunFinalReviewMeeting.SpecialistReports)) as IReadOnlyDictionary<string, string>;
+        var baReport = specialistReports?.GetValueOrDefault("BusinessAnalyst");
 
         _output.WriteLine($"Statut workflow : {result.WorkflowState.Status}, verdict final : '{finalVerdict}', "
             + $"compte-rendu BA : '{baReport}'");

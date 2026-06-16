@@ -17,6 +17,8 @@ public enum ConversationItemKind
     MeetingRound,
     NeedsHelpQuestion,
     HumanReply,
+    ExpertQuestion,
+    ExpertAnswer,
 }
 
 /// <summary>

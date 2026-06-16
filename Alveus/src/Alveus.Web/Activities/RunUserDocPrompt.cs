@@ -8,8 +8,8 @@ namespace Alveus.Web.Activities;
 /// <summary>
 /// Envoie <see cref="AgentPromptActivityBase.Prompt"/> à l'agent Alveus-UserDoc (par défaut
 /// "AlveusUserDoc"), exécuté après <see cref="RunEvaluatorPrompt"/> dans le workflow (cf. ADR
-/// 0026). Workspace dédié (<c>Agent:UserDocWorkspaceRoot</c>), incluant en sous-répertoire le
-/// workspace d'Alveus-BusinessAnalyst (<c>business-rules/</c>, cf. ADR 0025). Agent volontairement
+/// 0026). Workspace dédié (<c>Agent:UserDocWorkspaceRoot</c>), incluant en sous-répertoires les
+/// workspaces des agents spécialistes configurés (cf. ADR 0025/0030). Agent volontairement
 /// minimal : <see cref="HandleDoneAsync"/> sort directement par "Done", sans vérification ADR 0020
 /// (même schéma que <see cref="RunEvaluatorPrompt"/> sans verdict).
 /// </summary>

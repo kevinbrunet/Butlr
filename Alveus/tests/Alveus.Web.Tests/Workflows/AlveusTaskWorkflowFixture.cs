@@ -7,6 +7,7 @@ using Alveus.Web.Workflows;
 using Elsa.Extensions;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using OpenAI;
 
@@ -22,13 +23,15 @@ namespace Alveus.Web.Tests.Workflows;
 /// </summary>
 public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
 {
-    private const string WorkerAgentName = "AlveusWorker";
-    private const string EnvironmentManagerAgentName = "AlveusEnvironmentManager";
-    private const string EvaluatorAgentName = "AlveusEvaluator";
-    private const string UserDocAgentName = "AlveusUserDoc";
-    private const string BusinessAnalystAgentName = "AlveusBusinessAnalyst";
-    private const string QaAgentName = "AlveusQa";
-    private const string TechnicalAgentName = "AlveusTechnical";
+    // Toutes les clés DI sont préfixées par le nom d'équipe (cf. ADR 0031).
+    internal const string TeamName = "default";
+    private const string WorkerAgentName = $"{TeamName}:Worker";
+    private const string EnvironmentManagerAgentName = $"{TeamName}:EnvironmentManager";
+    private const string EvaluatorAgentName = $"{TeamName}:Evaluator";
+    private const string UserDocAgentName = $"{TeamName}:UserDoc";
+    private const string BusinessAnalystAgentName = $"{TeamName}:BusinessAnalyst";
+    private const string QaAgentName = $"{TeamName}:Qa";
+    private const string TechnicalAgentName = $"{TeamName}:Technical";
 
     public string WorkspaceRoot { get; } = Directory.CreateTempSubdirectory("alveus-workflow-task-tests-").FullName;
 
@@ -69,6 +72,17 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
         services.AddSingleton<IConversationStore, ConversationStore>();
         services.AddSingleton<IConversationContextAccessor, ConversationContextAccessor>();
 
+        // Configuration minimale requise par AlveusTaskWorkflow (Teams, cf. ADR 0031).
+        IConfiguration configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"Teams:0:Name"] = TeamName,
+                [$"Teams:0:MissionPrompt"] = "Test.",
+                [$"Teams:0:SpecialistRoles:0:Key"] = "BusinessAnalyst",
+            })
+            .Build();
+        services.AddSingleton(configuration);
+
         var openAiClient = new OpenAIClient(new ApiKeyCredential("not-needed"), new OpenAIClientOptions
         {
             Endpoint = Endpoint,
@@ -77,18 +91,18 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
         IChatClient chatClient = openAiClient.GetChatClient(Model).AsIChatClient();
 
         // Worker + EnvironmentManager : même workspace, mêmes outils (ADR 0023).
-        services.AddSingleton(_ => new CmdRunTool(WorkspaceRoot));
-        services.AddSingleton(_ => new StrReplaceEditorTool(WorkspaceRoot));
+        services.AddKeyedSingleton<CmdRunTool>(WorkerAgentName, (_, _) => new CmdRunTool(WorkspaceRoot));
+        services.AddKeyedSingleton<StrReplaceEditorTool>(WorkerAgentName, (_, _) => new StrReplaceEditorTool(WorkspaceRoot));
         services.AddSingleton<FinishTool>();
         services.AddSingleton<MeetingTool>();
         services.AddSingleton<IAgentSessionCompactionService, SummarizingAgentSessionCompactionService>();
-        services.AddSingleton<IAgentWorkVerificationService>(_ => new CmdAgentWorkVerificationService(WorkspaceRoot, command: null));
+        services.AddKeyedSingleton<IAgentWorkVerificationService>(TeamName, (_, _) => new CmdAgentWorkVerificationService(WorkspaceRoot, command: null));
 
         services.AddKeyedSingleton<AIAgent>(WorkerAgentName, (sp, _) =>
         {
-            var cmdRunTool = sp.GetRequiredService<CmdRunTool>();
+            var cmdRunTool = sp.GetRequiredKeyedService<CmdRunTool>(WorkerAgentName);
             var editorTool = new ConversationAwareStrReplaceEditorTool(
-                sp.GetRequiredService<StrReplaceEditorTool>(),
+                sp.GetRequiredKeyedService<StrReplaceEditorTool>(WorkerAgentName),
                 sp.GetRequiredService<IConversationContextAccessor>(),
                 sp.GetRequiredService<IConversationStore>(),
                 "Alveus-Worker");
@@ -112,9 +126,9 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
 
         services.AddKeyedSingleton<AIAgent>(EnvironmentManagerAgentName, (sp, _) =>
         {
-            var cmdRunTool = sp.GetRequiredService<CmdRunTool>();
+            var cmdRunTool = sp.GetRequiredKeyedService<CmdRunTool>(WorkerAgentName);
             var editorTool = new ConversationAwareStrReplaceEditorTool(
-                sp.GetRequiredService<StrReplaceEditorTool>(),
+                sp.GetRequiredKeyedService<StrReplaceEditorTool>(WorkerAgentName),
                 sp.GetRequiredService<IConversationContextAccessor>(),
                 sp.GetRequiredService<IConversationStore>(),
                 "Alveus-EnvironmentManager");
@@ -309,7 +323,7 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
 
     public Task DisposeAsync()
     {
-        Services.GetRequiredService<CmdRunTool>().Dispose();
+        Services.GetRequiredKeyedService<CmdRunTool>(WorkerAgentName).Dispose();
         Services.GetRequiredKeyedService<CmdRunTool>(EvaluatorAgentName).Dispose();
         Services.GetRequiredKeyedService<CmdRunTool>(UserDocAgentName).Dispose();
         Services.GetRequiredKeyedService<CmdRunTool>(BusinessAnalystAgentName).Dispose();

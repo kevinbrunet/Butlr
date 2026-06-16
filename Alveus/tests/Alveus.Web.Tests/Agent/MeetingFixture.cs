@@ -1,6 +1,7 @@
 using System.ClientModel;
 using Alveus.Web.Activities;
 using Alveus.Web.Agents;
+using Alveus.Web.Conversations;
 using Alveus.Web.Tools;
 using Elsa.Extensions;
 using Microsoft.Agents.AI;
@@ -21,9 +22,11 @@ namespace Alveus.Web.Tests.Agent;
 /// </summary>
 public sealed class MeetingFixture : IAsyncLifetime
 {
-    public const string BusinessAnalystAgentName = "AlveusBusinessAnalyst";
-    public const string QaAgentName = "AlveusQa";
-    public const string TechnicalAgentName = "AlveusTechnical";
+    // Nom d'équipe utilisé dans les tests de réunion (cf. ADR 0031).
+    public const string TeamName = "test";
+    public const string BusinessAnalystAgentName = $"{TeamName}:BusinessAnalyst";
+    public const string QaAgentName = $"{TeamName}:Qa";
+    public const string TechnicalAgentName = $"{TeamName}:Technical";
 
     public string BusinessAnalystWorkspaceRoot { get; } = Directory.CreateTempSubdirectory("alveus-meeting-ba-tests-").FullName;
 
@@ -59,6 +62,10 @@ public sealed class MeetingFixture : IAsyncLifetime
         });
 
         IChatClient chatClient = openAiClient.GetChatClient(Model).AsIChatClient();
+
+        // MeetingActivityBase accède à IConversationContextAccessor (et conditionnellement IConversationStore).
+        services.AddSingleton<IConversationStore, ConversationStore>();
+        services.AddSingleton<IConversationContextAccessor, ConversationContextAccessor>();
 
         services.AddSingleton<FinishTool>();
         services.AddSingleton<MeetingTool>();

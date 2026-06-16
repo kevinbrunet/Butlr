@@ -33,24 +33,31 @@ public sealed class StrReplaceEditorTool
         [Description("Contenu initial du fichier à créer (create).")] string? file_text = null,
         [Description("Numéro de ligne après laquelle insérer new_str (insert). 0 = début du fichier.")] int? insert_line = null)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(command);
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-
-        var resolvedPath = ResolvePath(path);
-
-        return command switch
+        try
         {
-            "view" => View(resolvedPath),
-            "create" => Create(resolvedPath, file_text),
-            "str_replace" => StrReplace(resolvedPath, old_str, new_str),
-            "insert" => Insert(resolvedPath, insert_line, new_str),
-            "undo_edit" => UndoEdit(resolvedPath),
-            _ => throw new ArgumentException(
-                $"Commande inconnue : '{command}'. Cet outil n'est pas un shell — attendu : view, create, str_replace, "
-                + "insert, undo_edit. Pour lister un répertoire, utilise 'view' avec ce path. Pour exécuter une "
-                + "commande shell, utilise l'outil d'exécution de commandes.",
-                nameof(command)),
-        };
+            ArgumentException.ThrowIfNullOrWhiteSpace(command);
+            ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+            var resolvedPath = ResolvePath(path);
+
+            return command switch
+            {
+                "view" => View(resolvedPath),
+                "create" => Create(resolvedPath, file_text),
+                "str_replace" => StrReplace(resolvedPath, old_str, new_str),
+                "insert" => Insert(resolvedPath, insert_line, new_str),
+                "undo_edit" => UndoEdit(resolvedPath),
+                _ => $"Erreur : commande inconnue '{command}'. Cet outil n'est pas un shell — attendu : view, create, str_replace, insert, undo_edit. Pour lister un répertoire, utilise 'view' avec ce path. Pour exécuter une commande shell, utilise l'outil d'exécution de commandes.",
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return $"Erreur : {ex.Message}";
+        }
     }
 
     private string ResolvePath(string path)
