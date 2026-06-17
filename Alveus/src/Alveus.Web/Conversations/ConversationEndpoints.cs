@@ -86,11 +86,22 @@ public static class ConversationEndpoints
         // disposé à la fin de la requête HTTP si on le capturait dans la closure.
         _ = Task.Run(async () =>
         {
-            await using var bgScope = scopeFactory.CreateAsyncScope();
-            var bgRuntime = bgScope.ServiceProvider.GetRequiredService<IWorkflowRuntime>();
-            var bgClient = await bgRuntime.CreateClientAsync(workflowInstanceId, CancellationToken.None);
-            var runResponse = await bgClient.RunInstanceAsync(new RunWorkflowInstanceRequest(), CancellationToken.None);
-            ApplyRunResult(store, conversation.Id, runResponse);
+            try
+            {
+                await using var bgScope = scopeFactory.CreateAsyncScope();
+                var bgRuntime = bgScope.ServiceProvider.GetRequiredService<IWorkflowRuntime>();
+                var bgClient = await bgRuntime.CreateClientAsync(workflowInstanceId, CancellationToken.None);
+                var runResponse = await bgClient.RunInstanceAsync(new RunWorkflowInstanceRequest(), CancellationToken.None);
+                ApplyRunResult(store, conversation.Id, runResponse);
+            }
+            catch (Exception ex)
+            {
+                store.AddItem(conversation.Id, "assistant",
+                    $"Erreur inattendue : {ex.Message}",
+                    ConversationItemKind.ActivityTransition,
+                    new Dictionary<string, string> { ["phase"] = "error" });
+                store.Complete(conversation.Id, failed: true);
+            }
         });
 
         return Results.Ok(ToConversationResponse(store.Get(conversation.Id)!));
@@ -191,6 +202,10 @@ public static class ConversationEndpoints
 
             case WorkflowSubStatus.Faulted:
             case WorkflowSubStatus.Cancelled:
+                store.AddItem(conversationId, "assistant",
+                    "Le workflow a été interrompu de manière inattendue.",
+                    ConversationItemKind.ActivityTransition,
+                    new Dictionary<string, string> { ["phase"] = "error" });
                 store.Complete(conversationId, failed: true);
                 break;
 
@@ -333,6 +348,12 @@ public static class ConversationEndpoints
         ConversationItemKind.ActivityTransition
             when item.Metadata.GetValueOrDefault("phase") == "starting"
             => $"\n\n---\n**⚙ {item.Metadata.GetValueOrDefault("activityId", "?")}**\n",
+        ConversationItemKind.ActivityTransition
+            when item.Metadata.GetValueOrDefault("phase") == "outcome"
+            => $"\n**→ {item.Text}**\n",
+        ConversationItemKind.ActivityTransition
+            when item.Metadata.GetValueOrDefault("phase") == "error"
+            => $"\n\n⚠ {item.Text}\n",
         ConversationItemKind.ActivityTransition => null,
         ConversationItemKind.UserMessage => $"\n\n**[User]** {item.Text}\n",
         ConversationItemKind.HumanReply => $"\n\n**[Human]** {item.Text}\n",

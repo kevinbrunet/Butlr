@@ -40,6 +40,7 @@ public sealed class RunAgentPrompt : AgentPromptActivityBase
 
         if (verificationService is null)
         {
+            PostOutcome(context, $"{context.Activity.Id} → Done");
             await context.CompleteActivityWithOutcomesAsync(["Done"]);
             return null;
         }
@@ -47,6 +48,7 @@ public sealed class RunAgentPrompt : AgentPromptActivityBase
         var verification = await verificationService.VerifyAsync(context.CancellationToken);
         if (verification.Success)
         {
+            PostOutcome(context, $"{context.Activity.Id} → Done (vérification OK)");
             await context.CompleteActivityWithOutcomesAsync(["Done"]);
             return null;
         }

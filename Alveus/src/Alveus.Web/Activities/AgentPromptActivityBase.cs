@@ -105,6 +105,7 @@ public abstract class AgentPromptActivityBase : CodeActivity
 
         context.Set(Summary, string.Empty);
         context.Set(Reason, "Nombre maximal de relances atteint sans confirmation finale validée (boucle évitée).");
+        PostOutcome(context, $"{context.Activity.Id} → Bloqué (max itérations atteint)");
         await context.CompleteActivityWithOutcomesAsync(["Blocked"]);
     }
 
@@ -131,23 +132,35 @@ public abstract class AgentPromptActivityBase : CodeActivity
         {
             case AgentVerdict.Pass:
                 context.Set(Reason, null);
+                PostOutcome(context, $"{context.Activity.Id} → {passOutcome}");
                 await context.CompleteActivityWithOutcomesAsync([passOutcome]);
                 return null;
 
             case AgentVerdict.Fail:
                 context.Set(Reason, finish.Reason);
+                PostOutcome(context, $"{context.Activity.Id} → Échec : {finish.Reason}");
                 await context.CompleteActivityWithOutcomesAsync(["Failed"]);
                 return null;
 
             case AgentVerdict.NeedMoreInfo:
                 context.Set(Reason, finish.Reason);
                 context.Set(Questions, finish.Questions);
+                PostOutcome(context, $"{context.Activity.Id} → NeedsMoreInfo : {finish.Reason}");
                 await context.CompleteActivityWithOutcomesAsync(["NeedsMoreInfo"]);
                 return null;
 
             default:
                 return "Précise verdict='pass', 'fail' ou 'needmoreinfo' dans ton appel Finish.";
         }
+    }
+
+    protected void PostOutcome(ActivityExecutionContext context, string outcomeLabel)
+    {
+        var conversationId = context.WorkflowExecutionContext.CorrelationId;
+        if (string.IsNullOrEmpty(conversationId)) return;
+        var store = context.GetRequiredService<IServiceProvider>().GetService<IConversationStore>();
+        store?.AddItem(conversationId, "assistant", outcomeLabel, ConversationItemKind.ActivityTransition,
+            new Dictionary<string, string> { ["activityId"] = context.Activity.Id, ["phase"] = "outcome" });
     }
 
     private static FinishCall? FindFinishCall(AgentResponse response)
@@ -182,11 +195,13 @@ public abstract class AgentPromptActivityBase : CodeActivity
             case AgentTaskOutcome.NeedsMoreInfo:
                 context.Set(Reason, finish.Reason);
                 context.Set(Questions, finish.Questions);
+                PostOutcome(context, $"{context.Activity.Id} → NeedsMoreInfo : {finish.Reason}");
                 await context.CompleteActivityWithOutcomesAsync(["NeedsMoreInfo"]);
                 return null;
 
             case AgentTaskOutcome.Blocked:
                 context.Set(Reason, finish.Reason);
+                PostOutcome(context, $"{context.Activity.Id} → Bloqué : {finish.Reason}");
                 await context.CompleteActivityWithOutcomesAsync(["Blocked"]);
                 return null;
 

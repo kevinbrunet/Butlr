@@ -195,6 +195,7 @@ public abstract class MeetingActivityBase : CodeActivity
                 if (finish is not null)
                 {
                     finishSummaries[role] = finish.Summary;
+                    transcript.Add($"[{role}] (Finish outcome={finish.Outcome}) {finish.Summary}");
 
                     switch (finish.Outcome)
                     {
@@ -206,11 +207,13 @@ public abstract class MeetingActivityBase : CodeActivity
                         case AgentTaskOutcome.NeedsMoreInfo:
                             context.Set(Reason, finish.Reason);
                             context.Set(Questions, finish.Questions);
+                            PostOutcome(conversationStore, conversationId, $"NeedsMoreInfo : {finish.Reason}");
                             await context.CompleteActivityWithOutcomesAsync(["NeedsMoreInfo"]);
                             return;
 
                         case AgentTaskOutcome.Blocked:
                             context.Set(Reason, finish.Reason);
+                            PostOutcome(conversationStore, conversationId, $"Bloqué : {finish.Reason}");
                             await context.CompleteActivityWithOutcomesAsync(["Blocked"]);
                             return;
                     }
@@ -258,6 +261,7 @@ public abstract class MeetingActivityBase : CodeActivity
             if (unresolvedAfterCorrection)
             {
                 await FinalizeAsync(context, MeetingOutcome.NeedsHelp, BuildTallies(topics), finishSummaries);
+                PostOutcome(conversationStore, conversationId, "NeedsHelp : désaccord non résolu après correction");
                 return;
             }
 
@@ -265,11 +269,13 @@ public abstract class MeetingActivityBase : CodeActivity
             if (confirmedDone.Count == roles.Count && !hasOpenTopics)
             {
                 await FinalizeAsync(context, MeetingOutcome.Done, BuildTallies(topics), finishSummaries);
+                PostOutcome(conversationStore, conversationId, "Done");
                 return;
             }
         }
 
         await FinalizeAsync(context, MeetingOutcome.NeedsHelp, BuildTallies(topics), finishSummaries);
+        PostOutcome(conversationStore, conversationId, "NeedsHelp : nombre maximal de rounds atteint");
     }
 
     private string BuildMessage(
@@ -314,6 +320,14 @@ public abstract class MeetingActivityBase : CodeActivity
             + "quand tu n'as plus rien à ajouter à ce round.");
 
         return sb.ToString();
+    }
+
+    private void PostOutcome(IConversationStore? store, string? conversationId, string outcome)
+    {
+        if (store is null || string.IsNullOrEmpty(conversationId)) return;
+        store.AddItem(conversationId, "assistant", $"{GetType().Name} → {outcome}",
+            ConversationItemKind.ActivityTransition,
+            new Dictionary<string, string> { ["activityId"] = GetType().Name, ["phase"] = "outcome" });
     }
 
     private static IReadOnlyDictionary<string, MeetingVoteTally> BuildTallies(Dictionary<string, MeetingTopicState> topics)
