@@ -210,6 +210,10 @@ public static class ChatCompletionsEndpoints
                     break;
                 case Elsa.Workflows.WorkflowSubStatus.Faulted:
                 case Elsa.Workflows.WorkflowSubStatus.Cancelled:
+                    store.AddItem(conversationId, "assistant",
+                        "Le workflow a échoué — voir les logs du serveur pour le détail.",
+                        ConversationItemKind.ActivityTransition,
+                        new Dictionary<string, string> { ["phase"] = "error" });
                     store.Complete(conversationId, failed: true);
                     break;
                 case Elsa.Workflows.WorkflowSubStatus.Suspended:
@@ -219,13 +223,21 @@ public static class ChatCompletionsEndpoints
                     break;
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException ex)
         {
+            store.AddItem(conversationId, "assistant",
+                $"Le workflow a été annulé : {ex.Message}",
+                ConversationItemKind.ActivityTransition,
+                new Dictionary<string, string> { ["phase"] = "error" });
             store.Complete(conversationId, failed: true);
             throw;
         }
-        catch
+        catch (Exception ex)
         {
+            store.AddItem(conversationId, "assistant",
+                $"Erreur inattendue : {ex.Message}",
+                ConversationItemKind.ActivityTransition,
+                new Dictionary<string, string> { ["phase"] = "error" });
             store.Complete(conversationId, failed: true);
             throw;
         }
