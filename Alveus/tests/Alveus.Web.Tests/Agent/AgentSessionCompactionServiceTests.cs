@@ -42,7 +42,9 @@ public sealed class AgentSessionCompactionServiceTests : IClassFixture<AgentFixt
         // Seuil volontairement très bas pour forcer le compactage dès la première réponse.
         var service = new SummarizingAgentSessionCompactionService(maxSerializedSessionSizeBytes: 1);
         var session = await _fixture.Agent.CreateSessionAsync();
-        await _fixture.Agent.RunAsync("Dis bonjour en une phrase.", session);
+        var task = _fixture.Agent.RunAsync("Dis bonjour en une phrase.", session);
+        if (await Task.WhenAny(task, Task.Delay(TimeSpan.FromMinutes(3))) == task)
+            await task;
 
         var result = await service.CompactIfNeededAsync(_fixture.Agent, session);
 

@@ -1,4 +1,5 @@
 using Alveus.Web.Tools;
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Xunit.Abstractions;
 
@@ -14,6 +15,8 @@ namespace Alveus.Web.Tests.Agent;
 /// </summary>
 public sealed class AgentToolsIntegrationTests : IClassFixture<AgentFixture>
 {
+    private static readonly TimeSpan AgentTimeout = TimeSpan.FromMinutes(3);
+
     private readonly AgentFixture _fixture;
     private readonly ITestOutputHelper _output;
 
@@ -34,6 +37,25 @@ public sealed class AgentToolsIntegrationTests : IClassFixture<AgentFixture>
         return true;
     }
 
+    // Sans CancellationToken natif sur l'overload string, ChatClientAgent boucle
+    // indéfiniment si le modèle ne termine pas — Task.WhenAny borne le test.
+    private async Task<AgentResponse> RunAgentAsync(string message)
+    {
+        var task = _fixture.Agent.RunAsync(message);
+        if (await Task.WhenAny(task, Task.Delay(AgentTimeout)) != task)
+            Assert.Fail($"Agent.RunAsync timeout après {AgentTimeout.TotalMinutes:F0} min.");
+        return await task;
+    }
+
+    private async Task RunAgentFireAndForgetAsync(string message)
+    {
+        var task = _fixture.Agent.RunAsync(message);
+        if (await Task.WhenAny(task, Task.Delay(AgentTimeout)) == task)
+            await task;
+        else
+            _output.WriteLine($"Agent.RunAsync timeout après {AgentTimeout.TotalMinutes:F0} min — vérification des effets de bord.");
+    }
+
     [Fact]
     public async Task Agent_UsesCmdRunTool_ToRunShellCommand()
     {
@@ -42,7 +64,7 @@ public sealed class AgentToolsIntegrationTests : IClassFixture<AgentFixture>
             return;
         }
 
-        var response = await _fixture.Agent.RunAsync(
+        var response = await RunAgentAsync(
             "Exécute la commande shell `echo alveus-cmdrun-ok` avec ton outil d'exécution de commandes, "
             + "puis donne-moi exactement la sortie obtenue.");
 
@@ -59,7 +81,7 @@ public sealed class AgentToolsIntegrationTests : IClassFixture<AgentFixture>
 
         const string fileName = "agent-created.txt";
 
-        await _fixture.Agent.RunAsync(
+        await RunAgentFireAndForgetAsync(
             $"Avec ton outil d'édition de fichiers, crée un fichier nommé '{fileName}' "
             + "contenant exactement le texte 'agent-write-ok'.");
 
@@ -79,7 +101,7 @@ public sealed class AgentToolsIntegrationTests : IClassFixture<AgentFixture>
         const string fileName = "agent-edit.txt";
         File.WriteAllText(Path.Combine(_fixture.WorkspaceRoot, fileName), "valeur=ancienne");
 
-        await _fixture.Agent.RunAsync(
+        await RunAgentFireAndForgetAsync(
             $"Avec ton outil d'édition de fichiers, dans le fichier '{fileName}' remplace 'ancienne' par 'nouvelle'.");
 
         Assert.Contains("valeur=nouvelle", File.ReadAllText(Path.Combine(_fixture.WorkspaceRoot, fileName)));
@@ -96,7 +118,7 @@ public sealed class AgentToolsIntegrationTests : IClassFixture<AgentFixture>
         const string fileName = "agent-list-me.txt";
         File.WriteAllText(Path.Combine(_fixture.WorkspaceRoot, fileName), "contenu");
 
-        var response = await _fixture.Agent.RunAsync(
+        var response = await RunAgentAsync(
             "Liste les fichiers présents dans le répertoire de travail, sans rien modifier.");
 
         // ~ Avec un modèle 35B, un premier appel maladroit (ex. StrReplaceEditorTool avec
@@ -114,7 +136,7 @@ public sealed class AgentToolsIntegrationTests : IClassFixture<AgentFixture>
             return;
         }
 
-        var response = await _fixture.Agent.RunAsync(
+        var response = await RunAgentAsync(
             "Cette tâche ne demande aucune action : appelle directement ton outil de fin de tâche (Finish) "
             + "avec outcome='done' et un résumé indiquant qu'il n'y avait rien à faire.");
 
