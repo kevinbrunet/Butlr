@@ -1,8 +1,6 @@
-using System.ClientModel;
 using Alveus.Web.Tools;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
-using OpenAI;
 
 namespace Alveus.Web.Tests.Agent;
 
@@ -34,12 +32,7 @@ public sealed class AgentFixture : IAsyncLifetime
         EditorTool = new StrReplaceEditorTool(WorkspaceRoot);
         FinishTool = new FinishTool();
 
-        var openAiClient = new OpenAIClient(new ApiKeyCredential("not-needed"), new OpenAIClientOptions
-        {
-            Endpoint = new Uri(TestLlamaCppConfig.Endpoint ?? "http://not-configured"),
-        });
-
-        IChatClient chatClient = openAiClient.GetChatClient(TestLlamaCppConfig.Model ?? "not-configured").AsIChatClient();
+        IChatClient chatClient = TestChatClientFactory.Create();
 
         var tools = new List<AITool>
         {

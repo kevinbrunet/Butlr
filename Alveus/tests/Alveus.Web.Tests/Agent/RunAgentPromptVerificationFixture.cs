@@ -1,4 +1,3 @@
-using System.ClientModel;
 using Alveus.Web.Activities;
 using Alveus.Web.Agents;
 using Alveus.Web.Conversations;
@@ -7,7 +6,6 @@ using Elsa.Extensions;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
-using OpenAI;
 
 namespace Alveus.Web.Tests.Agent;
 
@@ -44,12 +42,7 @@ public sealed class RunAgentPromptVerificationFixture : IAsyncLifetime
             elsa.UseWorkflowRuntime();
         });
 
-        var openAiClient = new OpenAIClient(new ApiKeyCredential("not-needed"), new OpenAIClientOptions
-        {
-            Endpoint = new Uri(TestLlamaCppConfig.Endpoint ?? "http://not-configured"),
-        });
-
-        IChatClient chatClient = openAiClient.GetChatClient(TestLlamaCppConfig.Model ?? "not-configured").AsIChatClient();
+        IChatClient chatClient = TestChatClientFactory.Create();
 
         services.AddSingleton<IConversationStore, ConversationStore>();
         services.AddSingleton<IConversationContextAccessor, ConversationContextAccessor>();
