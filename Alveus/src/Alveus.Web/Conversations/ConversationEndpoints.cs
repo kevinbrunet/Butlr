@@ -33,8 +33,8 @@ public static class ConversationEndpoints
             var prefix = $"/teams/{teamName}";
             var tag = teamName;
             app.MapPost($"{prefix}/v1/conversations",
-                (CreateConversationRequest req, IConversationStore store, IWorkflowRuntime runtime, CancellationToken ct) =>
-                    CreateConversationAsync(req, tag, store, runtime, ct))
+                (CreateConversationRequest req, IConversationStore store, IServiceScopeFactory scopeFactory, CancellationToken ct) =>
+                    CreateConversationAsync(req, tag, store, scopeFactory, ct))
                 .WithName($"CreateConversation-{teamName}");
             app.MapGet($"{prefix}/v1/conversations/{{id}}", GetConversation).WithName($"GetConversation-{teamName}");
             app.MapGet($"{prefix}/v1/conversations/{{id}}/items", ListConversationItems).WithName($"ListConversationItems-{teamName}");
@@ -50,7 +50,7 @@ public static class ConversationEndpoints
         CreateConversationRequest request,
         string teamName,
         IConversationStore store,
-        IWorkflowRuntime runtime,
+        IServiceScopeFactory scopeFactory,
         CancellationToken cancellationToken)
     {
         var firstItem = request.Items.FirstOrDefault();
@@ -63,6 +63,9 @@ public static class ConversationEndpoints
         var conversation = store.Create();
         store.AddItem(conversation.Id, "user", taskPrompt, ConversationItemKind.UserMessage);
 
+        // Créer l'instance dans le scope de la requête courante.
+        await using var requestScope = scopeFactory.CreateAsyncScope();
+        var runtime = requestScope.ServiceProvider.GetRequiredService<IWorkflowRuntime>();
         var client = await runtime.CreateClientAsync(cancellationToken);
         await client.CreateInstanceAsync(new CreateWorkflowInstanceRequest
         {
@@ -76,10 +79,19 @@ public static class ConversationEndpoints
             },
         }, cancellationToken);
 
-        store.SetWorkflowInstanceId(conversation.Id, client.WorkflowInstanceId);
+        var workflowInstanceId = client.WorkflowInstanceId;
+        store.SetWorkflowInstanceId(conversation.Id, workflowInstanceId);
 
-        var runResponse = await client.RunInstanceAsync(new RunWorkflowInstanceRequest(), cancellationToken);
-        ApplyRunResult(store, conversation.Id, runResponse);
+        // Lancer le workflow dans un scope DI indépendant : IWorkflowRuntime est scoped et serait
+        // disposé à la fin de la requête HTTP si on le capturait dans la closure.
+        _ = Task.Run(async () =>
+        {
+            await using var bgScope = scopeFactory.CreateAsyncScope();
+            var bgRuntime = bgScope.ServiceProvider.GetRequiredService<IWorkflowRuntime>();
+            var bgClient = await bgRuntime.CreateClientAsync(workflowInstanceId, CancellationToken.None);
+            var runResponse = await bgClient.RunInstanceAsync(new RunWorkflowInstanceRequest(), CancellationToken.None);
+            ApplyRunResult(store, conversation.Id, runResponse);
+        });
 
         return Results.Ok(ToConversationResponse(store.Get(conversation.Id)!));
     }

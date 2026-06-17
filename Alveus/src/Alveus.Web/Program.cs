@@ -1,5 +1,6 @@
 using System.ClientModel;
 using Alveus.Web.Activities;
+using Scalar.AspNetCore;
 using Alveus.Web.Agents;
 using Alveus.Web.Configuration;
 using Alveus.Web.Conversations;
@@ -393,12 +394,22 @@ var loggingClient = new Alveus.Web.Logging.LoggingChatClient(
 chatClient = new FunctionInvokingChatClient(loggingClient)
 {
     MaximumIterationsPerRequest = 20,
+    // Finish est un outil terminal : stopper la boucle tool-calling dès qu'il est exécuté,
+    // sinon FunctionInvokingChatClient réinjecte le résultat et le LLM rappelle Finish en boucle.
+    FunctionInvoker = async (ctx, ct) =>
+    {
+        var result = await ctx.Function.InvokeAsync(ctx.Arguments, ct);
+        if (ctx.Function.Name == Alveus.Web.Tools.FinishTool.FunctionName)
+            ctx.Terminate = true;
+        return result;
+    },
 };
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+    app.MapScalarApiReference();
 }
 
 app.UseHttpsRedirection();

@@ -16,6 +16,7 @@
     <PackageReference Include="Microsoft.Agents.AI.Abstractions" Version="1.10.0" />
     <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.6.0" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="9.0.16" />
+    <PackageReference Include="Scalar.AspNetCore" Version="2.16.4" />
   </ItemGroup>
 
   <ItemGroup>
