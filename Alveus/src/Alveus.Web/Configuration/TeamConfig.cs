@@ -12,7 +12,7 @@ public sealed class TeamConfig
     /// <summary>Contexte projet injecté en tête des instructions système de tous les agents de l'équipe.</summary>
     public string MissionPrompt { get; set; } = "";
 
-    public string WorkspaceRoot { get; set; } = "workspace";
+    public string WorkerWorkspaceRoot { get; set; } = "workspace";
     public string EvaluatorWorkspaceRoot { get; set; } = "workspace-evaluator";
     public string UserDocWorkspaceRoot { get; set; } = "workspace-userdoc";
 

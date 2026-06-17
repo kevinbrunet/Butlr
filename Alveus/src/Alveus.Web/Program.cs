@@ -89,7 +89,7 @@ foreach (var team in teams)
 
     var missionPrefix = string.IsNullOrWhiteSpace(team.MissionPrompt) ? "" : $"{team.MissionPrompt}\n\n---\n";
 
-    var workerWorkspaceRoot = Path.GetFullPath(team.WorkspaceRoot, builder.Environment.ContentRootPath);
+    var workerWorkspaceRoot = Path.GetFullPath(team.WorkerWorkspaceRoot, builder.Environment.ContentRootPath);
     var evaluatorWorkspaceRoot = Path.GetFullPath(team.EvaluatorWorkspaceRoot, builder.Environment.ContentRootPath);
     var userDocWorkspaceRoot = Path.GetFullPath(team.UserDocWorkspaceRoot, builder.Environment.ContentRootPath);
     Directory.CreateDirectory(workerWorkspaceRoot);
