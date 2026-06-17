@@ -29,6 +29,26 @@ public sealed class LoggingChatClient(
         {
             logger.OnLlmExchange(conversationId, messages, response);
             store.PublishLlmExchange(conversationId, contextAccessor.AgentName ?? "?", response);
+
+            var agentName = contextAccessor.AgentName ?? "?";
+            foreach (var message in response.Messages)
+            {
+                foreach (var content in message.Contents)
+                {
+                    if (content is FunctionCallContent fc)
+                    {
+                        var argsText = fc.Arguments is not null
+                            ? string.Join(", ", fc.Arguments.Select(kv => $"{kv.Key}={kv.Value}"))
+                            : string.Empty;
+                        store.AddItem(
+                            conversationId,
+                            "assistant",
+                            string.IsNullOrEmpty(argsText) ? fc.Name : $"{fc.Name}({argsText})",
+                            ConversationItemKind.ToolCall,
+                            new Dictionary<string, string> { ["agent"] = agentName, ["tool"] = fc.Name });
+                    }
+                }
+            }
         }
 
         return response;

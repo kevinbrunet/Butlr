@@ -19,4 +19,5 @@ public enum ConversationItemKind
     HumanReply,
     ExpertQuestion,
     ExpertAnswer,
+    ToolCall,
 }

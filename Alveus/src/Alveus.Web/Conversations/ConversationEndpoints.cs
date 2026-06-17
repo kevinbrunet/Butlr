@@ -367,6 +367,8 @@ public static class ConversationEndpoints
         ConversationItemKind.ExpertAnswer
             => $"\n\n**💬 Expert [{item.Metadata.GetValueOrDefault("expert", "?")}]:** {item.Text}\n",
         ConversationItemKind.AssistantMessage => $"\n\n**[Assistant]** {item.Text}\n",
+        ConversationItemKind.ToolCall
+            => $"\n🔧 `{item.Metadata.GetValueOrDefault("agent", "?")}` → `{item.Text}`\n",
         _ => null,
     };
 

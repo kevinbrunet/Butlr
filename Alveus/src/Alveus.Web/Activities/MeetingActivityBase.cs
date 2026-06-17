@@ -149,6 +149,8 @@ public abstract class MeetingActivityBase : CodeActivity
 
             foreach (var role in roles)
             {
+                var lastTranscriptCount = transcript.Count;
+
                 var message = BuildMessage(role, round, topicText, extraContext, transcript, lastSeenIndex, topics);
                 lastSeenIndex[role] = transcript.Count;
 
@@ -183,7 +185,12 @@ public abstract class MeetingActivityBase : CodeActivity
                 {
                     finishSummaries[role] = finish.Summary;
                     transcript.Add($"[{role}] (Finish outcome={finish.Outcome}) {finish.Summary}");
+                }
 
+                PublishTranscript(conversationStore, conversationId, agentNames[role], transcript, lastTranscriptCount);
+
+                if (finish is not null)
+                {
                     switch (finish.Outcome)
                     {
                         case AgentTaskOutcome.Done:
@@ -307,6 +314,14 @@ public abstract class MeetingActivityBase : CodeActivity
             + "quand tu n'as plus rien à ajouter à ce round.");
 
         return sb.ToString();
+    }
+
+    private static void PublishTranscript(IConversationStore? store, string? conversationId, string agentName, List<string> transcript, int fromIndex)
+    {
+        if (store is null || string.IsNullOrEmpty(conversationId) || fromIndex >= transcript.Count) return;
+        var lines = string.Join("\n", transcript.Skip(fromIndex));
+        store.PublishLlmExchange(conversationId, agentName,
+            new ChatResponse([new ChatMessage(ChatRole.Assistant, lines)]));
     }
 
     private void PostOutcome(IConversationStore? store, string? conversationId, string outcome)
