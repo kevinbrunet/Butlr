@@ -37,8 +37,7 @@ public sealed class ConversationEndpointsTests
         }
     }
 
-    [Fact]
-    public async Task CreateConversation_StartsWorkflow_AndSuspendsOnAwaitConversationReply()
+    private static async Task<ServiceProvider> BuildProviderAsync()
     {
         var services = new ServiceCollection();
         services.AddSingleton<IConversationStore, ConversationStore>();
@@ -50,21 +49,58 @@ public sealed class ConversationEndpointsTests
         });
 
         var provider = services.BuildServiceProvider();
+        await provider.GetRequiredService<IWorkflowDefinitionStorePopulator>()
+            .PopulateStoreAsync(CancellationToken.None);
+        return provider;
+    }
+
+    /// <summary>
+    /// Vérifie que <see cref="ConversationEndpoints.CreateConversationAsync"/> retourne l'ID
+    /// immédiatement sans attendre la fin du workflow — comportement introduit pour éviter de
+    /// bloquer la connexion HTTP pendant toute la durée d'exécution (qui peut durer des minutes).
+    /// À l'instant du retour, le statut est "running" : le workflow tourne en arrière-plan dans
+    /// un scope DI indépendant (Task.Run).
+    /// </summary>
+    [Fact]
+    public async Task CreateConversation_ReturnsBeforeWorkflowSuspends_StatusIsRunning()
+    {
+        await using var provider = await BuildProviderAsync();
         var store = provider.GetRequiredService<IConversationStore>();
+        var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
+
+        var result = await ConversationEndpoints.CreateConversationAsync(
+            new CreateConversationRequest([
+                new ConversationItemRequest("user", [new ConversationContentPart("input_text", "test")]),
+            ]),
+            "default", store, scopeFactory, CancellationToken.None);
+
+        var created = Assert.IsType<ConversationResponse>(GetOkValue(result));
+
+        Assert.Equal("running", created.Status);
+    }
+
+    [Fact]
+    public async Task CreateConversation_WorkflowEventuallySuspends_OnAwaitConversationReply()
+    {
+        await using var provider = await BuildProviderAsync();
+        var store = provider.GetRequiredService<IConversationStore>();
+        var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
         var runtime = provider.GetRequiredService<IWorkflowRuntime>();
 
-        var populator = provider.GetRequiredService<IWorkflowDefinitionStorePopulator>();
-        await populator.PopulateStoreAsync(CancellationToken.None);
+        var createResult = await ConversationEndpoints.CreateConversationAsync(
+            new CreateConversationRequest([
+                new ConversationItemRequest("user", [new ConversationContentPart("input_text", "Bonjour")]),
+            ]),
+            "default", store, scopeFactory, CancellationToken.None);
 
-        var createRequest = new CreateConversationRequest(
-        [
-            new ConversationItemRequest("user", [new ConversationContentPart("input_text", "Bonjour")]),
-        ]);
-
-        var createResult = await ConversationEndpoints.CreateConversationAsync(createRequest, "default", store, runtime, CancellationToken.None);
         var created = Assert.IsType<ConversationResponse>(GetOkValue(createResult));
 
-        Assert.Equal("awaiting_input", created.Status);
+        // Le workflow tourne en background : attendre qu'il se suspende sur AwaitConversationReply.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (store.Get(created.Id)!.Status == "running" && !cts.IsCancellationRequested)
+            try { await Task.Delay(50, cts.Token); } catch (OperationCanceledException) { break; }
+
+        Assert.Equal("awaiting_input", store.Get(created.Id)!.Status);
 
         var getResult = ConversationEndpoints.GetConversation(created.Id, store);
         var fetched = Assert.IsType<ConversationResponse>(GetOkValue(getResult));
@@ -76,14 +112,14 @@ public sealed class ConversationEndpointsTests
         Assert.Contains(itemsResponse.Data, i => i.Metadata["kind"] == "user_message" && i.Content[0].Text == "Bonjour");
         Assert.Contains(itemsResponse.Data, i => i.Metadata["kind"] == "needs_help_question");
 
-        var addRequest = new AddConversationItemsRequest(
-        [
-            new ConversationItemRequest("user", [new ConversationContentPart("input_text", "ma réponse")]),
-        ]);
+        var addResult = await ConversationEndpoints.AddConversationItemsAsync(
+            created.Id,
+            new AddConversationItemsRequest([
+                new ConversationItemRequest("user", [new ConversationContentPart("input_text", "ma réponse")]),
+            ]),
+            store, runtime, CancellationToken.None);
 
-        var addResult = await ConversationEndpoints.AddConversationItemsAsync(created.Id, addRequest, store, runtime, CancellationToken.None);
         Assert.IsAssignableFrom<IResult>(addResult);
-
         Assert.Equal("completed", store.Get(created.Id)!.Status);
 
         var itemsAfterReply = ConversationEndpoints.ListConversationItems(created.Id, null, null, store);
