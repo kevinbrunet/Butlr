@@ -58,6 +58,7 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
         {
             Input = new Dictionary<string, object>
             {
+                ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
                 ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle directement ton outil de fin de tâche (Finish) avec "
                     + "outcome='done' et un résumé indiquant qu'il n'y avait rien à faire. Si tu es "
                     + "Alveus-EnvironmentManager ou Alveus-Evaluator, appelle Finish avec outcome='done' et "
@@ -104,6 +105,7 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
         {
             Input = new Dictionary<string, object>
             {
+                ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
                 ["TaskPrompt"] = "Si tu es Alveus-Worker, tu es bloqué : appelle immédiatement Finish avec "
                     + "outcome='blocked' et reason='Consigne ambiguë, impossible de continuer.'. "
                     + MeetingParticipantInstructions,
@@ -146,6 +148,7 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
         {
             Input = new Dictionary<string, object>
             {
+                ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
                 ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle Finish avec outcome='done' et un résumé indiquant "
                     + "qu'il n'y avait rien à faire. Si tu es Alveus-EnvironmentManager, tu es bloqué : appelle "
                     + "Finish avec outcome='blocked' et reason='Impossible de déterminer comment démarrer "
@@ -192,6 +195,7 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
         {
             Input = new Dictionary<string, object>
             {
+                ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
                 ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle Finish avec outcome='done'. Si tu es "
                     + "Alveus-EnvironmentManager, appelle Finish avec outcome='done' et verdict='pass'. Si tu es "
                     + "Alveus-Evaluator, tu es bloqué : appelle Finish avec outcome='blocked' et "
@@ -237,6 +241,7 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
             CorrelationId = conversationId,
             Input = new Dictionary<string, object>
             {
+                ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
                 ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle directement ton outil de fin de tâche (Finish) avec "
                     + "outcome='done' et un résumé indiquant qu'il n'y avait rien à faire. Si tu es "
                     + "Alveus-EnvironmentManager ou Alveus-Evaluator, appelle Finish avec outcome='done' et "
@@ -277,6 +282,7 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
         {
             Input = new Dictionary<string, object>
             {
+                ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
                 ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle Finish avec outcome='done' et un résumé indiquant "
                     + "qu'il n'y avait rien à faire, même si un rapport d'évaluation précédent est joint au message. "
                     + "Si tu es Alveus-EnvironmentManager, l'environnement ne démarre jamais : appelle "
@@ -322,6 +328,7 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
         {
             Input = new Dictionary<string, object>
             {
+                ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
                 ["TaskPrompt"] = "Si tu es Alveus-Worker : à la racine de ton espace de travail, crée une "
                     + "application console .NET (par exemple avec 'dotnet new console') dont le programme "
                     + "affiche exactement 'Hello World' (sans virgule) sur la sortie standard, puis appelle "
@@ -378,6 +385,7 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
         {
             Input = new Dictionary<string, object>
             {
+                ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
                 ["TaskPrompt"] = "Si tu es Alveus-Worker : à la racine de ton espace de travail, crée une "
                     + "application console .NET de gestion de liste de tâches (to-do list), pilotable "
                     + "uniquement via des arguments de ligne de commande (pas de mode interactif), avec les "
@@ -470,6 +478,7 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
         {
             Input = new Dictionary<string, object>
             {
+                ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
                 ["TaskPrompt"] = "Crée, à la racine de ton espace de travail, une application Web ASP.NET Core "
                     + "(Razor Pages ou Minimal API avec pages HTML, au choix) de gestion de liste de tâches "
                     + "(to-do list), avec une page d'accueil unique qui : affiche la liste des tâches "
