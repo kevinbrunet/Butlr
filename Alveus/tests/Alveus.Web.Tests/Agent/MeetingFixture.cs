@@ -38,10 +38,6 @@ public sealed class MeetingFixture : IAsyncLifetime
 
     public bool IsLlamaCppAvailable { get; private set; }
 
-    private static Uri Endpoint => new(Environment.GetEnvironmentVariable("ALVEUS_TEST_LLAMACPP_ENDPOINT") ?? "http://127.0.0.1:8083/v1");
-
-    private static string Model => Environment.GetEnvironmentVariable("ALVEUS_TEST_LLAMACPP_MODEL") ?? "qwen2.5-7b-instruct";
-
     public MeetingFixture()
     {
         var services = new ServiceCollection();
@@ -58,10 +54,10 @@ public sealed class MeetingFixture : IAsyncLifetime
 
         var openAiClient = new OpenAIClient(new ApiKeyCredential("not-needed"), new OpenAIClientOptions
         {
-            Endpoint = Endpoint,
+            Endpoint = new Uri(TestLlamaCppConfig.Endpoint ?? "http://not-configured"),
         });
 
-        IChatClient chatClient = openAiClient.GetChatClient(Model).AsIChatClient();
+        IChatClient chatClient = openAiClient.GetChatClient(TestLlamaCppConfig.Model ?? "not-configured").AsIChatClient();
 
         // MeetingActivityBase accède à IConversationContextAccessor (et conditionnellement IConversationStore).
         services.AddSingleton<IConversationStore, ConversationStore>();
@@ -113,12 +109,15 @@ public sealed class MeetingFixture : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
+        var endpoint = TestLlamaCppConfig.Endpoint;
+        if (endpoint is null)
+            return;
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
         try
         {
             // ~ llama.cpp expose /v1/models (API OpenAI-compatible) — utilisé ici uniquement
             // comme sonde de disponibilité, pas pour vérifier le contenu de la réponse.
-            using var response = await client.GetAsync(new Uri($"{Endpoint.ToString().TrimEnd('/')}/models"));
+            using var response = await client.GetAsync(new Uri($"{endpoint.TrimEnd('/')}/models"));
             IsLlamaCppAvailable = response.IsSuccessStatusCode;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
