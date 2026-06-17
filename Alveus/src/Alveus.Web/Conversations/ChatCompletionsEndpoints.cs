@@ -45,8 +45,8 @@ public static class ChatCompletionsEndpoints
         {
             var tag = teamName;
             app.MapPost($"/teams/{teamName}/v1/chat/completions",
-                (HttpContext ctx, IConversationStore store, IWorkflowRuntime runtime, CancellationToken ct) =>
-                    HandleAsync(ctx, tag, store, runtime, ct))
+                (HttpContext ctx, IConversationStore store, IServiceScopeFactory scopeFactory, CancellationToken ct) =>
+                    HandleAsync(ctx, tag, store, scopeFactory, ct))
                .WithName($"ChatCompletions-{teamName}");
         }
 
@@ -59,7 +59,7 @@ public static class ChatCompletionsEndpoints
         HttpContext httpContext,
         string teamName,
         IConversationStore store,
-        IWorkflowRuntime runtime,
+        IServiceScopeFactory scopeFactory,
         CancellationToken ct)
     {
         ChatRequest? request;
@@ -104,7 +104,7 @@ public static class ChatCompletionsEndpoints
         var events = store.SubscribeEventsAsync(conversationId, ct);
 
         // Workflow lancé en tâche de fond : RunInstanceAsync peut bloquer longtemps (appels LLM).
-        var workflowTask = RunWorkflowAsync(store, runtime, conversationId, userMessage, teamName, ct);
+        var workflowTask = RunWorkflowAsync(store, scopeFactory, conversationId, userMessage, teamName, ct);
 
         // Début du flux SSE
         httpContext.Response.Headers.ContentType = "text/event-stream";
@@ -156,30 +156,31 @@ public static class ChatCompletionsEndpoints
         }
         catch (OperationCanceledException)
         {
-            // Client déconnecté — le workflowTask sera annulé par le même ct.
+            // Client SSE déconnecté. Le workflow continue en arrière-plan (scope indépendant).
         }
 
         await WriteDoneAsync(httpContext.Response, chatId, created, model, ct);
 
+        // workflowTask se termine dès que Task.Run est lancé : pas besoin de l'attendre.
         try { await workflowTask; }
         catch (OperationCanceledException) { }
-        catch (Exception ex)
-        {
-            // Déjà loggué par le workflow lui-même via Elsa.
-            _ = ex;
-        }
+        catch (Exception ex) { _ = ex; }
     }
 
     private static async Task RunWorkflowAsync(
         IConversationStore store,
-        IWorkflowRuntime runtime,
+        IServiceScopeFactory scopeFactory,
         string conversationId,
         string taskPrompt,
         string teamName,
         CancellationToken ct)
     {
+        // Créer l'instance dans le scope de la requête courante (opération rapide, pas de LLM).
+        string workflowInstanceId;
         try
         {
+            await using var requestScope = scopeFactory.CreateAsyncScope();
+            var runtime = requestScope.ServiceProvider.GetRequiredService<IWorkflowRuntime>();
             var client = await runtime.CreateClientAsync(ct);
             await client.CreateInstanceAsync(new CreateWorkflowInstanceRequest
             {
@@ -193,54 +194,55 @@ public static class ChatCompletionsEndpoints
                     ["TeamName"] = teamName,
                 },
             }, ct);
+            workflowInstanceId = client.WorkflowInstanceId;
+        }
+        catch (OperationCanceledException)
+        {
+            store.Complete(conversationId, failed: true);
+            throw;
+        }
 
-            store.SetWorkflowInstanceId(conversationId, client.WorkflowInstanceId);
+        store.SetWorkflowInstanceId(conversationId, workflowInstanceId);
 
-            var runResponse = await client.RunInstanceAsync(new RunWorkflowInstanceRequest(), ct);
-
-            // RunInstanceAsync peut retourner Finished si le workflow est synchrone, ou Pending/
-            // Executing si Elsa le dispatche en arrière-plan. Dans tous les cas on appelle Complete
-            // ici pour les statuts terminaux ; les statuts en cours se résoudront via les
-            // notifications Elsa (ConversationTransitionNotificationHandler) ou via d'autres
-            // appels RunInstanceAsync (AwaitConversationReply).
-            switch (runResponse.SubStatus)
+        // Lancer le workflow dans un scope DI indépendant : la requête HTTP peut se terminer
+        // avant la fin du workflow (LLM lents, longues tâches). CancellationToken.None garantit
+        // que le workflow ne sera pas annulé si le client SSE se déconnecte.
+        _ = Task.Run(async () =>
+        {
+            try
             {
-                case Elsa.Workflows.WorkflowSubStatus.Finished:
-                    store.Complete(conversationId, failed: false);
-                    break;
-                case Elsa.Workflows.WorkflowSubStatus.Faulted:
-                case Elsa.Workflows.WorkflowSubStatus.Cancelled:
-                    store.AddItem(conversationId, "assistant",
-                        "Le workflow a échoué — voir les logs du serveur pour le détail.",
-                        ConversationItemKind.ActivityTransition,
-                        new Dictionary<string, string> { ["phase"] = "error" });
-                    store.Complete(conversationId, failed: true);
-                    break;
-                case Elsa.Workflows.WorkflowSubStatus.Suspended:
-                    // Bookmark posé par AwaitConversationReply — le channel reste ouvert,
-                    // les abonnés reçoivent le signal et peuvent envoyer la réponse.
-                    store.PublishSuspended(conversationId);
-                    break;
+                await using var bgScope = scopeFactory.CreateAsyncScope();
+                var bgRuntime = bgScope.ServiceProvider.GetRequiredService<IWorkflowRuntime>();
+                var bgClient = await bgRuntime.CreateClientAsync(workflowInstanceId, CancellationToken.None);
+                var runResponse = await bgClient.RunInstanceAsync(new RunWorkflowInstanceRequest(), CancellationToken.None);
+
+                switch (runResponse.SubStatus)
+                {
+                    case Elsa.Workflows.WorkflowSubStatus.Finished:
+                        store.Complete(conversationId, failed: false);
+                        break;
+                    case Elsa.Workflows.WorkflowSubStatus.Faulted:
+                    case Elsa.Workflows.WorkflowSubStatus.Cancelled:
+                        store.AddItem(conversationId, "assistant",
+                            "Le workflow a échoué — voir les logs du serveur pour le détail.",
+                            ConversationItemKind.ActivityTransition,
+                            new Dictionary<string, string> { ["phase"] = "error" });
+                        store.Complete(conversationId, failed: true);
+                        break;
+                    case Elsa.Workflows.WorkflowSubStatus.Suspended:
+                        store.PublishSuspended(conversationId);
+                        break;
+                }
             }
-        }
-        catch (OperationCanceledException ex)
-        {
-            store.AddItem(conversationId, "assistant",
-                $"Le workflow a été annulé : {ex.Message}",
-                ConversationItemKind.ActivityTransition,
-                new Dictionary<string, string> { ["phase"] = "error" });
-            store.Complete(conversationId, failed: true);
-            throw;
-        }
-        catch (Exception ex)
-        {
-            store.AddItem(conversationId, "assistant",
-                $"Erreur inattendue : {ex.Message}",
-                ConversationItemKind.ActivityTransition,
-                new Dictionary<string, string> { ["phase"] = "error" });
-            store.Complete(conversationId, failed: true);
-            throw;
-        }
+            catch (Exception ex)
+            {
+                store.AddItem(conversationId, "assistant",
+                    $"Erreur inattendue : {ex.Message}",
+                    ConversationItemKind.ActivityTransition,
+                    new Dictionary<string, string> { ["phase"] = "error" });
+                store.Complete(conversationId, failed: true);
+            }
+        });
     }
 
     // ── Formatage SSE ─────────────────────────────────────────────────────────────────────────────

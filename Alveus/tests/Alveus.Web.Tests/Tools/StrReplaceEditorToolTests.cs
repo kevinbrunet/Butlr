@@ -26,11 +26,14 @@ public sealed class StrReplaceEditorToolTests : IDisposable
     }
 
     [Fact]
-    public void Execute_Create_OnExistingFile_Throws()
+    public void Execute_Create_OnExistingFile_ReturnsError()
     {
         _tool.Execute("create", "greeting.txt", file_text: "bonjour");
 
-        Assert.Throws<InvalidOperationException>(() => _tool.Execute("create", "greeting.txt", file_text: "autre"));
+        var result = _tool.Execute("create", "greeting.txt", file_text: "autre");
+
+        Assert.StartsWith("Erreur", result);
+        Assert.Contains("existe déjà", result);
     }
 
     [Fact]
@@ -45,20 +48,24 @@ public sealed class StrReplaceEditorToolTests : IDisposable
     }
 
     [Fact]
-    public void Execute_ViewFile_OnMissingFile_Throws()
+    public void Execute_ViewFile_OnMissingFile_ReturnsError()
     {
-        Assert.Throws<FileNotFoundException>(() => _tool.Execute("view", "absent.txt"));
+        var result = _tool.Execute("view", "absent.txt");
+
+        Assert.StartsWith("Erreur", result);
+        Assert.Contains("introuvable", result);
     }
 
     [Fact]
-    public void Execute_ViewDirectory_ThrowsAndRedirectsToCmdRunTool()
+    public void Execute_ViewDirectory_ReturnsErrorWithRedirectToCmdRunTool()
     {
         Directory.CreateDirectory(FullPath("sub"));
 
-        var ex = Assert.Throws<InvalidOperationException>(() => _tool.Execute("view", "sub"));
+        var result = _tool.Execute("view", "sub");
 
-        Assert.Contains("répertoire", ex.Message);
-        Assert.Contains("ls", ex.Message);
+        Assert.StartsWith("Erreur", result);
+        Assert.Contains("répertoire", result);
+        Assert.Contains("ls", result);
     }
 
     [Fact]
@@ -72,19 +79,24 @@ public sealed class StrReplaceEditorToolTests : IDisposable
     }
 
     [Fact]
-    public void Execute_StrReplace_OldStrNotFound_Throws()
+    public void Execute_StrReplace_OldStrNotFound_ReturnsError()
     {
         _tool.Execute("create", "file.txt", file_text: "hello world");
 
-        Assert.Throws<InvalidOperationException>(() => _tool.Execute("str_replace", "file.txt", old_str: "missing", new_str: "x"));
+        var result = _tool.Execute("str_replace", "file.txt", old_str: "missing", new_str: "x");
+
+        Assert.StartsWith("Erreur", result);
+        Assert.Contains("introuvable", result);
     }
 
     [Fact]
-    public void Execute_StrReplace_OldStrNotUnique_Throws()
+    public void Execute_StrReplace_OldStrNotUnique_ReturnsError()
     {
         _tool.Execute("create", "file.txt", file_text: "a a");
 
-        Assert.Throws<InvalidOperationException>(() => _tool.Execute("str_replace", "file.txt", old_str: "a", new_str: "b"));
+        var result = _tool.Execute("str_replace", "file.txt", old_str: "a", new_str: "b");
+
+        Assert.StartsWith("Erreur", result);
     }
 
     [Fact]
@@ -108,11 +120,13 @@ public sealed class StrReplaceEditorToolTests : IDisposable
     }
 
     [Fact]
-    public void Execute_Insert_LineOutOfRange_Throws()
+    public void Execute_Insert_LineOutOfRange_ReturnsError()
     {
         _tool.Execute("create", "file.txt", file_text: "ligne1");
 
-        Assert.Throws<ArgumentOutOfRangeException>(() => _tool.Execute("insert", "file.txt", new_str: "x", insert_line: 99));
+        var result = _tool.Execute("insert", "file.txt", new_str: "x", insert_line: 99);
+
+        Assert.StartsWith("Erreur", result);
     }
 
     [Fact]
@@ -148,22 +162,31 @@ public sealed class StrReplaceEditorToolTests : IDisposable
     }
 
     [Fact]
-    public void Execute_UndoEdit_WithoutHistory_Throws()
+    public void Execute_UndoEdit_WithoutHistory_ReturnsError()
     {
         _tool.Execute("create", "file.txt", file_text: "hello");
 
-        Assert.Throws<InvalidOperationException>(() => _tool.Execute("undo_edit", "other.txt"));
+        var result = _tool.Execute("undo_edit", "other.txt");
+
+        Assert.StartsWith("Erreur", result);
+        Assert.Contains("annuler", result);
     }
 
     [Fact]
-    public void Execute_PathOutsideWorkspace_Throws()
+    public void Execute_PathOutsideWorkspace_ReturnsError()
     {
-        Assert.Throws<InvalidOperationException>(() => _tool.Execute("view", "../outside.txt"));
+        var result = _tool.Execute("view", "../outside.txt");
+
+        Assert.StartsWith("Erreur", result);
+        Assert.Contains("workspace", result);
     }
 
     [Fact]
-    public void Execute_UnknownCommand_Throws()
+    public void Execute_UnknownCommand_ReturnsErrorWithExpectedCommands()
     {
-        Assert.Throws<ArgumentException>(() => _tool.Execute("frobnicate", "file.txt"));
+        var result = _tool.Execute("frobnicate", "file.txt");
+
+        Assert.StartsWith("Erreur", result);
+        Assert.Contains("view", result);
     }
 }
