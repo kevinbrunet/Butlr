@@ -1,6 +1,7 @@
 using System.ClientModel;
 using Alveus.Web.Activities;
 using Alveus.Web.Agents;
+using Alveus.Web.Conversations;
 using Alveus.Web.Tools;
 using Elsa.Extensions;
 using Microsoft.Agents.AI;
@@ -48,6 +49,8 @@ public sealed class RunEnvironmentPromptFixture : IAsyncLifetime
 
         IChatClient chatClient = openAiClient.GetChatClient(Model).AsIChatClient();
 
+        services.AddSingleton<IConversationStore, ConversationStore>();
+        services.AddSingleton<IConversationContextAccessor, ConversationContextAccessor>();
         services.AddSingleton(_ => new CmdRunTool(WorkerWorkspaceRoot));
         services.AddSingleton(_ => new StrReplaceEditorTool(WorkerWorkspaceRoot));
         services.AddSingleton<FinishTool>();
