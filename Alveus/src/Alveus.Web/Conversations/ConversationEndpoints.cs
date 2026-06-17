@@ -1,8 +1,10 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Elsa.Workflows;
 using Elsa.Workflows.Models;
 using Elsa.Workflows.Runtime;
 using Elsa.Workflows.Runtime.Messages;
+using Microsoft.Extensions.AI;
 
 namespace Alveus.Web.Conversations;
 
@@ -38,6 +40,7 @@ public static class ConversationEndpoints
             app.MapGet($"{prefix}/v1/conversations/{{id}}/items", ListConversationItems).WithName($"ListConversationItems-{teamName}");
             app.MapPost($"{prefix}/v1/conversations/{{id}}/items", AddConversationItemsAsync).WithName($"AddConversationItems-{teamName}");
             app.MapGet($"{prefix}/v1/conversations/{{id}}/stream", StreamConversationAsync).WithName($"StreamConversation-{teamName}");
+            app.MapGet($"{prefix}/v1/conversations/{{id}}/oai-stream", StreamOaiAsync).WithName($"StreamOai-{teamName}");
         }
 
         return app;
@@ -218,4 +221,135 @@ public static class ConversationEndpoints
         ConversationItemKind.ExpertAnswer => "expert_answer",
         _ => "unknown",
     };
+
+    // ── OAI stream ──────────────────────────────────────────────────────────────────────────────
+
+    private static readonly JsonSerializerOptions OaiOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    private sealed record OaiChunk(string Id, string Object, long Created, string Model, OaiChoice[] Choices);
+    private sealed record OaiChoice(int Index, OaiDelta Delta, string? FinishReason);
+    private sealed record OaiDelta(string? Role = null, string? Content = null, string? ReasoningContent = null);
+
+    private static async Task StreamOaiAsync(string id, HttpContext httpContext, IConversationStore store, CancellationToken ct)
+    {
+        var conversation = store.Get(id);
+        if (conversation is null)
+        {
+            httpContext.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+
+        httpContext.Response.Headers.ContentType = "text/event-stream";
+        httpContext.Response.Headers.CacheControl = "no-cache";
+        httpContext.Response.Headers.Connection = "keep-alive";
+
+        var chatId = $"chatcmpl-{id}";
+        var created = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        await WriteOaiChunkAsync(httpContext.Response, chatId, created, new OaiDelta(Role: "assistant"), null, ct);
+
+        foreach (var item in store.GetItems(id))
+        {
+            var text = FormatItemForOai(item);
+            if (text is not null)
+                await WriteOaiChunkAsync(httpContext.Response, chatId, created, new OaiDelta(Content: text), null, ct);
+        }
+
+        if (conversation.Status is "completed" or "failed")
+        {
+            await WriteOaiDoneAsync(httpContext.Response, chatId, created, ct);
+            return;
+        }
+
+        await foreach (var evt in store.SubscribeEventsAsync(id, ct))
+        {
+            switch (evt)
+            {
+                case ConversationItemStreamEvent { Item: var item }:
+                    var text = FormatItemForOai(item);
+                    if (text is not null)
+                        await WriteOaiChunkAsync(httpContext.Response, chatId, created, new OaiDelta(Content: text), null, ct);
+                    break;
+
+                case LlmExchangeStreamEvent llm:
+                    await WriteLlmExchangeChunksAsync(httpContext.Response, chatId, created, llm, ct);
+                    break;
+
+                case WorkflowCompletedStreamEvent:
+                    await WriteOaiDoneAsync(httpContext.Response, chatId, created, ct);
+                    return;
+            }
+        }
+
+        await WriteOaiDoneAsync(httpContext.Response, chatId, created, ct);
+    }
+
+    private static async Task WriteLlmExchangeChunksAsync(HttpResponse response, string chatId, long created, LlmExchangeStreamEvent llm, CancellationToken ct)
+    {
+        await WriteOaiChunkAsync(response, chatId, created,
+            new OaiDelta(ReasoningContent: $"\n\n**[{llm.AgentName}]**\n"), null, ct);
+
+        foreach (var message in llm.Response.Messages)
+        {
+            foreach (var content in message.Contents)
+            {
+                switch (content)
+                {
+                    case TextContent tc when !string.IsNullOrWhiteSpace(tc.Text):
+                        await WriteOaiChunkAsync(response, chatId, created,
+                            new OaiDelta(ReasoningContent: tc.Text), null, ct);
+                        break;
+
+                    case FunctionCallContent fc:
+                        var args = fc.Arguments is not null
+                            ? string.Join(", ", fc.Arguments.Select(kv => $"{kv.Key}={kv.Value}"))
+                            : string.Empty;
+                        await WriteOaiChunkAsync(response, chatId, created,
+                            new OaiDelta(ReasoningContent: $"\n⟨{fc.Name}({args})⟩"), null, ct);
+                        break;
+                }
+            }
+        }
+    }
+
+    private static string? FormatItemForOai(ConversationItem item) => item.Kind switch
+    {
+        ConversationItemKind.ActivityTransition
+            when item.Metadata.GetValueOrDefault("phase") == "starting"
+            => $"\n\n---\n**⚙ {item.Metadata.GetValueOrDefault("activityId", "?")}**\n",
+        ConversationItemKind.ActivityTransition => null,
+        ConversationItemKind.UserMessage => $"\n\n**[User]** {item.Text}\n",
+        ConversationItemKind.HumanReply => $"\n\n**[Human]** {item.Text}\n",
+        ConversationItemKind.NeedsHelpQuestion => $"\n\n**❓** {item.Text}\n",
+        ConversationItemKind.FileEdit
+            => $"\n📝 `{item.Metadata.GetValueOrDefault("command", "?")}` → `{item.Metadata.GetValueOrDefault("path", "?")}`\n",
+        ConversationItemKind.MeetingRound
+            => $"\n\n**Round {item.Metadata.GetValueOrDefault("round", "?")}:**\n{item.Text}\n",
+        ConversationItemKind.ExpertQuestion
+            => $"\n\n**❓ Expert [{item.Metadata.GetValueOrDefault("expert", "?")}]:** {item.Text}\n",
+        ConversationItemKind.ExpertAnswer
+            => $"\n\n**💬 Expert [{item.Metadata.GetValueOrDefault("expert", "?")}]:** {item.Text}\n",
+        ConversationItemKind.AssistantMessage => $"\n\n**[Assistant]** {item.Text}\n",
+        _ => null,
+    };
+
+    private static async Task WriteOaiChunkAsync(HttpResponse response, string id, long created, OaiDelta delta, string? finishReason, CancellationToken ct)
+    {
+        var chunk = new OaiChunk(id, "chat.completion.chunk", created, "alveus-workflow",
+            [new OaiChoice(0, delta, finishReason)]);
+        var json = JsonSerializer.Serialize(chunk, OaiOptions);
+        await response.WriteAsync($"data: {json}\n\n", ct);
+        await response.Body.FlushAsync(ct);
+    }
+
+    private static async Task WriteOaiDoneAsync(HttpResponse response, string id, long created, CancellationToken ct)
+    {
+        await WriteOaiChunkAsync(response, id, created, new OaiDelta(), "stop", ct);
+        await response.WriteAsync("data: [DONE]\n\n", ct);
+        await response.Body.FlushAsync(ct);
+    }
 }

@@ -387,7 +387,8 @@ var app = builder.Build();
 var loggingClient = new Alveus.Web.Logging.LoggingChatClient(
     chatClient,
     app.Services.GetRequiredService<Alveus.Web.Logging.ITaskLogger>(),
-    app.Services.GetRequiredService<IConversationContextAccessor>());
+    app.Services.GetRequiredService<IConversationContextAccessor>(),
+    app.Services.GetRequiredService<IConversationStore>());
 
 chatClient = new FunctionInvokingChatClient(loggingClient)
 {
@@ -401,6 +402,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+app.UseWebSockets();
 
 app.UseAuthentication();
 app.UseAuthorization();
@@ -409,6 +411,8 @@ app.UseWorkflows();
 app.UseWorkflowsApi();
 
 app.MapConversationEndpoints(teams.Select(t => t.Name));
+app.MapChatCompletionsEndpoints(teams.Select(t => t.Name));
+app.MapWebSocketEndpoints(teams.Select(t => t.Name));
 app.MapExpertEndpoints(teams.Select(t => t.Name));
 
 app.Run();

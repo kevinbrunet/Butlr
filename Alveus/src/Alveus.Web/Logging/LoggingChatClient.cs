@@ -5,14 +5,17 @@ namespace Alveus.Web.Logging;
 
 /// <summary>
 /// Decorator <see cref="IChatClient"/> qui logue chaque échange LLM brut (messages entrants +
-/// réponse complète, thinking Qwen3 inclus) via <see cref="ITaskLogger.OnLlmExchange"/>.
-/// La conversation courante est résolue via <see cref="IConversationContextAccessor"/> — si elle
-/// est vide (appel hors contexte workflow), l'échange n'est pas loggué.
+/// réponse complète, thinking Qwen3 inclus) via <see cref="ITaskLogger.OnLlmExchange"/> ET le
+/// diffuse en temps réel aux abonnés du flux OAI via
+/// <see cref="IConversationStore.PublishLlmExchange"/>. La conversation courante et le nom de
+/// l'agent actif sont résolus via <see cref="IConversationContextAccessor"/> — si l'identifiant de
+/// conversation est vide (appel hors contexte workflow), l'échange n'est pas traité.
 /// </summary>
 public sealed class LoggingChatClient(
     IChatClient inner,
     ITaskLogger logger,
-    IConversationContextAccessor contextAccessor) : IChatClient
+    IConversationContextAccessor contextAccessor,
+    IConversationStore store) : IChatClient
 {
     public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
@@ -25,6 +28,7 @@ public sealed class LoggingChatClient(
         if (!string.IsNullOrEmpty(conversationId))
         {
             logger.OnLlmExchange(conversationId, messages, response);
+            store.PublishLlmExchange(conversationId, contextAccessor.AgentName ?? "?", response);
         }
 
         return response;

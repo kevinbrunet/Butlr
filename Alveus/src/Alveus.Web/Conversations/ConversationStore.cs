@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Threading.Channels;
 using Alveus.Web.Logging;
+using Microsoft.Extensions.AI;
 
 namespace Alveus.Web.Conversations;
 
@@ -8,9 +9,10 @@ namespace Alveus.Web.Conversations;
 public sealed class ConversationStore : IConversationStore
 {
     private readonly ConcurrentDictionary<string, ConversationState> _conversations = new();
-    private readonly ITaskLogger _logger;
+    private readonly ITaskLogger? _logger;
 
-    public ConversationStore(ITaskLogger logger) => _logger = logger;
+    // ITaskLogger est nullable pour faciliter les tests unitaires (pas de DI).
+    public ConversationStore(ITaskLogger? logger = null) => _logger = logger;
 
     public ConversationState Create()
     {
@@ -49,7 +51,13 @@ public sealed class ConversationStore : IConversationStore
             channel.Writer.TryWrite(item);
         }
 
-        _logger.OnItem(item);
+        var evt = new ConversationItemStreamEvent(item);
+        foreach (var channel in state.EventSubscribers.Values)
+        {
+            channel.Writer.TryWrite(evt);
+        }
+
+        _logger?.OnItem(item);
         return item;
     }
 
@@ -126,7 +134,14 @@ public sealed class ConversationStore : IConversationStore
             channel.Writer.TryComplete();
         }
 
-        _logger.OnCompleted(conversationId, status);
+        var completedEvt = new WorkflowCompletedStreamEvent(conversationId, status);
+        foreach (var channel in state.EventSubscribers.Values)
+        {
+            channel.Writer.TryWrite(completedEvt);
+            channel.Writer.TryComplete();
+        }
+
+        _logger?.OnCompleted(conversationId, status);
     }
 
     public async IAsyncEnumerable<ConversationItem> SubscribeAsync(
@@ -151,6 +166,63 @@ public sealed class ConversationStore : IConversationStore
         finally
         {
             state.Subscribers.TryRemove(subscriberId, out _);
+        }
+    }
+
+    public void PublishLlmExchange(string conversationId, string agentName, ChatResponse response)
+    {
+        if (!_conversations.TryGetValue(conversationId, out var state)) return;
+        var evt = new LlmExchangeStreamEvent(conversationId, agentName, response);
+        foreach (var channel in state.EventSubscribers.Values)
+        {
+            channel.Writer.TryWrite(evt);
+        }
+    }
+
+    public void PublishSuspended(string conversationId)
+    {
+        if (!_conversations.TryGetValue(conversationId, out var state)) return;
+        var evt = new WorkflowSuspendedStreamEvent(conversationId);
+        foreach (var channel in state.EventSubscribers.Values)
+        {
+            // Channel intentionnellement laissé ouvert : les abonnés continuent à écouter
+            // pour recevoir les événements de la reprise après réponse humaine.
+            channel.Writer.TryWrite(evt);
+        }
+    }
+
+    public IAsyncEnumerable<WorkflowStreamEvent> SubscribeEventsAsync(
+        string conversationId,
+        CancellationToken cancellationToken)
+    {
+        var state = GetRequired(conversationId);
+        var channel = Channel.CreateUnbounded<WorkflowStreamEvent>();
+        var subscriberId = Guid.NewGuid();
+        // Abonnement IMMÉDIAT (avant que l'appelant commence à consommer) : les événements produits
+        // entre cet appel et le premier MoveNextAsync sont mis en tampon dans le channel, sans perte.
+        state.EventSubscribers[subscriberId] = channel;
+        return DrainChannelAsync(channel, subscriberId, state, cancellationToken);
+    }
+
+    private static async IAsyncEnumerable<WorkflowStreamEvent> DrainChannelAsync(
+        Channel<WorkflowStreamEvent> channel,
+        Guid subscriberId,
+        ConversationState state,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (await channel.Reader.WaitToReadAsync(cancellationToken))
+            {
+                while (channel.Reader.TryRead(out var evt))
+                {
+                    yield return evt;
+                }
+            }
+        }
+        finally
+        {
+            state.EventSubscribers.TryRemove(subscriberId, out _);
         }
     }
 

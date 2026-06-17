@@ -3,6 +3,7 @@ using System.Threading.Channels;
 
 namespace Alveus.Web.Conversations;
 
+
 /// <summary>
 /// État mutable d'une conversation (cf. ADR 0027). <see cref="Items"/> est append-only et protégé
 /// par <see cref="Lock"/> ; <see cref="Subscribers"/> reçoit chaque nouvel item pour le streaming SSE
@@ -30,5 +31,9 @@ public sealed class ConversationState
 
     public List<ConversationItem> Items { get; } = [];
 
+    /// <summary>Abonnés au flux d'items bruts (endpoint <c>/stream</c> legacy).</summary>
     public ConcurrentDictionary<Guid, Channel<ConversationItem>> Subscribers { get; } = new();
+
+    /// <summary>Abonnés au flux d'événements unifiés (items + échanges LLM) pour l'endpoint <c>/oai-stream</c>.</summary>
+    public ConcurrentDictionary<Guid, Channel<WorkflowStreamEvent>> EventSubscribers { get; } = new();
 }

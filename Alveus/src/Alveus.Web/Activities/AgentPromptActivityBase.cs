@@ -63,7 +63,8 @@ public abstract class AgentPromptActivityBase : CodeActivity
     protected override async ValueTask ExecuteAsync(ActivityExecutionContext context)
     {
         var conversationId = context.WorkflowExecutionContext.CorrelationId;
-        context.GetRequiredService<IConversationContextAccessor>().ConversationId = conversationId;
+        var contextAccessor = context.GetRequiredService<IConversationContextAccessor>();
+        contextAccessor.ConversationId = conversationId;
 
         var agentName = context.Get(AgentName);
         ArgumentException.ThrowIfNullOrWhiteSpace(agentName);
@@ -81,6 +82,7 @@ public abstract class AgentPromptActivityBase : CodeActivity
         {
             session = await _compactionService.CompactIfNeededAsync(agent, session, context.CancellationToken);
 
+            contextAccessor.AgentName = agentName;
             var response = await agent.RunAsync(nextMessage, session, cancellationToken: context.CancellationToken);
             await PersistSessionAsync(context, agent, session, sessionStatePropertyName);
 

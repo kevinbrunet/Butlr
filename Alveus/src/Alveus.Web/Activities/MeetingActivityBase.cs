@@ -113,7 +113,8 @@ public abstract class MeetingActivityBase : CodeActivity
     protected override async ValueTask ExecuteAsync(ActivityExecutionContext context)
     {
         var conversationId = context.WorkflowExecutionContext.CorrelationId;
-        context.GetRequiredService<IConversationContextAccessor>().ConversationId = conversationId;
+        var contextAccessor = context.GetRequiredService<IConversationContextAccessor>();
+        contextAccessor.ConversationId = conversationId;
         var conversationStore = string.IsNullOrEmpty(conversationId) ? null : context.GetRequiredService<IConversationStore>();
 
         var topicText = context.Get(Topic);
@@ -165,6 +166,7 @@ public abstract class MeetingActivityBase : CodeActivity
                 lastSeenIndex[role] = transcript.Count;
 
                 sessions[role] = await _compactionService.CompactIfNeededAsync(agents[role], sessions[role], context.CancellationToken);
+                contextAccessor.AgentName = agentNames[role];
                 var response = await agents[role].RunAsync(message, sessions[role], cancellationToken: context.CancellationToken);
                 await PersistSessionAsync(context, agents[role], sessions[role], SessionStatePropertyPrefix + agentNames[role]);
 
