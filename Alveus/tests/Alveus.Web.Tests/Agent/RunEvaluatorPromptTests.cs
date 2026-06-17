@@ -106,7 +106,7 @@ public sealed class RunEvaluatorPromptTests : IClassFixture<RunEvaluatorPromptFi
             "Tu dois vérifier que la tâche a été accomplie, mais les instructions d'utilisation de "
             + "l'environnement ne précisent aucune URL ni port pour accéder au service — tu ne peux pas "
             + "exécuter les tests sans ces informations. "
-            + "Appelle l'outil Finish avec outcome='done', verdict='needmoreinfo', "
+            + "Appelle l'outil Finish avec outcome='needsmoreinfo' (avec le 's'), "
             + "une reason expliquant ce qui manque, au moins une question précise pour obtenir les informations "
             + "nécessaires, et un summary.");
 
