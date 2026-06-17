@@ -249,9 +249,21 @@ public static class ChatCompletionsEndpoints
         HttpResponse response, string chatId, long created, string model,
         LlmExchangeStreamEvent llm, CancellationToken ct)
     {
-        await WriteChunkAsync(response, chatId, created, model,
-            new OaiDelta(ReasoningContent: $"\n\n**[{llm.AgentName}]**\n"), null, ct);
+        foreach (var chunk in FormatLlmExchangeReasoningChunks(llm))
+        {
+            await WriteChunkAsync(response, chatId, created, model,
+                new OaiDelta(ReasoningContent: chunk), null, ct);
+        }
+    }
 
+    /// <summary>
+    /// Convertit un <see cref="LlmExchangeStreamEvent"/> en séquence de fragments
+    /// <c>reasoning_content</c> SSE. <see cref="FunctionCallContent"/> est omis
+    /// volontairement — il est tracé via l'item <see cref="ConversationItemKind.ToolCall"/>.
+    /// </summary>
+    internal static IEnumerable<string> FormatLlmExchangeReasoningChunks(LlmExchangeStreamEvent llm)
+    {
+        yield return $"\n\n**[{llm.AgentName}]**\n";
         foreach (var message in llm.Response.Messages)
         {
             foreach (var content in message.Contents)
@@ -259,12 +271,10 @@ public static class ChatCompletionsEndpoints
                 switch (content)
                 {
                     case TextReasoningContent trc when !string.IsNullOrWhiteSpace(trc.Text):
-                        await WriteChunkAsync(response, chatId, created, model,
-                            new OaiDelta(ReasoningContent: trc.Text), null, ct);
+                        yield return trc.Text;
                         break;
                     case TextContent tc when !string.IsNullOrWhiteSpace(tc.Text):
-                        await WriteChunkAsync(response, chatId, created, model,
-                            new OaiDelta(ReasoningContent: tc.Text), null, ct);
+                        yield return tc.Text;
                         break;
                     // FunctionCallContent omis : tracé comme ToolCall item dans le flux Content.
                 }
@@ -272,7 +282,7 @@ public static class ChatCompletionsEndpoints
         }
     }
 
-    private static string? FormatItem(ConversationItem item) => item.Kind switch
+    internal static string? FormatItem(ConversationItem item) => item.Kind switch
     {
         ConversationItemKind.ActivityTransition
             when item.Metadata.GetValueOrDefault("phase") == "starting"
