@@ -325,12 +325,7 @@ public static class WebSocketEndpoints
                     case TextContent tc when !string.IsNullOrWhiteSpace(tc.Text):
                         await SendAsync(ws, ThinkingDelta(conversationId, tc.Text, seq++), ct);
                         break;
-                    case FunctionCallContent fc:
-                        var args = fc.Arguments is not null
-                            ? string.Join(", ", fc.Arguments.Select(kv => $"{kv.Key}={kv.Value}"))
-                            : string.Empty;
-                        await SendAsync(ws, ThinkingDelta(conversationId, $"\n⟨{fc.Name}({args})⟩", seq++), ct);
-                        break;
+                    // FunctionCallContent omis : tracé comme ToolCall item dans le flux Content.
                 }
             }
         }

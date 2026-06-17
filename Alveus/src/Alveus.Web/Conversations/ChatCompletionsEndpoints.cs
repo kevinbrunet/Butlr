@@ -262,14 +262,7 @@ public static class ChatCompletionsEndpoints
                         await WriteChunkAsync(response, chatId, created, model,
                             new OaiDelta(ReasoningContent: tc.Text), null, ct);
                         break;
-
-                    case FunctionCallContent fc:
-                        var args = fc.Arguments is not null
-                            ? string.Join(", ", fc.Arguments.Select(kv => $"{kv.Key}={kv.Value}"))
-                            : string.Empty;
-                        await WriteChunkAsync(response, chatId, created, model,
-                            new OaiDelta(ReasoningContent: $"\n⟨{fc.Name}({args})⟩"), null, ct);
-                        break;
+                    // FunctionCallContent omis : tracé comme ToolCall item dans le flux Content.
                 }
             }
         }
