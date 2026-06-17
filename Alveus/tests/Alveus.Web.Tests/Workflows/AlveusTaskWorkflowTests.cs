@@ -107,7 +107,7 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
             {
                 ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
                 ["TaskPrompt"] = "Si tu es Alveus-Worker, tu es bloqué : appelle immédiatement Finish avec "
-                    + "outcome='blocked' et reason='Consigne ambiguë, impossible de continuer.'. "
+                    + "outcome='blocked', reason='Consigne ambiguë, impossible de continuer.' et un summary court. "
                     + MeetingParticipantInstructions,
             },
         };
@@ -202,8 +202,8 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
                 ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
                 ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle Finish avec outcome='done'. Si tu es "
                     + "Alveus-EnvironmentManager, appelle Finish avec outcome='done' et verdict='pass'. Si tu es "
-                    + "Alveus-Evaluator, tu es bloqué : appelle Finish avec outcome='blocked' et "
-                    + "reason='Impossible d'écrire le jeu de test.'. " + MeetingParticipantInstructions,
+                    + "Alveus-Evaluator, tu es bloqué : appelle Finish avec outcome='blocked', "
+                    + "reason='Impossible d'écrire le jeu de test.' et un summary court. " + MeetingParticipantInstructions,
             },
         };
 

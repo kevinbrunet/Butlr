@@ -17,7 +17,7 @@ namespace Alveus.Web.Workflows;
 public sealed class AgentEscalationLoopGuard : CodeActivity
 {
     /// <summary>Nombre maximal de cycles escalade agent → réunion de pré-tâche avant abandon.</summary>
-    public const int MaxIterations = 3;
+    public const int MaxIterations = 1;
 
     /// <summary>Variable de compteur partagée avec le reste du workflow.</summary>
     public required Variable<int> AgentEscalationLoopCount { get; set; }
