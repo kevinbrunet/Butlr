@@ -326,6 +326,10 @@ public static class ConversationEndpoints
             {
                 switch (content)
                 {
+                    case TextReasoningContent trc when !string.IsNullOrWhiteSpace(trc.Text):
+                        await WriteOaiChunkAsync(response, chatId, created,
+                            new OaiDelta(ReasoningContent: trc.Text), null, ct);
+                        break;
                     case TextContent tc when !string.IsNullOrWhiteSpace(tc.Text):
                         await WriteOaiChunkAsync(response, chatId, created,
                             new OaiDelta(ReasoningContent: tc.Text), null, ct);

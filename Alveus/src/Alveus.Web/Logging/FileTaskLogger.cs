@@ -110,6 +110,12 @@ public sealed class FileTaskLogger : ITaskLogger
                     {
                         switch (content)
                         {
+                            case TextReasoningContent trc when !string.IsNullOrWhiteSpace(trc.Text):
+                                FlushLastFc(w, ref lastFcKey, ref lastFcCount);
+                                w.WriteLine();
+                                w.WriteLine("**← [thinking]**");
+                                w.WriteLine(trc.Text);
+                                break;
                             case TextContent tc when !string.IsNullOrWhiteSpace(tc.Text):
                                 FlushLastFc(w, ref lastFcKey, ref lastFcCount);
                                 w.WriteLine();

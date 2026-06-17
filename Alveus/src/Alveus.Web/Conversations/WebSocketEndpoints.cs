@@ -322,6 +322,9 @@ public static class WebSocketEndpoints
             {
                 switch (content)
                 {
+                    case TextReasoningContent trc when !string.IsNullOrWhiteSpace(trc.Text):
+                        await SendAsync(ws, ThinkingDelta(conversationId, trc.Text, seq++), ct);
+                        break;
                     case TextContent tc when !string.IsNullOrWhiteSpace(tc.Text):
                         await SendAsync(ws, ThinkingDelta(conversationId, tc.Text, seq++), ct);
                         break;
