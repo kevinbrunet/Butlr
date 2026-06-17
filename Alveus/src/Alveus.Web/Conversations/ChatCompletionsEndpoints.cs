@@ -161,10 +161,9 @@ public static class ChatCompletionsEndpoints
 
         await WriteDoneAsync(httpContext.Response, chatId, created, model, ct);
 
-        // workflowTask se termine dès que Task.Run est lancé : pas besoin de l'attendre.
-        try { await workflowTask; }
-        catch (OperationCanceledException) { }
-        catch (Exception ex) { _ = ex; }
+        // workflowTask couvre uniquement la création de l'instance Elsa (ms) — l'exécution
+        // réelle tourne dans le Task.Run de RunWorkflowAsync avec son propre scope.
+        await workflowTask;
     }
 
     private static async Task RunWorkflowAsync(
