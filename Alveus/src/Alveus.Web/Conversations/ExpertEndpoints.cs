@@ -28,6 +28,3 @@ public static class ExpertEndpoints
         return app;
     }
 }
-
-public sealed record AskExpertRequest(string Question);
-public sealed record AskExpertResponse(string Expert, string Answer);
