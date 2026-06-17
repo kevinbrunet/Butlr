@@ -66,9 +66,11 @@ var aiModelName = builder.Configuration["AIModel:Model"]
     ?? throw new InvalidOperationException("Configuration manquante : AIModel:Model");
 
 // Le backend n'exige pas de clé API mais le SDK OpenAI en réclame une non vide.
+// Timeout élevé : Qwen3 en mode thinking peut prendre plusieurs minutes par appel.
 var openAiClient = new OpenAIClient(new ApiKeyCredential("not-needed"), new OpenAIClientOptions
 {
     Endpoint = new Uri(aiModelEndpoint),
+    NetworkTimeout = TimeSpan.FromMinutes(10),
 });
 
 IChatClient chatClient = openAiClient.GetChatClient(aiModelName).AsIChatClient();
