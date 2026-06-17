@@ -28,4 +28,11 @@ public sealed class TeamConfig
     /// "tool" = l'agent dispose de AskExpertTool pour interroger un expert directement.
     /// </summary>
     public string EscalationMode { get; set; } = "meeting";
+
+    /// <summary>
+    /// Skills méthodologiques disponibles par rôle d'agent (clé = rôle, ex. "Evaluator" ;
+    /// valeur = liste de noms de skills, ex. ["verify", "playwright"]). Les noms correspondent
+    /// aux fichiers <c>skils/{name}.skill.md</c> du repo.
+    /// </summary>
+    public Dictionary<string, List<string>> AgentSkills { get; set; } = [];
 }

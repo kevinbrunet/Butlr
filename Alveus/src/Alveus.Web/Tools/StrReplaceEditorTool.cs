@@ -25,7 +25,7 @@ public sealed class StrReplaceEditorTool
     }
 
     [Description("Consulte ou édite des FICHIERS (pas des répertoires) dans le workspace de l'agent. Ce n'est PAS un shell : 'command' doit être l'une de view, create, str_replace, insert, undo_edit — jamais une commande shell comme 'ls' ou 'cat' (pour ça, ou pour lister un répertoire, utilise l'outil d'exécution de commandes). Commandes : 'view' (cat -n sur un fichier), 'create' (crée un fichier, échoue s'il existe déjà), 'str_replace' (remplace old_str par new_str, old_str doit être unique dans le fichier), 'insert' (insère new_str après la ligne insert_line), 'undo_edit' (annule le dernier edit sur path).")]
-    public string Execute(
+    public string texteditor(
         [Description("Commande : view, create, str_replace, insert, undo_edit.")] string command,
         [Description("Chemin du fichier (pas d'un répertoire). Doit être relatif à la racine du workspace (ex. 'agent-edit.txt', pas '/workspace/agent-edit.txt') ; un chemin absolu hors du workspace est refusé.")] string path,
         [Description("Chaîne à rechercher (str_replace). Doit apparaître exactement une fois dans le fichier.")] string? old_str = null,

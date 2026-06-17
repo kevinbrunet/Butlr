@@ -37,7 +37,7 @@ public sealed class AgentFixture : IAsyncLifetime
         var tools = new List<AITool>
         {
             AIFunctionFactory.Create(CmdRunTool.RunAsync),
-            AIFunctionFactory.Create(EditorTool.Execute),
+            AIFunctionFactory.Create(EditorTool.texteditor),
             AIFunctionFactory.Create(FinishTool.Finish),
         };
 

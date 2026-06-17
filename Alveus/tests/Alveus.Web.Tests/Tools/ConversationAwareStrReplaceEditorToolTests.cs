@@ -33,7 +33,7 @@ public sealed class ConversationAwareStrReplaceEditorToolTests : IDisposable
         var conversation = _store.Create();
         _contextAccessor.ConversationId = conversation.Id;
 
-        _tool.Execute("create", "greeting.txt", file_text: "bonjour");
+        _tool.texteditor("create", "greeting.txt", file_text: "bonjour");
 
         var items = _store.GetItems(conversation.Id);
         var item = Assert.Single(items);
@@ -49,8 +49,8 @@ public sealed class ConversationAwareStrReplaceEditorToolTests : IDisposable
         var conversation = _store.Create();
         _contextAccessor.ConversationId = conversation.Id;
 
-        _tool.Execute("create", "greeting.txt", file_text: "bonjour");
-        _tool.Execute("str_replace", "greeting.txt", old_str: "bonjour", new_str: "salut");
+        _tool.texteditor("create", "greeting.txt", file_text: "bonjour");
+        _tool.texteditor("str_replace", "greeting.txt", old_str: "bonjour", new_str: "salut");
 
         var items = _store.GetItems(conversation.Id);
         Assert.Equal(2, items.Count);
@@ -64,8 +64,8 @@ public sealed class ConversationAwareStrReplaceEditorToolTests : IDisposable
         var conversation = _store.Create();
         _contextAccessor.ConversationId = conversation.Id;
 
-        _tool.Execute("create", "greeting.txt", file_text: "bonjour");
-        _tool.Execute("view", "greeting.txt");
+        _tool.texteditor("create", "greeting.txt", file_text: "bonjour");
+        _tool.texteditor("view", "greeting.txt");
 
         var items = _store.GetItems(conversation.Id);
         var item = Assert.Single(items);
@@ -75,7 +75,7 @@ public sealed class ConversationAwareStrReplaceEditorToolTests : IDisposable
     [Fact]
     public void Execute_WithoutActiveConversation_BehavesLikeInnerTool()
     {
-        var result = _tool.Execute("create", "greeting.txt", file_text: "bonjour");
+        var result = _tool.texteditor("create", "greeting.txt", file_text: "bonjour");
 
         Assert.Equal("Fichier créé : '" + Path.Combine(_workspaceRoot, "greeting.txt") + "'.", result);
     }

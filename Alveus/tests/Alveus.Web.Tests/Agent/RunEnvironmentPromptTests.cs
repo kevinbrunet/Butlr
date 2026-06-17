@@ -72,8 +72,10 @@ public sealed class RunEnvironmentPromptTests : IClassFixture<RunEnvironmentProm
         var activity = ActivatorUtilities.CreateInstance<RunEnvironmentPrompt>(_fixture.Services);
         activity.Id = activityId;
         activity.Prompt = new Input<string>(
-            "Appelle directement ton outil de fin de tâche (Finish) avec outcome='done', verdict='fail' et "
-            + "reason='le serveur ne démarre pas, erreur de build fictive'.");
+            "Tu viens de tenter de démarrer l'environnement avec la commande 'npm start' mais elle a échoué "
+            + "avec l'erreur 'port 3000 already in use'. Tu ne peux pas démarrer l'environnement. "
+            + "Appelle l'outil Finish avec outcome='done', verdict='fail', "
+            + "une reason décrivant l'erreur rencontrée, et un summary résumant la situation.");
 
         var runner = _fixture.Services.GetRequiredService<IWorkflowRunner>();
         var result = await runner.RunAsync(activity, new RunWorkflowOptions(), CancellationToken.None);
@@ -100,9 +102,11 @@ public sealed class RunEnvironmentPromptTests : IClassFixture<RunEnvironmentProm
         var activity = ActivatorUtilities.CreateInstance<RunEnvironmentPrompt>(_fixture.Services);
         activity.Id = activityId;
         activity.Prompt = new Input<string>(
-            "Appelle directement ton outil de fin de tâche (Finish) avec outcome='done', verdict='needmoreinfo', "
-            + "reason='la consigne ne précise pas comment démarrer l'environnement' et "
-            + "questions=['Quelle commande lance le serveur ?'].");
+            "La consigne de tâche ne précise pas comment démarrer l'environnement local : il n'y a ni commande, "
+            + "ni port, ni instructions de lancement. Tu ne peux pas savoir quoi lancer. "
+            + "Appelle l'outil Finish avec outcome='done', verdict='needmoreinfo', "
+            + "une reason expliquant ce qui manque, au moins une question précise pour obtenir les informations "
+            + "nécessaires, et un summary.");
 
         var runner = _fixture.Services.GetRequiredService<IWorkflowRunner>();
         var result = await runner.RunAsync(activity, new RunWorkflowOptions(), CancellationToken.None);

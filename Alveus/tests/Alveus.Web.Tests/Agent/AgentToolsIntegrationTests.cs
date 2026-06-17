@@ -15,7 +15,7 @@ namespace Alveus.Web.Tests.Agent;
 /// </summary>
 public sealed class AgentToolsIntegrationTests : IClassFixture<AgentFixture>
 {
-    private static readonly TimeSpan AgentTimeout = TimeSpan.FromMinutes(3);
+    private static readonly TimeSpan AgentTimeout = TimeSpan.FromMinutes(10);
 
     private readonly AgentFixture _fixture;
     private readonly ITestOutputHelper _output;

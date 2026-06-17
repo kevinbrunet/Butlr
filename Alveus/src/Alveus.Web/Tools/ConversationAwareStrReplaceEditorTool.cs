@@ -10,8 +10,8 @@ namespace Alveus.Web.Tools;
 /// l'activité agent en cours, cf. <see cref="Activities.AgentPromptActivityBase"/> et
 /// <see cref="Activities.MeetingActivityBase"/>) et que <c>command != "view"</c> — poste un item
 /// <see cref="ConversationItemKind.FileEdit"/> dans <see cref="IConversationStore"/>. La signature et
-/// les <see cref="DescriptionAttribute"/> de <see cref="Execute"/> sont identiques à celles de
-/// <see cref="StrReplaceEditorTool.Execute"/> : c'est ce contrat que voit le LLM via
+/// les <see cref="DescriptionAttribute"/> de <see cref="texteditor"/> sont identiques à celles de
+/// <see cref="StrReplaceEditorTool.texteditor"/> : c'est ce contrat que voit le LLM via
 /// <c>AIFunctionFactory.Create</c>.
 /// </summary>
 public sealed class ConversationAwareStrReplaceEditorTool
@@ -34,7 +34,7 @@ public sealed class ConversationAwareStrReplaceEditorTool
     }
 
     [Description("Consulte ou édite des FICHIERS (pas des répertoires) dans le workspace de l'agent. Ce n'est PAS un shell : 'command' doit être l'une de view, create, str_replace, insert, undo_edit — jamais une commande shell comme 'ls' ou 'cat' (pour ça, ou pour lister un répertoire, utilise l'outil d'exécution de commandes). Commandes : 'view' (cat -n sur un fichier), 'create' (crée un fichier, échoue s'il existe déjà), 'str_replace' (remplace old_str par new_str, old_str doit être unique dans le fichier), 'insert' (insère new_str après la ligne insert_line), 'undo_edit' (annule le dernier edit sur path).")]
-    public string Execute(
+    public string texteditor(
         [Description("Commande : view, create, str_replace, insert, undo_edit.")] string command,
         [Description("Chemin du fichier (pas d'un répertoire). Doit être relatif à la racine du workspace (ex. 'agent-edit.txt', pas '/workspace/agent-edit.txt') ; un chemin absolu hors du workspace est refusé.")] string path,
         [Description("Chaîne à rechercher (str_replace). Doit apparaître exactement une fois dans le fichier.")] string? old_str = null,
@@ -42,7 +42,7 @@ public sealed class ConversationAwareStrReplaceEditorTool
         [Description("Contenu initial du fichier à créer (create).")] string? file_text = null,
         [Description("Numéro de ligne après laquelle insérer new_str (insert). 0 = début du fichier.")] int? insert_line = null)
     {
-        var result = _inner.Execute(command, path, old_str, new_str, file_text, insert_line);
+        var result = _inner.texteditor(command, path, old_str, new_str, file_text, insert_line);
 
         var conversationId = _contextAccessor.ConversationId;
         if (command != "view" && !string.IsNullOrEmpty(conversationId))

@@ -126,15 +126,17 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
     }
 
     /// <summary>
-    /// ⚠ Depuis ADR 0028, "Blocked" sur Alveus-EnvironmentManager renvoie à
+    /// ⚠ Depuis ADR 0028, "NeedsMoreInfo" sur Alveus-EnvironmentManager renvoie à
     /// <c>RunPreTaskMeeting</c> via <see cref="RecordAgentEscalation"/>/
     /// <see cref="AgentEscalationLoopGuard"/> au lieu de terminer immédiatement le workflow. Le
     /// workflow boucle jusqu'à <see cref="AgentEscalationLoopGuard.MaxIterations"/> avant de
     /// réellement se terminer — assertions inchangées (Evaluator jamais atteint), mais temps
     /// d'exécution ~<c>AgentEscalationLoopGuard.MaxIterations + 1</c> fois plus long.
+    /// Le prompt utilise verdict='needmoreinfo' (et non outcome='blocked') car le system prompt
+    /// d'Alveus-EnvironmentManager ne mentionne que les verdicts pass/fail/needmoreinfo.
     /// </summary>
     [Fact]
-    public async Task AlveusTaskWorkflow_EnvironmentManagerBlocked_EndsWithoutEvaluator()
+    public async Task AlveusTaskWorkflow_EnvironmentManagerNeedsMoreInfo_EndsWithoutEvaluator()
     {
         if (!_fixture.IsLlamaCppAvailable)
         {
@@ -150,9 +152,11 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
             {
                 ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
                 ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle Finish avec outcome='done' et un résumé indiquant "
-                    + "qu'il n'y avait rien à faire. Si tu es Alveus-EnvironmentManager, tu es bloqué : appelle "
-                    + "Finish avec outcome='blocked' et reason='Impossible de déterminer comment démarrer "
-                    + "l'environnement.'. " + MeetingParticipantInstructions,
+                    + "qu'il n'y avait rien à faire. Si tu es Alveus-EnvironmentManager : la consigne ne précise "
+                    + "pas comment démarrer l'environnement — il n'y a ni commande, ni URL, ni port fournis. "
+                    + "Appelle Finish avec outcome='done', verdict='needmoreinfo', une reason expliquant ce qui "
+                    + "manque, et une question précise pour obtenir les informations nécessaires. "
+                    + MeetingParticipantInstructions,
             },
         };
 
@@ -457,7 +461,7 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
     /// tâches. Vérifie que le workflow se termine, que la tâche atteint <c>RunUserDoc</c> (donc que
     /// l'Evaluator a rendu un verdict "pass" après avoir écrit et exécuté un jeu de test), qu'un
     /// projet de tests référençant Microsoft.Playwright a bien été écrit dans l'espace de travail
-    /// de l'Evaluator (cf. skill <c>dotnet-snapshot-testing</c>, ADR 0021), et que ces tests
+    /// de l'Evaluator (cf. skill <c>playwright</c>, ADR 0021), et que ces tests
     /// d'interface passent réellement lors d'une ré-exécution indépendante (<c>dotnet test</c>).
     /// ⚠ Pipeline complet incluant l'écriture et l'exécution de tests Playwright (installation des
     /// navigateurs comprise) — temps d'exécution potentiellement très long et flakiness élevée (cf.
@@ -489,7 +493,7 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
                     + "l'application créée et son démarrage local vérifié, appelle Finish avec outcome='done'. "
                     + "Si tu es Alveus-Evaluator : écris, à la racine de ton espace de travail, un projet de "
                     + "test xUnit C# (ex. 'dotnet new xunit') référençant le package NuGet Microsoft.Playwright "
-                    + "(cf. skills/dotnet-snapshot-testing/references/playwright-ui.md), avec au moins un test "
+                    + "(charge le skill 'playwright' pour les instructions détaillées), avec au moins un test "
                     + "qui pilote un navigateur contre la page d'accueil de l'application pour vérifier "
                     + "l'affichage de la liste de tâches, l'ajout d'une nouvelle tâche via le formulaire, et le "
                     + "marquage d'une tâche comme terminée. Exécute ce projet avec 'dotnet test' et n'appelle "

@@ -74,8 +74,10 @@ public sealed class RunEvaluatorPromptTests : IClassFixture<RunEvaluatorPromptFi
         var activity = ActivatorUtilities.CreateInstance<RunEvaluatorPrompt>(_fixture.Services);
         activity.Id = activityId;
         activity.Prompt = new Input<string>(
-            "Appelle directement ton outil de fin de tâche (Finish) avec outcome='done', verdict='fail' et "
-            + "reason='le fichier hello.txt ne contient pas le texte attendu (rapport fictif)'.");
+            "Tu viens de vérifier le résultat de la tâche 'crée un fichier hello.txt contenant hello'. "
+            + "Le fichier existe mais son contenu est 'world' au lieu de 'hello' — le test a échoué. "
+            + "Appelle l'outil Finish avec outcome='done', verdict='fail', "
+            + "une reason décrivant l'écart constaté, et un summary résumant la situation.");
 
         var runner = _fixture.Services.GetRequiredService<IWorkflowRunner>();
         var result = await runner.RunAsync(activity, new RunWorkflowOptions(), CancellationToken.None);
@@ -101,9 +103,12 @@ public sealed class RunEvaluatorPromptTests : IClassFixture<RunEvaluatorPromptFi
         var activity = ActivatorUtilities.CreateInstance<RunEvaluatorPrompt>(_fixture.Services);
         activity.Id = activityId;
         activity.Prompt = new Input<string>(
-            "Appelle directement ton outil de fin de tâche (Finish) avec outcome='done', verdict='needmoreinfo', "
-            + "reason='les instructions d'utilisation de l'environnement ne précisent pas l'URL à tester' et "
-            + "questions=['Quelle est l'URL du serveur ?'].");
+            "Tu dois vérifier que la tâche a été accomplie, mais les instructions d'utilisation de "
+            + "l'environnement ne précisent aucune URL ni port pour accéder au service — tu ne peux pas "
+            + "exécuter les tests sans ces informations. "
+            + "Appelle l'outil Finish avec outcome='done', verdict='needmoreinfo', "
+            + "une reason expliquant ce qui manque, au moins une question précise pour obtenir les informations "
+            + "nécessaires, et un summary.");
 
         var runner = _fixture.Services.GetRequiredService<IWorkflowRunner>();
         var result = await runner.RunAsync(activity, new RunWorkflowOptions(), CancellationToken.None);

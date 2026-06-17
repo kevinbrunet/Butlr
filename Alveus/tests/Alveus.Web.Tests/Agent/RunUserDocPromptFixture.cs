@@ -53,7 +53,7 @@ public sealed class RunUserDocPromptFixture : IAsyncLifetime
             var tools = new List<AITool>
             {
                 AIFunctionFactory.Create(cmdRunTool.RunAsync),
-                AIFunctionFactory.Create(editorTool.Execute),
+                AIFunctionFactory.Create(editorTool.texteditor),
                 AIFunctionFactory.Create(finishTool.Finish),
             };
 

@@ -165,17 +165,19 @@ public abstract class AgentPromptActivityBase : CodeActivity
 
     private static FinishCall? FindFinishCall(AgentResponse response)
     {
-        foreach (var message in response.Messages)
+        // Cherche le dernier appel à Finish dans les messages : en cas de retry
+        // (ex. premier appel sans summary → exception → l'agent réessaie avec summary),
+        // le dernier appel est celui qui a réussi et dont les données sont valides.
+        var messages = response.Messages;
+        for (var i = messages.Count - 1; i >= 0; i--)
         {
-            foreach (var content in message.Contents)
+            foreach (var content in messages[i].Contents)
             {
                 if (content is FunctionCallContent { Name: FinishTool.FunctionName } call)
                 {
                     var finish = FinishCall.FromArguments(call.Arguments);
                     if (finish is not null)
-                    {
                         return finish;
-                    }
                 }
             }
         }

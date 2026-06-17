@@ -84,6 +84,8 @@ var teams = builder.Configuration.GetSection("Teams").Get<TeamConfig[]>()
 if (teams.Length == 0)
     throw new InvalidOperationException("Au moins une équipe est requise dans Teams.");
 
+var skillsRoot = AgentSkillFiles.FindRoot(builder.Environment.ContentRootPath);
+
 foreach (var team in teams)
 {
     if (string.IsNullOrWhiteSpace(team.Name))
@@ -128,7 +130,7 @@ foreach (var team in teams)
         var tools = new List<AITool>
         {
             AIFunctionFactory.Create(cmdRunTool.RunAsync),
-            AIFunctionFactory.Create(editorTool.Execute),
+            AIFunctionFactory.Create(editorTool.texteditor),
             AIFunctionFactory.Create(finishTool.Finish),
         };
 
@@ -174,13 +176,17 @@ foreach (var team in teams)
                 + "verdict='needmoreinfo' si la consigne ne précise pas comment démarrer l'environnement (reason et "
                 + "questions).",
             name: "Alveus-EnvironmentManager",
-            tools: [AIFunctionFactory.Create(cmdRunTool.RunAsync), AIFunctionFactory.Create(editorTool.Execute), AIFunctionFactory.Create(finishTool.Finish)]);
+            tools: [AIFunctionFactory.Create(cmdRunTool.RunAsync), AIFunctionFactory.Create(editorTool.texteditor), AIFunctionFactory.Create(finishTool.Finish)]);
     });
 
     // Agent Evaluator : workspace isolé — cf. ADR 0021.
     builder.Services.AddKeyedSingleton<CmdRunTool>($"{team.Name}:Evaluator", (sp, _) => new CmdRunTool(evaluatorWorkspaceRoot, sp.GetRequiredService<ILogger<CmdRunTool>>()));
     builder.Services.AddKeyedSingleton<StrReplaceEditorTool>($"{team.Name}:Evaluator", (_, _) => new StrReplaceEditorTool(evaluatorWorkspaceRoot));
-    EvaluatorSkills.CopyInto(evaluatorWorkspaceRoot, builder.Environment.ContentRootPath);
+
+    var evaluatorSkills = team.AgentSkills.TryGetValue("Evaluator", out var es) ? es : [];
+    if (skillsRoot is not null && evaluatorSkills.Count > 0)
+        builder.Services.AddKeyedSingleton<LoadSkillTool>($"{team.Name}:Evaluator",
+            (_, _) => new LoadSkillTool(skillsRoot, evaluatorSkills));
 
     builder.Services.AddKeyedSingleton<AIAgent>($"{team.Name}:Evaluator", (sp, _) =>
     {
@@ -194,9 +200,18 @@ foreach (var team in teams)
         var tools = new List<AITool>
         {
             AIFunctionFactory.Create(cmdRunTool.RunAsync),
-            AIFunctionFactory.Create(editorTool.Execute),
+            AIFunctionFactory.Create(editorTool.texteditor),
             AIFunctionFactory.Create(finishTool.Finish),
         };
+        var contextProviders = new List<AIContextProvider>();
+
+        if (skillsRoot is not null && evaluatorSkills.Count > 0)
+        {
+            var loadSkillTool = sp.GetRequiredKeyedService<LoadSkillTool>($"{team.Name}:Evaluator");
+            tools.Add(AIFunctionFactory.Create(loadSkillTool.load_skill));
+            contextProviders.Add(new SkillsContextProvider(skillsRoot, evaluatorSkills));
+        }
+
         return new ChatClientAgent(chatClient, new ChatClientAgentOptions
         {
             Name = "Alveus-Evaluator",
@@ -207,32 +222,21 @@ foreach (var team in teams)
                     + "l'environnement local fournies par Alveus-EnvironmentManager (URL, ports, commandes d'exemple), "
                     + "mais dans ton propre espace de travail, séparé du sien. Ton rôle : à partir de cette consigne, "
                     + "écris un jeu de test (scripts, assertions) qui vérifie objectivement que l'environnement décrit "
-                    + "par les instructions d'utilisation répond à la consigne, en l'écrivant avec ton outil d'édition "
-                    + "de fichiers dans ton espace de travail ; puis exécute ce jeu de test avec ton outil shell en "
-                    + "interagissant avec l'environnement uniquement par le réseau (ex. curl) — tu n'as pas accès au "
-                    + "système de fichiers du Worker. N'effectue pas la tâche toi-même. Des méthodologies de référence "
-                    + "pertinentes pour cette tâche te sont fournies directement dans ce contexte ; pour aller plus "
-                    + "loin, le dossier 'skills/{nom}/references/' de ton espace de travail contient des fichiers "
-                    + "détaillés consultables avec ton outil d'édition. Si le jeu de test repose sur le pattern "
-                    + "snapshot/approval testing (skill dotnet-snapshot-testing) : (1) écris un test C# complet — "
-                    + "Playwright si la consigne décrit une interface utilisateur (pages web, interactions via "
-                    + "navigateur), Verify si elle décrit une API/réponse JSON sans interface ; (2) lance 'dotnet "
-                    + "test' avec ton outil shell — le premier run "
-                    + "produit des fichiers non commités ('*.received.json' pour Verify, capture '-actual.png' ou "
-                    + "équivalent pour Playwright) ; (3) relis le contenu de ces fichiers avec ton outil d'édition et "
-                    + "vérifie manuellement qu'il correspond au résultat attendu pour la consigne ; (4) si c'est "
-                    + "correct, renomme ce fichier pour qu'il devienne le golden file de référence ('*.verified.json', "
-                    + "ou l'équivalent Playwright — voir le skill). Si le résultat ne correspond pas à la consigne, "
-                    + "corrige le test plutôt que de promouvoir un golden file incorrect. Quand tu arrêtes de "
-                    + "travailler, tu DOIS appeler l'outil Finish avec outcome='done' et : verdict='pass' si le jeu de "
-                    + "test confirme que l'environnement répond à la consigne ; verdict='fail' si ce n'est pas le cas "
-                    + "(reason=rapport détaillé des problèmes rencontrés, transmis à Alveus-Worker pour correction) ; "
+                    + "par les instructions d'utilisation répond à la consigne. Ton espace de travail est vide au départ "
+                    + "— initialise-le selon les besoins (ex. 'dotnet new xunit' pour un projet C#, ou un script bash "
+                    + "pour des assertions curl). Écris le jeu de test avec ton outil d'édition de fichiers, puis "
+                    + "exécute-le avec ton outil shell en interagissant avec l'environnement uniquement par le réseau "
+                    + "(ex. curl) — tu n'as pas accès au système de fichiers du Worker. N'effectue pas la tâche "
+                    + "toi-même. Quand tu arrêtes de travailler, "
+                    + "tu DOIS appeler l'outil Finish avec outcome='done' et : verdict='pass' si le jeu de test confirme "
+                    + "que l'environnement répond à la consigne ; verdict='fail' si ce n'est pas le cas (reason=rapport "
+                    + "détaillé des problèmes rencontrés, transmis à Alveus-Worker pour correction) ; "
                     + "verdict='needmoreinfo' si tu ne peux pas trancher sans information supplémentaire (reason et "
                     + "questions). Si tu es bloqué avant d'avoir pu écrire ou exécuter le jeu de test, utilise "
                     + "outcome='blocked' (reason) — sinon on te redemandera de le faire.",
                 Tools = tools,
             },
-            AIContextProviders = [new EvaluatorSkillsContextProvider(evaluatorWorkspaceRoot)],
+            AIContextProviders = [.. contextProviders],
         });
     });
 
@@ -268,7 +272,7 @@ foreach (var team in teams)
                 + "outcome='done' (summary = ce qui a été documenté) ou outcome='needsmoreinfo'/'blocked' si tu ne peux "
                 + "pas avancer.",
             name: "Alveus-UserDoc",
-            tools: [AIFunctionFactory.Create(cmdRunTool.RunAsync), AIFunctionFactory.Create(editorTool.Execute), AIFunctionFactory.Create(finishTool.Finish)]);
+            tools: [AIFunctionFactory.Create(cmdRunTool.RunAsync), AIFunctionFactory.Create(editorTool.texteditor), AIFunctionFactory.Create(finishTool.Finish)]);
     });
 
     // Agent Technical : sous-dossier de l'espace Worker — cf. ADR 0025.
@@ -303,7 +307,7 @@ foreach (var team in teams)
                 + "downstreamInstructions pour Alveus-Worker et/ou Alveus-UserDoc) ou outcome='needsmoreinfo'/'blocked' "
                 + "si tu es bloqué.",
             name: "Alveus-Technical",
-            tools: [AIFunctionFactory.Create(cmdRunTool.RunAsync), AIFunctionFactory.Create(editorTool.Execute), AIFunctionFactory.Create(finishTool.Finish), AIFunctionFactory.Create(meetingTool.Raise), AIFunctionFactory.Create(meetingTool.Vote)]);
+            tools: [AIFunctionFactory.Create(cmdRunTool.RunAsync), AIFunctionFactory.Create(editorTool.texteditor), AIFunctionFactory.Create(finishTool.Finish), AIFunctionFactory.Create(meetingTool.Raise), AIFunctionFactory.Create(meetingTool.Vote)]);
     });
 
     // Agent Qa : sous-dossier de l'espace Evaluator — cf. ADR 0025.
@@ -337,7 +341,7 @@ foreach (var team in teams)
                 + "obligatoire si 'disagree'). Quand tu as terminé ton tour, appelle l'outil Finish avec outcome='done' "
                 + "(et, le cas échéant, downstreamInstructions pour Alveus-Evaluator) ou outcome='needsmoreinfo'/'blocked' si tu es bloqué.",
             name: "Alveus-Qa",
-            tools: [AIFunctionFactory.Create(cmdRunTool.RunAsync), AIFunctionFactory.Create(editorTool.Execute), AIFunctionFactory.Create(finishTool.Finish), AIFunctionFactory.Create(meetingTool.Raise), AIFunctionFactory.Create(meetingTool.Vote)]);
+            tools: [AIFunctionFactory.Create(cmdRunTool.RunAsync), AIFunctionFactory.Create(editorTool.texteditor), AIFunctionFactory.Create(finishTool.Finish), AIFunctionFactory.Create(meetingTool.Raise), AIFunctionFactory.Create(meetingTool.Vote)]);
     });
 
     // Agents spécialistes (cf. ADR 0024/0025/0030) : catalogue C#, activés par équipe via SpecialistRoles.
@@ -370,7 +374,7 @@ foreach (var team in teams)
                 chatClient,
                 instructions: missionPrefix + def.SystemInstructions + additionalInstructions,
                 name: def.DisplayName,
-                tools: [AIFunctionFactory.Create(cmdRunTool.RunAsync), AIFunctionFactory.Create(editorTool.Execute), AIFunctionFactory.Create(finishTool.Finish), AIFunctionFactory.Create(meetingTool.Raise), AIFunctionFactory.Create(meetingTool.Vote)]);
+                tools: [AIFunctionFactory.Create(cmdRunTool.RunAsync), AIFunctionFactory.Create(editorTool.texteditor), AIFunctionFactory.Create(finishTool.Finish), AIFunctionFactory.Create(meetingTool.Raise), AIFunctionFactory.Create(meetingTool.Vote)]);
         });
     }
 }

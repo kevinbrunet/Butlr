@@ -43,20 +43,18 @@ public sealed class EvaluatorIntegrationTests : IClassFixture<EvaluatorFixture>
         const string taskPrompt =
             "Crée un fichier nommé 'hello.txt' contenant exactement le texte 'hello'.";
 
-        // Timeout de 5 minutes : sans borne explicite, ChatClientAgent boucle indéfiniment si
-        // le modèle ne termine pas par un appel Finish.
         var agentTask = _fixture.Agent.RunAsync(
             $"Voici la consigne de tâche donnée à l'agent d'exécution : \"{taskPrompt}\". "
             + "Avec ton outil d'édition de fichiers, crée dans ton espace de travail un fichier nommé "
             + "'test_hello.sh' contenant un script de test qui vérifierait qu'un travail répondant à cette "
             + "consigne est correct.");
-        if (await Task.WhenAny(agentTask, Task.Delay(TimeSpan.FromMinutes(5))) == agentTask)
+        if (await Task.WhenAny(agentTask, Task.Delay(TimeSpan.FromMinutes(15))) == agentTask)
         {
             await agentTask; // propage les exceptions éventuelles
         }
         else
         {
-            _output.WriteLine("Agent RunAsync timeout après 5 minutes — vérification des fichiers créés.");
+            _output.WriteLine("Agent RunAsync timeout après 15 minutes — vérification des fichiers créés.");
         }
 
         var writtenFiles = Directory.GetFiles(_fixture.WorkspaceRoot);

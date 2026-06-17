@@ -20,7 +20,7 @@ public sealed class FinishTool
     public string Finish(
         [Description("Résumé de ce qui a été fait, ou de la situation actuelle si la tâche n'est pas terminée.")] string summary,
         [Description("Résultat : 'done', 'needsmoreinfo' ou 'blocked'.")] string outcome,
-        [Description("Pour 'needsmoreinfo' ou 'blocked' : explique précisément le point de blocage.")] string? reason = null,
+        [Description("Pour 'needsmoreinfo' ou 'blocked' : explique précisément le point de blocage. Pour verdict='fail' ou verdict='needmoreinfo' : décris pourquoi la vérification a échoué ou ce qui manque.")] string? reason = null,
         [Description("Pour 'needsmoreinfo' : questions précises à poser pour pouvoir continuer.")] IList<string>? questions = null,
         [Description("Uniquement si tu es l'agent EnvironmentManager ou Evaluator : ton jugement sur le résultat que "
             + "tu viens de vérifier. 'pass' s'il est correct, 'fail' sinon (donne reason), 'needmoreinfo' si tu ne "
