@@ -304,7 +304,7 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
     /// <summary>
     /// Test de bout en bout : demande la création d'une application console .NET "Hello World",
     /// vérifie que le workflow se termine (<see cref="WorkflowStatus.Finished"/>) puis exécute le
-    /// programme produit (<c>dotnet run</c> dans <see cref="AlveusTaskWorkflowFixture.WorkspaceRoot"/>)
+    /// programme produit (<c>dotnet run</c> dans <see cref="AlveusTaskWorkflowFixture.WorkerWorkspaceRoot"/>)
     /// pour confirmer qu'il affiche bien "Hello World" sur la sortie standard.
     /// </summary>
     [Fact]
@@ -339,14 +339,14 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
         var outputRegister = result.WorkflowExecutionContext.GetActivityOutputRegister();
         var workerSummary = outputRegister.FindOutputByActivityId("RunWorker", nameof(RunAgentPrompt.Summary)) as string;
 
-        var allFiles = Directory.GetFiles(_fixture.WorkspaceRoot, "*", SearchOption.AllDirectories);
+        var allFiles = Directory.GetFiles(_fixture.WorkerWorkspaceRoot, "*", SearchOption.AllDirectories);
         _output.WriteLine($"Statut workflow : {result.WorkflowState.Status}, résumé worker : {workerSummary}");
-        _output.WriteLine($"Fichiers dans l'espace de travail : {string.Join(", ", allFiles.Select(f => Path.GetRelativePath(_fixture.WorkspaceRoot, f)))}");
+        _output.WriteLine($"Fichiers dans l'espace de travail : {string.Join(", ", allFiles.Select(f => Path.GetRelativePath(_fixture.WorkerWorkspaceRoot, f)))}");
 
         Assert.Equal(WorkflowStatus.Finished, result.WorkflowState.Status);
 
         var csprojPath = allFiles.FirstOrDefault(f => f.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase));
-        Assert.False(string.IsNullOrEmpty(csprojPath), $"Aucun .csproj trouvé dans {_fixture.WorkspaceRoot}.");
+        Assert.False(string.IsNullOrEmpty(csprojPath), $"Aucun .csproj trouvé dans {_fixture.WorkerWorkspaceRoot}.");
 
         var (exitCode, stdout, stderr) = await RunDotnetAsync(csprojPath, [], TimeSpan.FromMinutes(2));
 
@@ -402,14 +402,14 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
         var outputRegister = result.WorkflowExecutionContext.GetActivityOutputRegister();
         var workerSummary = outputRegister.FindOutputByActivityId("RunWorker", nameof(RunAgentPrompt.Summary)) as string;
 
-        var allFiles = Directory.GetFiles(_fixture.WorkspaceRoot, "*", SearchOption.AllDirectories);
+        var allFiles = Directory.GetFiles(_fixture.WorkerWorkspaceRoot, "*", SearchOption.AllDirectories);
         _output.WriteLine($"Statut workflow : {result.WorkflowState.Status}, résumé worker : {workerSummary}");
-        _output.WriteLine($"Fichiers dans l'espace de travail : {string.Join(", ", allFiles.Select(f => Path.GetRelativePath(_fixture.WorkspaceRoot, f)))}");
+        _output.WriteLine($"Fichiers dans l'espace de travail : {string.Join(", ", allFiles.Select(f => Path.GetRelativePath(_fixture.WorkerWorkspaceRoot, f)))}");
 
         Assert.Equal(WorkflowStatus.Finished, result.WorkflowState.Status);
 
         var csprojPath = allFiles.FirstOrDefault(f => f.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase));
-        Assert.False(string.IsNullOrEmpty(csprojPath), $"Aucun .csproj trouvé dans {_fixture.WorkspaceRoot}.");
+        Assert.False(string.IsNullOrEmpty(csprojPath), $"Aucun .csproj trouvé dans {_fixture.WorkerWorkspaceRoot}.");
 
         var timeout = TimeSpan.FromMinutes(2);
 

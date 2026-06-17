@@ -27,7 +27,7 @@ public sealed class RunAgentPromptVerificationFixture : IAsyncLifetime
         + "echo $c > " + VerificationCounterFileName + "; "
         + "if [ \"$c\" -lt 2 ]; then echo verification-pas-encore-prete; exit 1; else echo verification-ok; exit 0; fi";
 
-    public string WorkspaceRoot { get; } = Directory.CreateTempSubdirectory("alveus-workflow-tests-").FullName;
+    public string WorkerWorkspaceRoot { get; } = Directory.CreateTempSubdirectory("alveus-workflow-tests-").FullName;
 
     public IServiceProvider Services { get; }
 
@@ -54,11 +54,11 @@ public sealed class RunAgentPromptVerificationFixture : IAsyncLifetime
 
         IChatClient chatClient = openAiClient.GetChatClient(Model).AsIChatClient();
 
-        services.AddSingleton(_ => new CmdRunTool(WorkspaceRoot));
-        services.AddSingleton(_ => new StrReplaceEditorTool(WorkspaceRoot));
+        services.AddSingleton(_ => new CmdRunTool(WorkerWorkspaceRoot));
+        services.AddSingleton(_ => new StrReplaceEditorTool(WorkerWorkspaceRoot));
         services.AddSingleton<FinishTool>();
         services.AddSingleton<IAgentSessionCompactionService, SummarizingAgentSessionCompactionService>();
-        services.AddSingleton<IAgentWorkVerificationService>(_ => new CmdAgentWorkVerificationService(WorkspaceRoot, VerificationCommand));
+        services.AddSingleton<IAgentWorkVerificationService>(_ => new CmdAgentWorkVerificationService(WorkerWorkspaceRoot, VerificationCommand));
 
         services.AddKeyedSingleton<AIAgent>(AgentName, (sp, _) =>
         {
@@ -104,7 +104,7 @@ public sealed class RunAgentPromptVerificationFixture : IAsyncLifetime
     public Task DisposeAsync()
     {
         Services.GetRequiredService<CmdRunTool>().Dispose();
-        Directory.Delete(WorkspaceRoot, recursive: true);
+        Directory.Delete(WorkerWorkspaceRoot, recursive: true);
         return Task.CompletedTask;
     }
 }

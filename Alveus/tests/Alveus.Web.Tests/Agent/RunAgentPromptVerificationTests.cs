@@ -45,7 +45,7 @@ public sealed class RunAgentPromptVerificationTests : IClassFixture<RunAgentProm
         var runner = _fixture.Services.GetRequiredService<IWorkflowRunner>();
         var result = await runner.RunAsync(activity, new RunWorkflowOptions(), CancellationToken.None);
 
-        var counterPath = Path.Combine(_fixture.WorkspaceRoot, RunAgentPromptVerificationFixture.VerificationCounterFileName);
+        var counterPath = Path.Combine(_fixture.WorkerWorkspaceRoot, RunAgentPromptVerificationFixture.VerificationCounterFileName);
         Assert.True(File.Exists(counterPath), "La commande de vérification n'a jamais été exécutée.");
 
         var counter = int.Parse(File.ReadAllText(counterPath).Trim());

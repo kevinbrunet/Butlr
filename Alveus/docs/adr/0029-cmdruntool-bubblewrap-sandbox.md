@@ -7,14 +7,14 @@ Accepted
 ## Context
 
 [ADR 0017](0017-alveus-agent-shell-editor-tools.md) (Accepted) introduit `CmdRunTool`, un shell
-`bash` persistant dont le `WorkingDirectory` est initialisé à `WorkspaceRoot`, mais documente
+`bash` persistant dont le `WorkingDirectory` est initialisé à `WorkerWorkspaceRoot`, mais documente
 explicitement que ce scoping "n'est pas une garantie" : une commande peut faire `cd /`, utiliser
 des chemins absolus, ou lancer des process détachés (`nohup ... & disown`) qui survivent à
 `Dispose()` (`Kill(entireProcessTree: true)` ne tue pas les descendants désolidarisés).
 
 Cette limite, jusque-là théorique, s'est concrétisée pendant les tests e2e
 `AlveusTaskWorkflow` : Alveus-Worker a créé une application ASP.NET dans
-`/home/kevin-brunet/TodoApp` — hors de tout `WorkspaceRoot` — et l'a lancée en arrière-plan
+`/home/kevin-brunet/TodoApp` — hors de tout `WorkerWorkspaceRoot` — et l'a lancée en arrière-plan
 (`nohup`). Le process est resté actif (port 5142) après la fin du test, donnant à un agent piloté
 par un modèle 7B-35B (~ tool-calling moins fiable qu'un modèle frontier, cf. ADR 0017) un moyen
 d'écrire et d'exécuter du code n'importe où sur la machine hôte de `Alveus.Web`.
@@ -37,24 +37,24 @@ détecté une fois via `CmdRunTool.IsBwrapAvailable`) avec la politique suivante
 - `--tmpfs /tmp` : `/tmp` isolé, sans fuite vers le `/tmp` de l'hôte.
 - `--bind <chemin> <chemin>` en lecture-écriture, par-dessus le read-only global, pour :
   `~/.nuget`, `~/.dotnet` (caches/sentinels requis par `dotnet build/run/test`) et
-  `WorkspaceRoot` (seul répertoire de travail de l'agent, lecture-écriture complète).
-- `--chdir WorkspaceRoot` : équivalent du `WorkingDirectory` précédent, mais à l'intérieur du
+  `WorkerWorkspaceRoot` (seul répertoire de travail de l'agent, lecture-écriture complète).
+- `--chdir WorkerWorkspaceRoot` : équivalent du `WorkingDirectory` précédent, mais à l'intérieur du
   sandbox.
 - `--unshare-pid` : le shell devient l'init d'un namespace PID dédié. Quand `Dispose()` tue ce
   process (`Kill(entireProcessTree: true)`, avec un `pkill -9 -f` de secours sur la signature
-  `--bind WorkspaceRoot WorkspaceRoot`), le noyau détruit le namespace et **tue tous ses
+  `--bind WorkerWorkspaceRoot WorkerWorkspaceRoot`), le noyau détruit le namespace et **tue tous ses
   descendants**, y compris les process `nohup`/`disown`-és (cf. révision 2026-06-15 pour
   `--die-with-parent`, retiré).
 
 Si `bwrap` est absent du `PATH`, `CmdRunTool` retombe sur le comportement antérieur (`bash`
-direct, `WorkingDirectory = WorkspaceRoot`, scoping non garanti d'ADR 0017) et logue un
+direct, `WorkingDirectory = WorkerWorkspaceRoot`, scoping non garanti d'ADR 0017) et logue un
 avertissement via `ILogger<CmdRunTool>` — pas de régression dure en l'absence de `bwrap`, mais
 perte de la garantie.
 
 ## Consequences
 
 ### Positif
-- Écriture confinée à `WorkspaceRoot` (+ caches `~/.nuget`/`~/.dotnet`) : un chemin absolu hors de
+- Écriture confinée à `WorkerWorkspaceRoot` (+ caches `~/.nuget`/`~/.dotnet`) : un chemin absolu hors de
   ces répertoires échoue avec "Read-only file system" au lieu de réussir silencieusement.
   `StrReplaceEditorTool` avait déjà cette garantie (ADR 0017) ; `CmdRunTool` l'obtient désormais
   pour le même périmètre.
@@ -89,7 +89,7 @@ perte de la garantie.
   multi-tenant.
 - **Allowlist de commandes pour `CmdRunTool`** — déjà écartée par ADR 0017 (trop rigide pour des
   tâches de dev). `bwrap` rend cette question largement non pertinente : même une commande
-  arbitraire ne peut plus écrire hors de `WorkspaceRoot`.
+  arbitraire ne peut plus écrire hors de `WorkerWorkspaceRoot`.
 - **Reset du `cd` avant chaque commande (sans sandbox OS)** — envisagé en première analyse, mais
   ne corrige pas le cas réel observé (un seul appel avec un chemin absolu, `dotnet new -o
   /home/.../TodoApp`, suffit) ni les process détachés survivants. Écarté en faveur de `bwrap`.

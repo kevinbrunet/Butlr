@@ -18,7 +18,7 @@ namespace Alveus.Web.Tests.Workflows;
 /// Alveus-Worker/Alveus-EnvironmentManager/Alveus-Evaluator) permettant d'exécuter
 /// <see cref="AlveusTaskWorkflow"/> via <see cref="Elsa.Workflows.IWorkflowRunner"/> — cf. ADR
 /// 0023. Alveus-Worker et Alveus-EnvironmentManager partagent le même workspace et les mêmes
-/// outils (<see cref="WorkspaceRoot"/>) ; Alveus-Evaluator a son propre workspace isolé
+/// outils (<see cref="WorkerWorkspaceRoot"/>) ; Alveus-Evaluator a son propre workspace isolé
 /// (<see cref="EvaluatorWorkspaceRoot"/>), cf. ADR 0021.
 /// </summary>
 public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
@@ -33,7 +33,7 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
     private const string QaAgentName = $"{TeamName}:Qa";
     private const string TechnicalAgentName = $"{TeamName}:Technical";
 
-    public string WorkspaceRoot { get; } = Directory.CreateTempSubdirectory("alveus-workflow-task-tests-").FullName;
+    public string WorkerWorkspaceRoot { get; } = Directory.CreateTempSubdirectory("alveus-workflow-task-tests-").FullName;
 
     public string EvaluatorWorkspaceRoot { get; } = Directory.CreateTempSubdirectory("alveus-workflow-task-evaluator-tests-").FullName;
 
@@ -91,12 +91,12 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
         IChatClient chatClient = openAiClient.GetChatClient(Model).AsIChatClient();
 
         // Worker + EnvironmentManager : même workspace, mêmes outils (ADR 0023).
-        services.AddKeyedSingleton<CmdRunTool>(WorkerAgentName, (_, _) => new CmdRunTool(WorkspaceRoot));
-        services.AddKeyedSingleton<StrReplaceEditorTool>(WorkerAgentName, (_, _) => new StrReplaceEditorTool(WorkspaceRoot));
+        services.AddKeyedSingleton<CmdRunTool>(WorkerAgentName, (_, _) => new CmdRunTool(WorkerWorkspaceRoot));
+        services.AddKeyedSingleton<StrReplaceEditorTool>(WorkerAgentName, (_, _) => new StrReplaceEditorTool(WorkerWorkspaceRoot));
         services.AddSingleton<FinishTool>();
         services.AddSingleton<MeetingTool>();
         services.AddSingleton<IAgentSessionCompactionService, SummarizingAgentSessionCompactionService>();
-        services.AddKeyedSingleton<IAgentWorkVerificationService>(TeamName, (_, _) => new CmdAgentWorkVerificationService(WorkspaceRoot, command: null));
+        services.AddKeyedSingleton<IAgentWorkVerificationService>(TeamName, (_, _) => new CmdAgentWorkVerificationService(WorkerWorkspaceRoot, command: null));
 
         services.AddKeyedSingleton<AIAgent>(WorkerAgentName, (sp, _) =>
         {
@@ -258,7 +258,7 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
         Directory.CreateDirectory(businessAnalystWorkspaceRoot);
         var qaWorkspaceRoot = Path.Combine(EvaluatorWorkspaceRoot, "test-plan");
         Directory.CreateDirectory(qaWorkspaceRoot);
-        var technicalWorkspaceRoot = Path.Combine(WorkspaceRoot, "tech-docs");
+        var technicalWorkspaceRoot = Path.Combine(WorkerWorkspaceRoot, "tech-docs");
         Directory.CreateDirectory(technicalWorkspaceRoot);
 
         AddMeetingAgent(services, chatClient, BusinessAnalystAgentName, businessAnalystWorkspaceRoot, "Alveus-BusinessAnalyst");
@@ -329,7 +329,7 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
         Services.GetRequiredKeyedService<CmdRunTool>(BusinessAnalystAgentName).Dispose();
         Services.GetRequiredKeyedService<CmdRunTool>(QaAgentName).Dispose();
         Services.GetRequiredKeyedService<CmdRunTool>(TechnicalAgentName).Dispose();
-        Directory.Delete(WorkspaceRoot, recursive: true);
+        Directory.Delete(WorkerWorkspaceRoot, recursive: true);
         Directory.Delete(EvaluatorWorkspaceRoot, recursive: true);
         Directory.Delete(UserDocWorkspaceRoot, recursive: true);
         return Task.CompletedTask;

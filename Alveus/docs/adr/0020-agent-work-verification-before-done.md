@@ -21,7 +21,7 @@ Un nouveau service injecté `IAgentWorkVerificationService` (`Alveus.Web.Agents`
 
 ### Implémentation par défaut : `CmdAgentWorkVerificationService`
 
-Exécute une commande shell configurée (`Agent:VerificationCommand`, ex. `dotnet test`, `npm test`, un script de lint...) dans le `WorkspaceRoot` de l'agent (ADR 0017), et considère le travail validé si le code de sortie est `0`. La sortie combinée (stdout+stderr) devient `Output`. **Si `Agent:VerificationCommand` n'est pas configuré, la vérification est un no-op qui valide toujours** — comportement par défaut pour les déploiements/tests qui n'ont pas de script de validation.
+Exécute une commande shell configurée (`Agent:VerificationCommand`, ex. `dotnet test`, `npm test`, un script de lint...) dans le `WorkerWorkspaceRoot` de l'agent (ADR 0017), et considère le travail validé si le code de sortie est `0`. La sortie combinée (stdout+stderr) devient `Output`. **Si `Agent:VerificationCommand` n'est pas configuré, la vérification est un no-op qui valide toujours** — comportement par défaut pour les déploiements/tests qui n'ont pas de script de validation.
 
 ## Consequences
 

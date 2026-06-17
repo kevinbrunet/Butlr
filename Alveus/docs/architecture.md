@@ -53,7 +53,7 @@ Alveus-Worker / Alveus-EnvironmentManager / Alveus-Evaluator / Alveus-UserDoc
    `EvaluatorInstructions`, `UserDocInstructions`) pour les étapes en aval. Sortie `"Done"` →
    Worker ; `"NeedsHelp"` → fin (Blocked).
 1. **Alveus-Worker** exécute la tâche décrite par `TaskPrompt` (+ `WorkerInstructions`) dans son
-   workspace (`Agent:WorkspaceRoot`), avec accès shell (`CmdRunTool`) et édition de fichiers
+   workspace (`Agent:WorkerWorkspaceRoot`), avec accès shell (`CmdRunTool`) et édition de fichiers
    (`StrReplaceEditorTool`).
 2. Une fois `Finish(outcome='done')`, le travail est vérifié objectivement
    (`IAgentWorkVerificationService`, ex. `dotnet test`) avant de sortir par `"Done"`. Échec →
@@ -109,12 +109,12 @@ Par équipe (`Teams[].Name`, ex. `"default"`), six `ChatClientAgent` + N spécia
 
 | Rôle DI | Clé DI | Workspace | Rôle |
 |---|---|---|---|
-| Worker | `{team}:Worker` | `Teams[].WorkspaceRoot` | Exécute la tâche. |
-| EnvironmentManager | `{team}:EnvironmentManager` | `Teams[].WorkspaceRoot` (partagé avec le Worker) | (Re)lance l'environnement local après le Worker. |
+| Worker | `{team}:Worker` | `Teams[].WorkerWorkspaceRoot` | Exécute la tâche. |
+| EnvironmentManager | `{team}:EnvironmentManager` | `Teams[].WorkerWorkspaceRoot` (partagé avec le Worker) | (Re)lance l'environnement local après le Worker. |
 | Evaluator | `{team}:Evaluator` | `Teams[].EvaluatorWorkspaceRoot` (isolé) | Écrit et exécute un jeu de test contre l'environnement, sans accès filesystem au workspace du Worker. |
 | UserDoc | `{team}:UserDoc` | `Teams[].UserDocWorkspaceRoot` | Met à jour la documentation utilisateur après le verdict `pass` de l'Evaluator (ADR 0026). |
 | Qa | `{team}:Qa` | `{EvaluatorWorkspaceRoot}/test-plan` (sous-répertoire de l'Evaluator) | Plan de test (markdown), participant aux réunions (ADR 0024/0025). |
-| Technical | `{team}:Technical` | `{WorkspaceRoot}/tech-docs` (sous-répertoire du Worker) | Documentation d'architecture/ADRs, participant aux réunions (ADR 0024/0025). |
+| Technical | `{team}:Technical` | `{WorkerWorkspaceRoot}/tech-docs` (sous-répertoire du Worker) | Documentation d'architecture/ADRs, participant aux réunions (ADR 0024/0025). |
 | Spécialistes (`Teams[].SpecialistRoles`, ex. `BusinessAnalyst`) | `{team}:{clé}` (catalogue `SpecialistRoleCatalog`) | `{UserDocWorkspaceRoot}/{WorkspaceSubdir}` (sous-répertoire de UserDoc, un par rôle activé) | Documentation spécialisée (règles métier, UX, etc.), participants aux réunions (ADR 0024/0025/0030). |
 
 Tous partagent les mêmes classes d'outils (`CmdRunTool`, `StrReplaceEditorTool`, `FinishTool`) —
@@ -127,12 +127,12 @@ configurés, Alveus-Qa et Alveus-Technical ont en plus accès à `MeetingTool` (
 - **`CmdRunTool`** — shell persistant (`bash`), `WorkingDirectory`/`--chdir` fixé au workspace de
   l'agent. ⚠ Timeout de 30s : tout process longue durée doit être lancé en arrière-plan (`nohup
   ... & disown`). Tourne dans une sandbox `bwrap` (si disponible) confinant l'écriture à
-  `WorkspaceRoot` (+ caches `~/.nuget`/`~/.dotnet`) avec le reste du filesystem en lecture seule,
+  `WorkerWorkspaceRoot` (+ caches `~/.nuget`/`~/.dotnet`) avec le reste du filesystem en lecture seule,
   et un namespace PID dédié pour que `Dispose()` tue aussi les process détachés — cette fois une
   **garantie effective** (cf. ADR 0029, qui remplace le scoping non garanti d'ADR 0017). Si
   `bwrap` est absent, fallback vers le comportement non sandboxé d'ADR 0017 (log d'avertissement).
 - **`StrReplaceEditorTool`** — lecture/liste/création/modification de fichiers, **confinée** au
-  workspace : tout chemin résolu hors de `WorkspaceRoot` est rejeté sans toucher au disque. C'est
+  workspace : tout chemin résolu hors de `WorkerWorkspaceRoot` est rejeté sans toucher au disque. C'est
   une garantie effective, contrairement à `CmdRunTool` — cf. ADR 0017. Les workspaces imbriqués
   (ADR 0025) réutilisent cette confinement sans modification : un sous-répertoire d'un workspace
   est nativement accessible à l'agent racine, et un agent enraciné sur le sous-répertoire reste
@@ -284,12 +284,12 @@ Structure depuis ADR 0031 (remplace l'ancienne section `Agent:*`) :
 
 ```json
 {
-  "LlamaCpp": { "Endpoint": "http://...", "Model": "..." },
+  "AIModel": { "Endpoint": "http://...", "Model": "..." },
   "Teams": [
     {
       "Name": "default",
       "MissionPrompt": "Contexte projet injecté en préfixe de toutes les instructions des agents.",
-      "WorkspaceRoot": "workspace",
+      "WorkerWorkspaceRoot": "workspace",
       "EvaluatorWorkspaceRoot": "workspace-evaluator",
       "UserDocWorkspaceRoot": "workspace-userdoc",
       "VerificationCommand": null,
@@ -303,10 +303,10 @@ Structure depuis ADR 0031 (remplace l'ancienne section `Agent:*`) :
 
 | Clé | Rôle |
 |---|---|
-| `LlamaCpp:Endpoint`, `LlamaCpp:Model` | Backend LLM partagé entre toutes les équipes (cf. ADR 0006). |
+| `AIModel:Endpoint`, `AIModel:Model` | Backend LLM partagé entre toutes les équipes (cf. ADR 0006). |
 | `Teams[].Name` | Identifiant de l'équipe — préfixe des clés DI (`{name}:{role}`) et des routes (`/teams/{name}/v1/conversations`). |
 | `Teams[].MissionPrompt` | Contexte projet injecté en préfixe des instructions système de tous les agents de l'équipe (ADR 0031). |
-| `Teams[].WorkspaceRoot` | Racine du workspace Worker/EnvironmentManager (défaut dev : `workspace/`). |
+| `Teams[].WorkerWorkspaceRoot` | Racine du workspace Worker/EnvironmentManager (défaut dev : `workspace/`). |
 | `Teams[].EvaluatorWorkspaceRoot` | Racine du workspace isolé Evaluator + sous-répertoire Qa (défaut dev : `workspace-evaluator/`). |
 | `Teams[].UserDocWorkspaceRoot` | Racine du workspace UserDoc + sous-répertoires spécialistes (défaut dev : `workspace-userdoc/`). |
 | `Teams[].VerificationCommand` | Optionnelle — commande de vérification du Worker (ADR 0020). Non configurée = no-op. |
@@ -379,7 +379,7 @@ l'autre) :
 - 2026-06-14 — escalade des issues "NeedsMoreInfo"/"Blocked" de Worker/EnvironmentManager/
   Evaluator/UserDoc vers RunPreTaskMeeting via Record*Escalation/AgentEscalationLoopGuard (ADR 0028).
 - 2026-06-14 — `CmdRunTool` tourne dans une sandbox `bwrap` (filesystem read-only hors
-  `WorkspaceRoot`/caches dotnet, namespace PID dédié) — le scoping au workspace devient une
+  `WorkerWorkspaceRoot`/caches dotnet, namespace PID dédié) — le scoping au workspace devient une
   garantie effective au lieu d'une simple commodité (ADR 0029).
 - 2026-06-15 — catalogue de rôles spécialistes générique (`SpecialistRoleCatalog`), N spécialistes
   configurables, `SpecialistReports` en lieu et place du `BaReport` unique (ADR 0030).

@@ -217,7 +217,7 @@ un item `MeetingRound` = concaténation de `transcript[roundStartIndex..]`, mét
   détail tour-par-tour de chaque agent (déjà visible via `activity_transition` +
   `file_edit` si l'agent édite des fichiers).
 - **`WebApplicationFactory` pour les tests de contrat** — écarté : nécessiterait de configurer
-  `appsettings` complet (`LlamaCpp:Endpoint`, `Agent:*`, requis par `Program.cs` via
+  `appsettings` complet (`AIModel:Endpoint`, `Agent:*`, requis par `Program.cs` via
   `InvalidOperationException`) pour un test qui ne dépend d'aucun LLM ; `InternalsVisibleTo` +
   handlers `internal` appelés directement est plus léger et suffisant.
 

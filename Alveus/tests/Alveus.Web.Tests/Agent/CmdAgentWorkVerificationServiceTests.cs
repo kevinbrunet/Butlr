@@ -42,7 +42,7 @@ public sealed class CmdAgentWorkVerificationServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task VerifyAsync_RunsInWorkspaceRoot()
+    public async Task VerifyAsync_RunsInWorkerWorkspaceRoot()
     {
         File.WriteAllText(Path.Combine(_workspaceRoot, "marker.txt"), "x");
         var service = new CmdAgentWorkVerificationService(_workspaceRoot, command: "ls");

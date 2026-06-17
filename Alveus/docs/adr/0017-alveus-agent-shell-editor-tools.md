@@ -17,12 +17,12 @@ Donner un accès shell + édition de fichiers **sans aucune restriction** sur la
 
 ## Decision
 
-Les deux tools (`CmdRunTool`, `StrReplaceEditorTool`) sont **scoping-restreints à un répertoire de travail unique**, configuré via `Agent:WorkspaceRoot` (résolu en chemin absolu au démarrage, créé s'il n'existe pas) :
+Les deux tools (`CmdRunTool`, `StrReplaceEditorTool`) sont **scoping-restreints à un répertoire de travail unique**, configuré via `Agent:WorkerWorkspaceRoot` (résolu en chemin absolu au démarrage, créé s'il n'existe pas) :
 
-- `StrReplaceEditorTool` résout tout `path` (relatif ou absolu) puis vérifie que le chemin final reste sous `WorkspaceRoot` ; sinon il renvoie une erreur à l'agent sans toucher au disque. **Cette vérification est une garantie effective** — chaque opération fichier passe par elle.
-- `CmdRunTool` lance un shell persistant (`bash`) avec `WorkingDirectory = WorkspaceRoot`. **Ce n'est pas une garantie** : une commande peut faire `cd /`, utiliser des chemins absolus, ou appeler des binaires qui touchent le reste du système. Le scoping ne fait que fixer le répertoire de départ et limiter le cas d'usage "involontaire" (l'agent qui liste/édite par erreur en dehors du workspace).
+- `StrReplaceEditorTool` résout tout `path` (relatif ou absolu) puis vérifie que le chemin final reste sous `WorkerWorkspaceRoot` ; sinon il renvoie une erreur à l'agent sans toucher au disque. **Cette vérification est une garantie effective** — chaque opération fichier passe par elle.
+- `CmdRunTool` lance un shell persistant (`bash`) avec `WorkingDirectory = WorkerWorkspaceRoot`. **Ce n'est pas une garantie** : une commande peut faire `cd /`, utiliser des chemins absolus, ou appeler des binaires qui touchent le reste du système. Le scoping ne fait que fixer le répertoire de départ et limiter le cas d'usage "involontaire" (l'agent qui liste/édite par erreur en dehors du workspace).
 
-Le `WorkspaceRoot` par défaut (dev) est `Alveus/src/Alveus.Web/workspace/`, un répertoire dédié et vide, distinct du reste du repo Butlr.
+Le `WorkerWorkspaceRoot` par défaut (dev) est `Alveus/src/Alveus.Web/workspace/`, un répertoire dédié et vide, distinct du reste du repo Butlr.
 
 ## Consequences
 
@@ -48,5 +48,5 @@ Le `WorkspaceRoot` par défaut (dev) est `Alveus/src/Alveus.Web/workspace/`, un 
 
 - 2026-06-13 — création.
 - 2026-06-14 — `CmdRunTool` tourne désormais dans une sandbox `bwrap` (filesystem read-only hors
-  `WorkspaceRoot`, namespace PID dédié) qui rend son scoping effectif au lieu d'être "une
+  `WorkerWorkspaceRoot`, namespace PID dédié) qui rend son scoping effectif au lieu d'être "une
   commodité, pas une sandbox" — cf. [ADR 0029](0029-cmdruntool-bubblewrap-sandbox.md).

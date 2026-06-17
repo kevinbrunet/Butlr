@@ -64,7 +64,7 @@ de `elsa.UseWorkflowRuntime(runtime => runtime.AddWorkflow<T>())`.
 3. **Nouvel agent Alveus-EnvironmentManager** (config `Agent:EnvironmentManagerName`, défaut
    `"AlveusEnvironmentManager"`) et nouvelle activité `RunEnvironmentPrompt`. Il réutilise **les
    mêmes instances** `CmdRunTool`/`StrReplaceEditorTool`/`FinishTool` (donc le même workspace,
-   `Agent:WorkspaceRoot`) qu'Alveus-Worker — pas d'isolation, contrairement à l'Evaluator. Son
+   `Agent:WorkerWorkspaceRoot`) qu'Alveus-Worker — pas d'isolation, contrairement à l'Evaluator. Son
    prompt système : (re)lancer l'environnement local décrit par la consigne, en arrière-plan
    (`nohup ... & disown`, car `CmdRunTool` a un timeout de 30s — ADR 0017), puis rapporter via
    `Finish(outcome='done', verdict=...)` : `pass` avec dans `summary` des instructions

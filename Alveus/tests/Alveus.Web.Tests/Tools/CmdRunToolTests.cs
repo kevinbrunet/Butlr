@@ -49,7 +49,7 @@ public sealed class CmdRunToolTests : IDisposable
     }
 
     [Fact]
-    public async Task RunAsync_StartsInWorkspaceRoot()
+    public async Task RunAsync_StartsInWorkerWorkspaceRoot()
     {
         var result = await _tool.RunAsync("pwd");
 

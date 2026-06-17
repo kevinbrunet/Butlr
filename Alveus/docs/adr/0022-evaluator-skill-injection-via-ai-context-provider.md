@@ -41,7 +41,7 @@ mention statique dans le prompt.
    `RunEvaluatorPromptFixture`) est construit via le constructeur `ChatClientAgent(IChatClient,
    ChatClientAgentOptions, ...)` plutôt que le constructeur simplifié
    `(IChatClient, instructions, name, tools)`, pour pouvoir renseigner
-   `AIContextProviders = [new EvaluatorSkillsContextProvider(evaluatorWorkspaceRoot)]`. Les
+   `AIContextProviders = [new EvaluatorSkillsContextProvider(evaluatorWorkerWorkspaceRoot)]`. Les
    instructions statiques (`ChatOptions.Instructions`) sont allégées : elles indiquent que des
    méthodologies pertinentes sont fournies directement dans le contexte, et que
    `skills/{nom}/references/*.md` reste consultable via `StrReplaceEditorTool` pour le détail.

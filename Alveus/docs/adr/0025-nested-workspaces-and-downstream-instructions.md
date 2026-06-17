@@ -36,7 +36,7 @@ participé à la réunion — par exemple une contrainte technique découverte e
    confiné à celui-ci. Chaque agent BA/QA/Tech reçoit donc sa **propre instance**
    `CmdRunTool`/`StrReplaceEditorTool` (clé DI dédiée, même pattern que l'Evaluator isolé — ADR
    0021), enracinée sur :
-   - `{Agent:WorkspaceRoot}/tech-docs/` pour Alveus-Technical (config
+   - `{Agent:WorkerWorkspaceRoot}/tech-docs/` pour Alveus-Technical (config
      `Agent:TechnicalWorkspaceSubdir`),
    - `{Agent:EvaluatorWorkspaceRoot}/test-plan/` pour Alveus-Qa (config `Agent:QaWorkspaceSubdir`),
    - `{Agent:UserDocWorkspaceRoot}/business-rules/` pour Alveus-BusinessAnalyst (config

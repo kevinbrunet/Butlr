@@ -59,19 +59,19 @@ builder.Services.AddSingleton<FinishTool>();
 builder.Services.AddSingleton<MeetingTool>();
 builder.Services.AddSingleton<IAgentSessionCompactionService, SummarizingAgentSessionCompactionService>();
 
-// Agent IA branché sur llama.cpp server (endpoint OpenAI-compatible local, cf. ADR 0006).
-var llamaCppEndpoint = builder.Configuration["LlamaCpp:Endpoint"]
-    ?? throw new InvalidOperationException("Configuration manquante : LlamaCpp:Endpoint");
-var llamaCppModel = builder.Configuration["LlamaCpp:Model"]
-    ?? throw new InvalidOperationException("Configuration manquante : LlamaCpp:Model");
+// Agent IA branché sur un backend OpenAI-compatible local (cf. ADR 0006).
+var aiModelEndpoint = builder.Configuration["AIModel:Endpoint"]
+    ?? throw new InvalidOperationException("Configuration manquante : AIModel:Endpoint");
+var aiModelName = builder.Configuration["AIModel:Model"]
+    ?? throw new InvalidOperationException("Configuration manquante : AIModel:Model");
 
-// llama.cpp n'exige pas de clé API mais le SDK OpenAI en réclame une non vide.
+// Le backend n'exige pas de clé API mais le SDK OpenAI en réclame une non vide.
 var openAiClient = new OpenAIClient(new ApiKeyCredential("not-needed"), new OpenAIClientOptions
 {
-    Endpoint = new Uri(llamaCppEndpoint),
+    Endpoint = new Uri(aiModelEndpoint),
 });
 
-IChatClient chatClient = openAiClient.GetChatClient(llamaCppModel).AsIChatClient();
+IChatClient chatClient = openAiClient.GetChatClient(aiModelName).AsIChatClient();
 
 // Équipes (cf. ADR 0031) : chaque équipe déclare ses workspaces, ses spécialistes actifs et son
 // MissionPrompt. Un jeu d'agents DI isolés est enregistré par équipe (clés "{Name}:{role}"),

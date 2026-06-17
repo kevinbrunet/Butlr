@@ -21,7 +21,7 @@ public sealed class RunEnvironmentPromptFixture : IAsyncLifetime
 {
     private const string AgentName = "AlveusEnvironmentManager";
 
-    public string WorkspaceRoot { get; } = Directory.CreateTempSubdirectory("alveus-workflow-envmanager-tests-").FullName;
+    public string WorkerWorkspaceRoot { get; } = Directory.CreateTempSubdirectory("alveus-workflow-envmanager-tests-").FullName;
 
     public IServiceProvider Services { get; }
 
@@ -48,8 +48,8 @@ public sealed class RunEnvironmentPromptFixture : IAsyncLifetime
 
         IChatClient chatClient = openAiClient.GetChatClient(Model).AsIChatClient();
 
-        services.AddSingleton(_ => new CmdRunTool(WorkspaceRoot));
-        services.AddSingleton(_ => new StrReplaceEditorTool(WorkspaceRoot));
+        services.AddSingleton(_ => new CmdRunTool(WorkerWorkspaceRoot));
+        services.AddSingleton(_ => new StrReplaceEditorTool(WorkerWorkspaceRoot));
         services.AddSingleton<FinishTool>();
         services.AddSingleton<IAgentSessionCompactionService, SummarizingAgentSessionCompactionService>();
 
@@ -106,7 +106,7 @@ public sealed class RunEnvironmentPromptFixture : IAsyncLifetime
     public Task DisposeAsync()
     {
         Services.GetRequiredService<CmdRunTool>().Dispose();
-        Directory.Delete(WorkspaceRoot, recursive: true);
+        Directory.Delete(WorkerWorkspaceRoot, recursive: true);
         return Task.CompletedTask;
     }
 }

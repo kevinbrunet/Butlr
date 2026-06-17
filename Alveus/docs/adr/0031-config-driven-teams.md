@@ -22,13 +22,13 @@ personas de base des agents et le catalogue de rôles restent en C# (code-first)
 
 1. **`TeamConfig` / `TeamSpecialistConfig`** (`src/Alveus.Web/Configuration/TeamConfig.cs`,
    nouveau) : POCO de configuration. `TeamConfig` regroupe `Name`, `MissionPrompt`,
-   `WorkspaceRoot`, `EvaluatorWorkspaceRoot`, `UserDocWorkspaceRoot`, `VerificationCommand?` et
+   `WorkerWorkspaceRoot`, `EvaluatorWorkspaceRoot`, `UserDocWorkspaceRoot`, `VerificationCommand?` et
    `SpecialistRoles` (liste de `TeamSpecialistConfig`). `TeamSpecialistConfig` référence une clé
    du `SpecialistRoleCatalog` (`Key`) et accepte un `AdditionalInstructions?` injecté en suffixe
    des instructions C# du spécialiste.
 
 2. **`appsettings.json`** : section `Teams` (tableau) remplace l'ancienne section `Agent:*`. Chaque
-   entrée définit une équipe. La section `LlamaCpp` (`Endpoint`/`Model`) reste partagée.
+   entrée définit une équipe. La section `AIModel` (`Endpoint`/`Model`) reste partagée.
 
 3. **Clé DI par équipe** : `"{teamName}:{role}"` (ex. `"frontend:Worker"`, `"backend:Qa"`). Chaque
    équipe enregistre ses propres instances de `CmdRunTool`, `StrReplaceEditorTool`, `AIAgent` et
@@ -81,7 +81,7 @@ personas de base des agents et le catalogue de rôles restent en C# (code-first)
 ## Alternatives considérées
 
 - **Un processus par équipe** — offre une isolation stricte (mémoire, crash) mais complexifie
-  le déploiement (N services, N ports, orchestration) et duplique la configuration LlamaCpp/Elsa
+  le déploiement (N services, N ports, orchestration) et duplique la configuration AIModel/Elsa
   pour chaque instance. Écarté au stade POC.
 - **Workflow généré dynamiquement à partir de la config** — aurait permis des topologies de
   workflow différentes par équipe, mais rend le code non-vérifiable statiquement et introduit une
