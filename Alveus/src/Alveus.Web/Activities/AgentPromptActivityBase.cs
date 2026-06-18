@@ -51,6 +51,9 @@ public abstract class AgentPromptActivityBase : CodeActivity
     [Input(Description = "Prompt envoyé à l'agent.")]
     public Input<string> Prompt { get; set; } = default!;
 
+    [Input(Description = "Instructions complémentaires ajoutées au prompt (ex. pour forcer un comportement en test).")]
+    public Input<string?> AdditionalInstructions { get; set; } = new((string?)null);
+
     [Output(Description = "Résumé fourni par l'agent via FinishTool, quelle que soit l'issue.")]
     public Output<string> Summary { get; set; } = new();
 
@@ -71,6 +74,10 @@ public abstract class AgentPromptActivityBase : CodeActivity
 
         var prompt = context.Get(Prompt);
         ArgumentException.ThrowIfNullOrWhiteSpace(prompt);
+
+        var additionalInstructions = context.Get(AdditionalInstructions);
+        if (!string.IsNullOrWhiteSpace(additionalInstructions))
+            prompt += $"\n\n---\n{additionalInstructions}";
 
         var agent = context.GetRequiredService<IServiceProvider>().GetRequiredKeyedService<AIAgent>(agentName);
         var sessionStatePropertyName = SessionStatePropertyPrefix + agentName;

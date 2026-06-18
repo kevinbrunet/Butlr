@@ -64,6 +64,9 @@ public abstract class MeetingActivityBase : CodeActivity
     [Input(Description = "Contexte additionnel (comptes-rendus de la réunion finale précédente en cas de boucle KO, vide normalement).")]
     public Input<string?> ExtraContext { get; set; } = new(string.Empty);
 
+    [Input(Description = "Instructions complémentaires par rôle de participant (clé = rôle, ex. 'Qa', 'Technical', 'BusinessAnalyst') — ajoutées après la consigne de rôle au round 1.")]
+    public Input<IReadOnlyDictionary<string, string>?> AdditionalInstructions { get; set; } = new((IReadOnlyDictionary<string, string>?)null);
+
     [Output(Description = "Point de blocage signalé par un participant (issues NeedsMoreInfo et Blocked).")]
     public Output<string?> Reason { get; set; } = new();
 
@@ -108,6 +111,7 @@ public abstract class MeetingActivityBase : CodeActivity
         ArgumentException.ThrowIfNullOrWhiteSpace(topicText);
 
         var extraContext = context.Get(ExtraContext) ?? string.Empty;
+        var additionalInstructions = context.Get(AdditionalInstructions);
 
         var specialistRoleKeys = context.Get(SpecialistRoleKeys) ?? [];
         var roles = specialistRoleKeys.Concat(["Qa", "Technical"]).ToList();
@@ -151,7 +155,7 @@ public abstract class MeetingActivityBase : CodeActivity
             {
                 var lastTranscriptCount = transcript.Count;
 
-                var message = BuildMessage(role, round, topicText, extraContext, transcript, lastSeenIndex, topics);
+                var message = BuildMessage(role, round, topicText, extraContext, transcript, lastSeenIndex, topics, additionalInstructions);
                 lastSeenIndex[role] = transcript.Count;
 
                 sessions[role] = await _compactionService.CompactIfNeededAsync(agents[role], sessions[role], context.CancellationToken);
@@ -280,13 +284,16 @@ public abstract class MeetingActivityBase : CodeActivity
         string extraContext,
         List<string> transcript,
         Dictionary<string, int> lastSeenIndex,
-        Dictionary<string, MeetingTopicState> topics)
+        Dictionary<string, MeetingTopicState> topics,
+        IReadOnlyDictionary<string, string>? additionalInstructions)
     {
         var sb = new StringBuilder();
 
         if (round == 1)
         {
             sb.Append(GetRoleTask(role));
+            if (additionalInstructions?.TryGetValue(role, out var roleInstr) == true && !string.IsNullOrWhiteSpace(roleInstr))
+                sb.Append("\n\n---\n").Append(roleInstr);
             sb.Append("\n\n---\nSujet de la réunion :\n").Append(topicText);
             if (!string.IsNullOrWhiteSpace(extraContext))
             {

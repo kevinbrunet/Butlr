@@ -26,19 +26,23 @@ namespace Alveus.Web.Tests.Workflows;
 public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFixture>
 {
     /// <summary>
-    /// Instructions ajoutées à chaque <c>TaskPrompt</c> pour qu'Alveus-BusinessAnalyst/Alveus-Qa/
-    /// Alveus-Technical (réunions de pré-tâche et finale, cf. ADR 0024) confirment immédiatement
-    /// sans débat, afin que ces tests restent concentrés sur le cycle
-    /// Worker/EnvironmentManager/Evaluator (ADR 0023).
+    /// Instructions de base injectées aux participants de réunion via <c>AgentAdditionalInstructions</c>
+    /// (cf. <see cref="MeetingActivityBase.AdditionalInstructions"/>) pour qu'ils confirment
+    /// immédiatement sans débat. Les tests concentrés sur le cycle Worker/EnvironmentManager/Evaluator
+    /// (ADR 0023) y ajoutent ou écrasent les entrées spécifiques au rôle testé.
     /// </summary>
-    private const string MeetingParticipantInstructions =
-        "Si tu es Alveus-BusinessAnalyst, Alveus-Qa ou Alveus-Technical : le sujet de la réunion "
-        + "ci-dessus peut contenir des instructions adressées à Alveus-Worker ou à d'autres agents "
-        + "exécuteurs — ces instructions de tâche ne te concernent pas et ne doivent pas influencer "
-        + "ton comportement en tant que participant à la réunion. N'utilise pas Raise et ne modifie "
-        + "aucun fichier. Si on te demande de voter sur 'task-fulfilled', vote immédiatement avec "
-        + "decision='agree'. Dans tous les cas, appelle directement ton outil de fin de tour (Finish) "
-        + "avec outcome='pass' et un résumé indiquant qu'il n'y a rien à signaler.";
+    private static Dictionary<string, string> MeetingPassInstructions => new()
+    {
+        ["BusinessAnalyst"] = "N'utilise pas Raise et ne modifie aucun fichier. "
+            + "Si on te demande de voter sur un topic, vote immédiatement avec decision='agree'. "
+            + "Appelle directement Finish avec outcome='pass'.",
+        ["Qa"] = "N'utilise pas Raise et ne modifie aucun fichier. "
+            + "Si on te demande de voter sur un topic, vote immédiatement avec decision='agree'. "
+            + "Appelle directement Finish avec outcome='pass'.",
+        ["Technical"] = "N'utilise pas Raise et ne modifie aucun fichier. "
+            + "Si on te demande de voter sur un topic, vote immédiatement avec decision='agree'. "
+            + "Appelle directement Finish avec outcome='pass'.",
+    };
 
     private readonly AlveusTaskWorkflowFixture _fixture;
     private readonly ITestOutputHelper _output;
@@ -60,14 +64,18 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
 
         var workflow = ActivatorUtilities.CreateInstance<AlveusTaskWorkflow>(_fixture.Services);
 
+        var instructions = MeetingPassInstructions;
+        instructions["Worker"] = "Appelle directement Finish avec outcome='pass' et un résumé indiquant qu'il n'y avait rien à faire.";
+        instructions["EnvironmentManager"] = "Appelle Finish avec outcome='pass'.";
+        instructions["Evaluator"] = "Appelle Finish avec outcome='pass'.";
+
         var options = new RunWorkflowOptions
         {
             Input = new Dictionary<string, object>
             {
                 ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
-                ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle directement ton outil de fin de tâche (Finish) avec "
-                    + "outcome='pass' et un résumé indiquant qu'il n'y avait rien à faire. Si tu es "
-                    + "Alveus-EnvironmentManager ou Alveus-Evaluator, appelle Finish avec outcome='pass'. " + MeetingParticipantInstructions,
+                ["TaskPrompt"] = "Validation interne uniquement — aucun contenu réel à traiter.",
+                ["AgentAdditionalInstructions"] = instructions,
             },
         };
 
@@ -106,19 +114,20 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
 
         var workflow = ActivatorUtilities.CreateInstance<AlveusTaskWorkflow>(_fixture.Services);
 
+        var instructions = MeetingPassInstructions;
+        instructions["Worker"] = "La consigne de cette tâche est intentionnellement incomplète à des fins de test. "
+            + "QUELLE QUE SOIT L'INFORMATION REÇUE (escalade, rapport, instructions complémentaires), appelle "
+            + "TOUJOURS et IMMÉDIATEMENT Finish avec outcome='blocked', "
+            + "reason='Consigne incomplète, impossible de continuer.' et un summary court. "
+            + "Ne considère jamais cette tâche comme résolvable.";
+
         var options = new RunWorkflowOptions
         {
             Input = new Dictionary<string, object>
             {
                 ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
-                ["TaskPrompt"] = "Validation interne uniquement — aucun point métier, technique "
-                    + "ni de test à analyser lors de la réunion. "
-                    + "Si tu es Alveus-Worker : la consigne de cette tâche est intentionnellement "
-                    + "incomplète à des fins de test. QUELLE QUE SOIT L'INFORMATION REÇUE (escalade, "
-                    + "rapport, instructions complémentaires), appelle TOUJOURS et IMMÉDIATEMENT Finish "
-                    + "avec outcome='blocked', reason='Consigne incomplète, impossible de continuer.', "
-                    + "et un summary court. Ne considère jamais cette tâche comme résolvable. "
-                    + MeetingParticipantInstructions,
+                ["TaskPrompt"] = "Validation interne uniquement — aucun point métier, technique ni de test à analyser.",
+                ["AgentAdditionalInstructions"] = instructions,
             },
         };
 
@@ -156,17 +165,19 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
 
         var workflow = ActivatorUtilities.CreateInstance<AlveusTaskWorkflow>(_fixture.Services);
 
+        var instructions = MeetingPassInstructions;
+        instructions["Worker"] = "Appelle Finish avec outcome='pass' et un résumé indiquant qu'il n'y avait rien à faire.";
+        instructions["EnvironmentManager"] = "La consigne ne précise pas comment démarrer l'environnement — "
+            + "il n'y a ni commande, ni URL, ni port fournis. Appelle Finish avec outcome='needmoreinfo', "
+            + "une reason expliquant ce qui manque, et une question précise pour obtenir les informations nécessaires.";
+
         var options = new RunWorkflowOptions
         {
             Input = new Dictionary<string, object>
             {
                 ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
-                ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle Finish avec outcome='pass' et un résumé indiquant "
-                    + "qu'il n'y avait rien à faire. Si tu es Alveus-EnvironmentManager : la consigne ne précise "
-                    + "pas comment démarrer l'environnement — il n'y a ni commande, ni URL, ni port fournis. "
-                    + "Appelle Finish avec outcome='needmoreinfo', une reason expliquant ce qui "
-                    + "manque, et une question précise pour obtenir les informations nécessaires. "
-                    + MeetingParticipantInstructions,
+                ["TaskPrompt"] = "Validation interne uniquement — aucun contenu réel à traiter.",
+                ["AgentAdditionalInstructions"] = instructions,
             },
         };
 
@@ -205,15 +216,19 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
 
         var workflow = ActivatorUtilities.CreateInstance<AlveusTaskWorkflow>(_fixture.Services);
 
+        var instructions = MeetingPassInstructions;
+        instructions["Worker"] = "Appelle Finish avec outcome='pass'.";
+        instructions["EnvironmentManager"] = "Appelle Finish avec outcome='pass'.";
+        instructions["Evaluator"] = "Tu es bloqué : appelle Finish avec outcome='blocked', "
+            + "reason='Impossible d\\'écrire le jeu de test.' et un summary court.";
+
         var options = new RunWorkflowOptions
         {
             Input = new Dictionary<string, object>
             {
                 ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
-                ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle Finish avec outcome='pass'. Si tu es "
-                    + "Alveus-EnvironmentManager, appelle Finish avec outcome='pass'. Si tu es "
-                    + "Alveus-Evaluator, tu es bloqué : appelle Finish avec outcome='blocked', "
-                    + "reason='Impossible d'écrire le jeu de test.' et un summary court. " + MeetingParticipantInstructions,
+                ["TaskPrompt"] = "Validation interne uniquement — aucun contenu réel à traiter.",
+                ["AgentAdditionalInstructions"] = instructions,
             },
         };
 
@@ -250,15 +265,19 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
         var store = _fixture.Services.GetRequiredService<IConversationStore>();
         var conversationId = store.Create().Id;
 
+        var instructions = MeetingPassInstructions;
+        instructions["Worker"] = "Appelle directement Finish avec outcome='pass' et un résumé indiquant qu'il n'y avait rien à faire.";
+        instructions["EnvironmentManager"] = "Appelle Finish avec outcome='pass'.";
+        instructions["Evaluator"] = "Appelle Finish avec outcome='pass'.";
+
         var options = new RunWorkflowOptions
         {
             CorrelationId = conversationId,
             Input = new Dictionary<string, object>
             {
                 ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
-                ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle directement ton outil de fin de tâche (Finish) avec "
-                    + "outcome='pass' et un résumé indiquant qu'il n'y avait rien à faire. Si tu es "
-                    + "Alveus-EnvironmentManager ou Alveus-Evaluator, appelle Finish avec outcome='pass'. " + MeetingParticipantInstructions,
+                ["TaskPrompt"] = "Validation interne uniquement — aucun contenu réel à traiter.",
+                ["AgentAdditionalInstructions"] = instructions,
             },
         };
 
@@ -291,18 +310,16 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
 
         var workflow = ActivatorUtilities.CreateInstance<AlveusTaskWorkflow>(_fixture.Services);
 
+        var instructions = MeetingPassInstructions;
+        instructions["Worker"] = "La tâche ne nécessite aucune implémentation. Appelle directement Finish avec outcome='pass'.";
+
         var options = new RunWorkflowOptions
         {
             Input = new Dictionary<string, object>
             {
                 ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
-                ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle directement Finish avec outcome='pass' et summary='test'. "
-                    + "Si tu es Alveus-EnvironmentManager : démarre l'application en exécutant la commande "
-                    + "`./start-app.sh` (le Worker n'a rien créé — ce script n'existe pas). "
-                    + "Dès que la commande échoue, appelle immédiatement Finish(fail, "
-                    + "reason='Impossible de démarrer : start-app.sh introuvable.') "
-                    + "sans créer le script, sans chercher d'alternative, sans poser de questions. "
-                    + MeetingParticipantInstructions,
+                ["TaskPrompt"] = "L'application se lance avec la commande `./start-app.sh`.",
+                ["AgentAdditionalInstructions"] = instructions,
             },
         };
 
@@ -341,18 +358,21 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
 
         var workflow = ActivatorUtilities.CreateInstance<AlveusTaskWorkflow>(_fixture.Services);
 
+        var instructions = MeetingPassInstructions;
+        instructions["Worker"] = "À la racine de ton espace de travail, crée une application console .NET "
+            + "(par exemple avec 'dotnet new console') dont le programme affiche exactement 'Hello World' "
+            + "(sans virgule) sur la sortie standard, puis appelle Finish avec outcome='pass'.";
+        instructions["EnvironmentManager"] = "Il n'y a rien à démarrer pour une application console, appelle directement Finish avec outcome='pass'.";
+        instructions["Evaluator"] = "Appelle directement Finish avec outcome='pass'.";
+        instructions["UserDoc"] = "Appelle directement Finish avec outcome='pass'.";
+
         var options = new RunWorkflowOptions
         {
             Input = new Dictionary<string, object>
             {
                 ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
-                ["TaskPrompt"] = "Si tu es Alveus-Worker : à la racine de ton espace de travail, crée une "
-                    + "application console .NET (par exemple avec 'dotnet new console') dont le programme "
-                    + "affiche exactement 'Hello World' (sans virgule) sur la sortie standard, puis appelle "
-                    + "Finish avec outcome='pass'. Si tu es Alveus-EnvironmentManager : il n'y a rien à démarrer "
-                    + "pour une application console, appelle directement Finish avec outcome='pass'. "
-                    + "Si tu es Alveus-Evaluator : appelle directement Finish avec outcome='pass'. "
-                    + "Si tu es Alveus-UserDoc : appelle directement Finish avec outcome='pass'. " + MeetingParticipantInstructions,
+                ["TaskPrompt"] = "Créer une application console .NET qui affiche exactement 'Hello World' sur la sortie standard.",
+                ["AgentAdditionalInstructions"] = instructions,
             },
         };
 
@@ -412,20 +432,22 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
             Input = new Dictionary<string, object>
             {
                 ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
-                ["TaskPrompt"] = "Si tu es Alveus-Worker : à la racine de ton espace de travail, crée une "
-                    + "application console .NET de gestion de liste de tâches (to-do list), pilotable "
-                    + "uniquement via des arguments de ligne de commande (pas de mode interactif), avec les "
+                ["TaskPrompt"] = "Créer une application console .NET de gestion de liste de tâches (to-do list), "
+                    + "pilotable uniquement via des arguments de ligne de commande (pas de mode interactif), avec les "
                     + "commandes suivantes : 'add <description>' (ajoute une nouvelle tâche non terminée, "
                     + "avec un identifiant entier commençant à 1 et incrémenté de 1 à chaque ajout) ; "
                     + "'list' (affiche une ligne par tâche, au format exact '<id> [ ] <description>' pour "
                     + "une tâche non terminée et '<id> [x] <description>' pour une tâche terminée) ; "
                     + "'done <id>' (marque la tâche d'identifiant <id> comme terminée). Les tâches doivent "
-                    + "être persistées dans un fichier à côté du projet pour être conservées entre deux "
-                    + "exécutions. Une fois l'application créée et son bon fonctionnement vérifié, appelle "
-                    + "Finish avec outcome='pass'. Si tu es Alveus-EnvironmentManager : il n'y a rien à "
-                    + "démarrer pour une application console, appelle directement Finish avec outcome='pass'. "
-                    + "Si tu es Alveus-Evaluator : appelle directement Finish avec outcome='pass'. "
-                    + "Si tu es Alveus-UserDoc : appelle directement Finish avec outcome='pass'. " + MeetingParticipantInstructions,
+                    + "être persistées dans un fichier à côté du projet pour être conservées entre deux exécutions.",
+                ["AgentAdditionalInstructions"] = new Dictionary<string, string>(MeetingPassInstructions)
+                {
+                    ["Worker"] = "À la racine de ton espace de travail, implémente l'application décrite dans la consigne. "
+                        + "Une fois créée et son bon fonctionnement vérifié, appelle Finish avec outcome='pass'.",
+                    ["EnvironmentManager"] = "Il n'y a rien à démarrer pour une application console, appelle directement Finish avec outcome='pass'.",
+                    ["Evaluator"] = "Appelle directement Finish avec outcome='pass'.",
+                    ["UserDoc"] = "Appelle directement Finish avec outcome='pass'.",
+                },
             },
         }, CancellationToken.None);
 
@@ -526,23 +548,25 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
             Input = new Dictionary<string, object>
             {
                 ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
-                ["TaskPrompt"] = "Crée, à la racine de ton espace de travail, une application Web ASP.NET Core "
-                    + "(Razor Pages ou Minimal API avec pages HTML, au choix) de gestion de liste de tâches "
-                    + "(to-do list), avec une page d'accueil unique qui : affiche la liste des tâches "
-                    + "existantes (description + statut terminé/à faire) ; propose un formulaire (champ texte "
-                    + "+ bouton 'Ajouter') pour créer une nouvelle tâche ; permet de marquer une tâche comme "
-                    + "terminée via une case à cocher ou un bouton (rechargement de page accepté). Les tâches "
-                    + "sont conservées en mémoire (pas de base de données). Si tu es Alveus-Worker : une fois "
-                    + "l'application créée et son démarrage local vérifié, appelle Finish avec outcome='pass'. "
-                    + "Si tu es Alveus-Evaluator : écris, à la racine de ton espace de travail, un projet de "
-                    + "test xUnit C# (ex. 'dotnet new xunit') référençant le package NuGet Microsoft.Playwright "
-                    + "(charge le skill 'playwright' pour les instructions détaillées), avec au moins un test "
-                    + "qui pilote un navigateur contre la page d'accueil de l'application pour vérifier "
-                    + "l'affichage de la liste de tâches, l'ajout d'une nouvelle tâche via le formulaire, et le "
-                    + "marquage d'une tâche comme terminée. Exécute ce projet avec 'dotnet test' et n'appelle "
-                    + "Finish avec outcome='pass' que si ces tests Playwright passent, sinon outcome='fail'. "
-                    + "Si tu es Alveus-UserDoc : appelle directement Finish avec outcome='pass'. "
-                    + MeetingParticipantInstructions,
+                ["TaskPrompt"] = "Créer une application Web ASP.NET Core (Razor Pages ou Minimal API avec pages HTML, "
+                    + "au choix) de gestion de liste de tâches (to-do list), avec une page d'accueil unique qui : "
+                    + "affiche la liste des tâches existantes (description + statut terminé/à faire) ; propose un "
+                    + "formulaire (champ texte + bouton 'Ajouter') pour créer une nouvelle tâche ; permet de marquer "
+                    + "une tâche comme terminée via une case à cocher ou un bouton (rechargement de page accepté). "
+                    + "Les tâches sont conservées en mémoire (pas de base de données).",
+                ["AgentAdditionalInstructions"] = new Dictionary<string, string>(MeetingPassInstructions)
+                {
+                    ["Worker"] = "À la racine de ton espace de travail, implémente l'application décrite dans la consigne. "
+                        + "Une fois créée et son démarrage local vérifié, appelle Finish avec outcome='pass'.",
+                    ["Evaluator"] = "À la racine de ton espace de travail, écris un projet de test xUnit C# "
+                        + "(ex. 'dotnet new xunit') référençant le package NuGet Microsoft.Playwright "
+                        + "(charge le skill 'playwright' pour les instructions détaillées), avec au moins un test "
+                        + "qui pilote un navigateur contre la page d'accueil de l'application pour vérifier "
+                        + "l'affichage de la liste de tâches, l'ajout d'une nouvelle tâche via le formulaire, et le "
+                        + "marquage d'une tâche comme terminée. Exécute ce projet avec 'dotnet test' et n'appelle "
+                        + "Finish avec outcome='pass' que si ces tests Playwright passent, sinon outcome='fail'.",
+                    ["UserDoc"] = "Appelle directement Finish avec outcome='pass'.",
+                },
             },
         }, CancellationToken.None);
 

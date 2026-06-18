@@ -70,6 +70,7 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
         builder.WithInput("TaskPrompt", typeof(string), "Consigne initiale de la tâche.");
         builder.WithInput("ConversationId", typeof(string), "Identifiant de la conversation associée (cf. ADR 0027).");
         builder.WithInput("TeamName", typeof(string), "Nom de l'équipe (TeamConfig:Name, cf. ADR 0031).");
+        builder.WithInput("AgentAdditionalInstructions", typeof(Dictionary<string, string>), "Instructions complémentaires par agent (clé = rôle : 'Worker', 'EnvironmentManager', 'Evaluator', 'UserDoc', 'BusinessAnalyst', 'Qa', 'Technical').");
 
         var envUsageInstructions = builder.WithVariable("EnvUsageInstructions", string.Empty);
         var failureReport = builder.WithVariable<string?>("FailureReport", null);
@@ -118,6 +119,9 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
             return string.IsNullOrEmpty(teamName) ? $"Alveus{role}" : $"{teamName}:{role}";
         }
 
+        string? AgentAdditionalInstr(ExpressionExecutionContext ctx, string role)
+            => ctx.GetInput<Dictionary<string, string>?>("AgentAdditionalInstructions")?.GetValueOrDefault(role);
+
         var runPreTaskMeeting = new RunPreTaskMeeting(_compactionService)
         {
             Id = "RunPreTaskMeeting",
@@ -132,6 +136,8 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
                     .Where(r => !string.IsNullOrWhiteSpace(r));
                 return string.Join("\n\n---\n", reports);
             }),
+            AdditionalInstructions = new Input<IReadOnlyDictionary<string, string>?>(context =>
+                context.GetInput<Dictionary<string, string>?>("AgentAdditionalInstructions")),
             WorkerInstructions = new Output<string>(workerInstructions),
             EvaluatorInstructions = new Output<string>(evaluatorInstructions),
             UserDocInstructions = new Output<string>(userDocInstructions),
@@ -163,6 +169,7 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
 
                 return result;
             }),
+            AdditionalInstructions = new Input<string?>(context => AgentAdditionalInstr(context, "Worker")),
             Summary = new Output<string>(workerSummary),
             Reason = new Output<string?>(workerEscalationReason),
             Questions = new Output<IReadOnlyList<string>?>(workerEscalationQuestions),
@@ -174,6 +181,7 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
             AgentName = new Input<string>(context => AgentKey(context, "EnvironmentManager")),
             TeamName = new Input<string>(context => context.GetInput<string>("TeamName") ?? string.Empty),
             Prompt = new Input<string>(context => context.GetInput<string>("TaskPrompt")!),
+            AdditionalInstructions = new Input<string?>(context => AgentAdditionalInstr(context, "EnvironmentManager")),
             Summary = new Output<string>(envUsageInstructions),
             Reason = new Output<string?>(failureReport),
             Questions = new Output<IReadOnlyList<string>?>(envManagerEscalationQuestions),
@@ -195,6 +203,7 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
 
                 return result;
             }),
+            AdditionalInstructions = new Input<string?>(context => AgentAdditionalInstr(context, "Evaluator")),
             Summary = new Output<string>(evaluatorSummary),
             Reason = new Output<string?>(failureReport),
             Questions = new Output<IReadOnlyList<string>?>(evaluatorEscalationQuestions),
@@ -222,6 +231,7 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
 
                 return result;
             }),
+            AdditionalInstructions = new Input<string?>(context => AgentAdditionalInstr(context, "UserDoc")),
             Summary = new Output<string>(userDocSummary),
             Reason = new Output<string?>(userDocEscalationReason),
             Questions = new Output<IReadOnlyList<string>?>(userDocEscalationQuestions),
@@ -240,6 +250,8 @@ public sealed class AlveusTaskWorkflow : WorkflowBase
                 + $"\n\n---\nRésumé Alveus-Evaluator :\n{evaluatorSummary.Get(context)}"
                 + $"\n\n---\nRésumé Alveus-UserDoc :\n{userDocSummary.Get(context)}"),
             ExtraContext = new Input<string?>(context => finalReviewHumanReply.Get(context) ?? string.Empty),
+            AdditionalInstructions = new Input<IReadOnlyDictionary<string, string>?>(context =>
+                context.GetInput<Dictionary<string, string>?>("AgentAdditionalInstructions")),
             SpecialistReports = new Output<IReadOnlyDictionary<string, string>?>(specialistReports),
             QaReport = new Output<string?>(qaReport),
             TechReport = new Output<string?>(techReport),
