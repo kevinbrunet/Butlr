@@ -38,7 +38,7 @@ public sealed class RunUserDocPromptTests : IClassFixture<RunUserDocPromptFixtur
         var activity = ActivatorUtilities.CreateInstance<RunUserDocPrompt>(_fixture.Services);
         activity.Id = activityId;
         activity.Prompt = new Input<string>(
-            "Appelle directement ton outil de fin de tâche (Finish) avec outcome='done' et un résumé indiquant "
+            "Appelle directement ton outil de fin de tâche (Finish) avec outcome='pass' et un résumé indiquant "
             + "qu'il n'y avait rien à documenter pour cette tâche.");
 
         var runner = _fixture.Services.GetRequiredService<IWorkflowRunner>();
@@ -66,7 +66,7 @@ public sealed class RunUserDocPromptTests : IClassFixture<RunUserDocPromptFixtur
         var activity = ActivatorUtilities.CreateInstance<RunUserDocPrompt>(_fixture.Services);
         activity.Id = activityId;
         activity.Prompt = new Input<string>(
-            "Appelle directement ton outil de fin de tâche (Finish) avec outcome='needsmoreinfo', "
+            "Appelle directement ton outil de fin de tâche (Finish) avec outcome='needmoreinfo', "
             + "reason='le périmètre de la documentation à mettre à jour n'est pas précisé' et "
             + "questions=['Quelle fonctionnalité documenter ?'].");
 

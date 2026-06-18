@@ -43,7 +43,7 @@ public sealed class RunEvaluatorPromptTests : IClassFixture<RunEvaluatorPromptFi
             + "contenant exactement le texte 'hello'.\". Avec ton outil d'édition de fichiers, crée dans ton "
             + "espace de travail un fichier nommé 'test_hello.sh' contenant un script de test qui vérifierait "
             + "qu'un travail répondant à cette consigne est correct, puis appelle l'outil de fin de tâche "
-            + "(Finish) avec outcome='done' et verdict='pass'.");
+            + "(Finish) avec outcome='pass'.");
 
         var runner = _fixture.Services.GetRequiredService<IWorkflowRunner>();
         var result = await runner.RunAsync(activity, new RunWorkflowOptions(), CancellationToken.None);
@@ -76,7 +76,7 @@ public sealed class RunEvaluatorPromptTests : IClassFixture<RunEvaluatorPromptFi
         activity.Prompt = new Input<string>(
             "Tu viens de vérifier le résultat de la tâche 'crée un fichier hello.txt contenant hello'. "
             + "Le fichier existe mais son contenu est 'world' au lieu de 'hello' — le test a échoué. "
-            + "Appelle l'outil Finish avec outcome='done', verdict='fail', "
+            + "Appelle l'outil Finish avec outcome='fail', "
             + "une reason décrivant l'écart constaté, et un summary résumant la situation.");
 
         var runner = _fixture.Services.GetRequiredService<IWorkflowRunner>();
@@ -106,7 +106,7 @@ public sealed class RunEvaluatorPromptTests : IClassFixture<RunEvaluatorPromptFi
             "Tu dois vérifier que la tâche a été accomplie, mais les instructions d'utilisation de "
             + "l'environnement ne précisent aucune URL ni port pour accéder au service — tu ne peux pas "
             + "exécuter les tests sans ces informations. "
-            + "Appelle l'outil Finish avec outcome='needsmoreinfo' (avec le 's'), "
+            + "Appelle l'outil Finish avec outcome='needmoreinfo', "
             + "une reason expliquant ce qui manque, au moins une question précise pour obtenir les informations "
             + "nécessaires, et un summary.");
 

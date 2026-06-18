@@ -39,7 +39,7 @@ public sealed class RunAgentPromptVerificationTests : IClassFixture<RunAgentProm
         var activity = ActivatorUtilities.CreateInstance<RunAgentPrompt>(_fixture.Services);
         activity.Id = activityId;
         activity.Prompt = new Input<string>(
-            "Appelle directement ton outil de fin de tâche (Finish) avec outcome='done' et un résumé "
+            "Appelle directement ton outil de fin de tâche (Finish) avec outcome='pass' et un résumé "
             + "indiquant qu'il n'y avait rien à faire.");
 
         var runner = _fixture.Services.GetRequiredService<IWorkflowRunner>();

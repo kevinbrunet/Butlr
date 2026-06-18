@@ -10,9 +10,8 @@ namespace Alveus.Web.Activities;
 /// "AlveusEnvironmentManager") — exécuté après <see cref="RunAgentPrompt"/> dans le workflow
 /// (cf. ADR 0023). Cet agent réutilise les tools et le workspace du Worker (ADR 0017), et a pour
 /// rôle de lancer ou relancer l'environnement local décrit par la consigne, puis de rendre un
-/// verdict (<see cref="AgentVerdict"/>) : "Pass" si l'environnement est prêt
-/// (<see cref="AgentPromptActivityBase.Summary"/> contient alors les instructions d'utilisation
-/// pour l'Evaluator), "Fail" si le démarrage échoue, "NeedMoreInfo" si la consigne ne précise pas
+/// verdict via <see cref="AgentOutcome"/> : <c>Pass</c> si l'environnement est prêt,
+/// <c>Fail</c> si le démarrage échoue, <c>NeedsMoreInfo</c> si la consigne ne précise pas
 /// comment démarrer l'environnement.
 /// </summary>
 [Activity("Alveus", "AI", "Envoie un prompt à l'agent EnvironmentManager, qui (re)lance l'environnement local avec les tools/workspace du Worker, et attend son verdict (Done/Failed/NeedsMoreInfo) via FinishTool.")]
@@ -25,6 +24,18 @@ public sealed class RunEnvironmentPrompt : AgentPromptActivityBase
     {
     }
 
-    protected override ValueTask<string?> HandleDoneAsync(ActivityExecutionContext context, FinishCall finish)
-        => HandleVerdictAsync(context, finish, passOutcome: "Done");
+    protected override async ValueTask<string?> HandlePassAsync(ActivityExecutionContext context, FinishCall finish)
+    {
+        PostOutcome(context, $"{context.Activity.Id} → Done");
+        await context.CompleteActivityWithOutcomesAsync(["Done"]);
+        return null;
+    }
+
+    protected override async ValueTask<string?> HandleFailAsync(ActivityExecutionContext context, FinishCall finish)
+    {
+        context.Set(Reason, finish.Reason);
+        PostOutcome(context, $"{context.Activity.Id} → Failed : {finish.Reason}");
+        await context.CompleteActivityWithOutcomesAsync(["Failed"]);
+        return null;
+    }
 }

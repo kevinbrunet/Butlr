@@ -193,19 +193,20 @@ public abstract class MeetingActivityBase : CodeActivity
                 {
                     switch (finish.Outcome)
                     {
-                        case AgentTaskOutcome.Done:
+                        case AgentOutcome.Pass:
+                        case AgentOutcome.Fail:
                             confirmedDone.Add(role);
                             await OnAgentFinishAsync(context, role, finish);
                             break;
 
-                        case AgentTaskOutcome.NeedsMoreInfo:
+                        case AgentOutcome.NeedMoreInfo:
                             context.Set(Reason, finish.Reason);
                             context.Set(Questions, finish.Questions);
                             PostOutcome(conversationStore, conversationId, $"NeedsMoreInfo : {finish.Reason}");
                             await context.CompleteActivityWithOutcomesAsync(["NeedsMoreInfo"]);
                             return;
 
-                        case AgentTaskOutcome.Blocked:
+                        case AgentOutcome.Blocked:
                             context.Set(Reason, finish.Reason);
                             PostOutcome(conversationStore, conversationId, $"Bloqué : {finish.Reason}");
                             await context.CompleteActivityWithOutcomesAsync(["Blocked"]);
@@ -310,7 +311,7 @@ public abstract class MeetingActivityBase : CodeActivity
         }
 
         sb.Append("\n\n---\nUtilise Raise(topic, comment) pour signaler un point de désaccord ou une question aux "
-            + "autres participants, Vote(topic, decision, comment) pour voter sur un topic, et Finish(outcome='done') "
+            + "autres participants, Vote(topic, decision, comment) pour voter sur un topic, et Finish(outcome='pass') "
             + "quand tu n'as plus rien à ajouter à ce round.");
 
         return sb.ToString();

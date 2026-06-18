@@ -24,7 +24,7 @@ public static class SpecialistRoleCatalog
                 + "autres spécialistes éventuels : utilise l'outil Raise pour signaler un point de désaccord ou une "
                 + "question aux autres participants, et Vote pour te positionner sur un topic ('agree'/'disagree', "
                 + "commentaire obligatoire si 'disagree'). Quand tu as terminé ton tour, appelle l'outil Finish avec "
-                + "outcome='done' ou outcome='needsmoreinfo'/'blocked' si tu es bloqué.",
+                + "outcome='pass' ou outcome='needmoreinfo'/'blocked' si tu es bloqué.",
             PreTaskRoleTask: "Tu es Alveus-BusinessAnalyst. Lis le ticket ci-dessous. Pour déterminer si des règles "
                 + "métier existent déjà sur ce domaine, consulte UNIQUEMENT les fichiers markdown déjà présents "
                 + "dans ton workspace (liste-les avec ls ou Read) — n'utilise pas Run pour explorer le filesystem "
@@ -56,7 +56,7 @@ public static class SpecialistRoleCatalog
                 + "autres spécialistes éventuels : utilise l'outil Raise pour signaler un point de désaccord ou une "
                 + "question aux autres participants, et Vote pour te positionner sur un topic ('agree'/'disagree', "
                 + "commentaire obligatoire si 'disagree'). Quand tu as terminé ton tour, appelle l'outil Finish avec "
-                + "outcome='done' ou outcome='needsmoreinfo'/'blocked' si tu es bloqué.",
+                + "outcome='pass' ou outcome='needmoreinfo'/'blocked' si tu es bloqué.",
             PreTaskRoleTask: "Tu es Alveus-UxDesigner. Lis le ticket ci-dessous. Pour déterminer si des "
                 + "conventions UX existent déjà sur ce domaine, consulte UNIQUEMENT les fichiers markdown déjà "
                 + "présents dans ton workspace — n'utilise pas Run pour explorer le filesystem en dehors de ton "

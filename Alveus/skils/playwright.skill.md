@@ -1,131 +1,162 @@
 ---
 name: playwright
-description: Use this skill to write UI visual regression tests in .NET using Playwright for .NET — captures screenshots of pages or individual components and compares them pixel-by-pixel to a versioned baseline PNG, with masking of dynamic zones. Trigger for requests about tests visuels, tests d'interface, captures d'écran, régressions UI, comparaison pixel, Playwright for .NET.
+description: Use this skill to write UI tests in .NET using Playwright for .NET — navigates pages, fills forms, clicks buttons and asserts content. Trigger for requests about tests d'interface, tests UI, Playwright for .NET, tests fonctionnels navigateur.
 ---
 
-# Playwright for .NET — visual regression testing
-
-## Principe
-
-`Expect(page).ToHaveScreenshotAsync(...)` capture l'écran (ou un élément) et le compare pixel-à-pixel à une image de référence versionnée dans `__screenshots__/`. Le premier run échoue et écrit un fichier `-actual.png` ; tu valides visuellement, puis tu mets à jour la baseline pour qu'elle devienne la référence commitable.
+# Playwright for .NET — tests d'interface
 
 ## Mise en place
 
 ```bash
-dotnet add package Microsoft.Playwright
-dotnet add package Microsoft.Playwright.Xunit
+# 1. Ajouter le package — toujours pinner la version
+dotnet add package Microsoft.Playwright --version 1.60.0
+
+# 2. Builder (génère les binaires Playwright dans bin/Debug/net10.0/.playwright/)
 dotnet build
-pwsh bin/Debug/net10.0/playwright.ps1 install
+
+# 3. Installer les navigateurs
+#    Sur Linux SANS pwsh (PowerShell non installé) :
+#    Le package embarque Node.js dans bin/Debug/net10.0/.playwright/node/linux-x64/node
+#    playwright.ps1 est juste un wrapper PowerShell — utiliser Node.js directement :
+cd bin/Debug/net10.0
+.playwright/node/linux-x64/node .playwright/package/cli.js install chromium
+cd ../../..
 ```
 
-~ La commande d'installation des navigateurs (`playwright.ps1 install`, parfois via `Microsoft.Playwright.CLI`) et le chemin exact du script généré dépendent de la version et de l'OS — sur Linux, vérifier si c'est `.ps1` ou `.sh`. À confirmer au moment de l'implémentation.
+> **Note Linux** : `pwsh bin/Debug/net10.0/playwright.ps1 install` est la commande officielle
+> documentée, mais elle requiert PowerShell 7 (`pwsh`). Si `pwsh` n'est pas disponible, la
+> commande Node.js ci-dessus fait exactement la même chose — c'est ce que le `.ps1` exécute
+> en interne.
 
-`.gitignore` à ajouter :
+> **Note version** : ne pas utiliser le global tool `~/.dotnet/tools/playwright` pour installer —
+> il est en v1.50 (rev 1155) et ne correspond pas à Microsoft.Playwright 1.60.0 (rev 1223).
+> Toujours utiliser la commande Node.js embarquée dans le build output du projet.
 
-```
-*-actual.png
-*-diff.png
-```
+## Configuration xUnit
 
-Les baselines (`__screenshots__/**/*.png`) sont versionnées ; les captures d'échec ne le sont pas.
-
-## Exemple minimal — capture pleine page avec zones masquées
+Pour les tests xUnit, ne pas utiliser `Microsoft.Playwright.Xunit` — utiliser la factory
+`IPlaywright` directement :
 
 ```csharp
-[Fact]
-public async Task Dashboard_LooksCorrect()
-{
-    await Page.GotoAsync("https://localhost:5001/dashboard");
+using Microsoft.Playwright;
 
-    await Expect(Page).ToHaveScreenshotAsync("dashboard.png", new()
+public sealed class MyUiTests : IAsyncDisposable
+{
+    private readonly IPlaywright _playwright;
+    private readonly IBrowser _browser;
+    private readonly IBrowserContext _context;
+
+    public MyUiTests()
     {
-        Mask = new[]
+        _playwright = Playwright.CreateAsync().GetAwaiter().GetResult();
+        _browser = _playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
         {
-            Page.Locator("[data-testid='last-login']"),
-            Page.Locator("[data-testid='user-avatar']"),
-            Page.Locator(".live-clock")
-        },
-        MaskColor = "#FF00FF"
-    });
-}
-```
+            Headless = true,
+        }).GetAwaiter().GetResult();
+        _context = _browser.NewContextAsync().GetAwaiter().GetResult();
+    }
 
-Les zones `Mask` sont remplies d'un aplat avant comparaison — leur contenu changeant n'influence pas le résultat, mais leur présence/position est tout de même vérifiée implicitement.
-
-## Cibler un composant précis plutôt que la page entière
-
-```csharp
-[Fact]
-public async Task OrderSummaryCard_LooksCorrect()
-{
-    await Page.GotoAsync("https://localhost:5001/orders/123");
-
-    var card = Page.Locator("[data-testid='order-summary-card']");
-
-    await Expect(card).ToHaveScreenshotAsync("order-summary-card.png", new()
+    public async ValueTask DisposeAsync()
     {
-        Mask = new[] { card.Locator(".generated-reference-number") }
-    });
+        await _context.DisposeAsync();
+        await _browser.DisposeAsync();
+        _playwright.Dispose();
+    }
+
+    [Fact]
+    public async Task PageTitle_IsCorrect()
+    {
+        var page = await _context.NewPageAsync();
+        await page.GotoAsync("http://localhost:5000");
+        var title = await page.TitleAsync();
+        Assert.Equal("My App", title);
+    }
 }
 ```
 
-Seule la zone de l'élément est capturée — le reste de la page n'intervient pas.
-
-### Pleine page + masques vs élément ciblé
-
-| | Pleine page + masques | Élément ciblé |
-|---|---|---|
-| Détecte les régressions de layout global | Oui | Non |
-| Sensible aux changements ailleurs sur la page | Oui (bruit potentiel) | Non |
-| Adapté aux composants réutilisables | Moyen | Oui |
-| Recommandé pour | Dashboards, pages d'accueil | Cartes, widgets, formulaires |
-
-## Tolérance aux différences mineures (anti-aliasing, rendu de polices)
+## Actions courantes
 
 ```csharp
-await Expect(Page).ToHaveScreenshotAsync("dashboard.png", new()
-{
-    MaxDiffPixelRatio = 0.01 // 1% de pixels différents tolérés
-});
+// Navigation
+await page.GotoAsync("http://localhost:5000");
+
+// Remplir un champ
+await page.FillAsync("input[name='description']", "Ma tâche");
+
+// Cliquer un bouton
+await page.ClickAsync("button[type='submit']");
+
+// Attendre que le contenu soit visible
+await page.WaitForSelectorAsync("text=Ma tâche");
+
+// Lire le texte d'un élément
+var text = await page.TextContentAsync(".task-list");
+
+// Vérifier qu'un élément existe
+var element = await page.QuerySelectorAsync("text=Ma tâche");
+Assert.NotNull(element);
+
+// Vérifier qu'un élément n'existe pas
+var absent = await page.QuerySelectorAsync("text=Tâche supprimée");
+Assert.Null(absent);
+
+// Cocher une case
+await page.CheckAsync("input[type='checkbox'][data-id='1']");
+
+// Attendre la navigation après un click
+await page.RunAndWaitForNavigationAsync(() => page.ClickAsync("a.some-link"));
 ```
 
-~ Le nom exact du paramètre (`MaxDiffPixelRatio`, `MaxDiffPixels`, `Threshold`) varie selon les versions — vérifier dans IntelliSense sur `PageAssertionsToHaveScreenshotOptions`.
+## Lancer l'application avant les tests
 
-## Workflow de validation manuelle
-
-1. Lancer les tests → un fichier `-actual.png` apparaît pour chaque baseline manquante.
-2. Relire l'image `-actual.png` visuellement pour vérifier qu'elle correspond au résultat attendu.
-3. Mettre à jour la baseline :
+L'application Web doit être démarrée AVANT d'exécuter les tests Playwright. Depuis le
+workspace de l'Evaluator, démarrer l'application Worker en arrière-plan :
 
 ```bash
-dotnet test -- Playwright.BrowserName=chromium --update-snapshots
+# Démarrer l'application en arrière-plan (port 5000 par défaut)
+nohup dotnet run --project /chemin/vers/app/ --urls http://localhost:5000 \
+  > /tmp/app.log 2>&1 &
+APP_PID=$!
+
+# Attendre que l'application soit prête
+sleep 5
+
+# Vérifier qu'elle répond
+curl -s http://localhost:5000 | head -5
+
+# Exécuter les tests
+dotnet test
+
+# Arrêter l'application
+kill $APP_PID
 ```
 
-~ La syntaxe exacte pour `--update-snapshots` via `dotnet test` peut différer selon la version de `Microsoft.Playwright.Xunit` — possiblement via variable d'environnement (`PLAYWRIGHT_UPDATE_SNAPSHOTS=1`). À confirmer.
+⚠ L'application Worker tourne dans un autre workspace — l'Evaluator n'a pas accès à ses
+fichiers. Utiliser le port et l'URL fournis par Alveus-EnvironmentManager dans son résumé.
 
-4. Committer les nouvelles baselines dans `__screenshots__/`.
+## Structure de test recommandée
 
-## CI : reproductibilité du rendu
+```csharp
+[Fact]
+public async Task AddTask_AppearsInList()
+{
+    var page = await _context.NewPageAsync();
+    await page.GotoAsync("http://localhost:5000");
 
-Le rendu (anti-aliasing, polices, sous-pixels) **diffère entre OS**. Une baseline Windows ne matchera pas en CI Linux.
+    // Ajouter une tâche
+    await page.FillAsync("input[name='description']", "Acheter du lait");
+    await page.ClickAsync("button[type='submit']");
 
-✓ Recommandation standard : générer et exécuter les tests dans le même environnement que la CI — l'image Docker officielle `mcr.microsoft.com/playwright/dotnet` fixe la version des navigateurs et l'environnement de rendu.
-
-~ Le tag exact de l'image (`v1.4x.0-noble` ou similaire) doit correspondre précisément à la version du package NuGet installé, sous peine de mismatch de navigateur.
+    // Vérifier qu'elle apparaît dans la liste
+    await page.WaitForSelectorAsync("text=Acheter du lait");
+    var item = await page.QuerySelectorAsync("text=Acheter du lait");
+    Assert.NotNull(item);
+}
+```
 
 ## Points de vigilance
 
-- Désactiver les animations CSS avant capture — sinon flakiness garantie.
-- Fixer la taille du viewport (`ViewportSize` dans les options de contexte) pour des captures reproductibles.
-- Attendre explicitement la stabilité du contenu (`WaitForLoadStateAsync`, ou attente sur un sélecteur précis) avant `ToHaveScreenshotAsync`.
-- Fixer un navigateur unique (ex: chromium) pour éviter de multiplier les baselines à maintenir, sauf besoin de couverture multi-navigateur.
-
-## Organisation suggérée
-
-```
-MyProject.Tests/
-├── __screenshots__/          ← baselines Playwright (.png), versionnées
-│   └── chromium-linux/
-└── UiTests/
-    └── DashboardUiTests.cs
-```
+- Fixer le viewport si nécessaire : `new BrowserContextOptions { ViewportSize = new ViewportSize { Width = 1280, Height = 720 } }`
+- Attendre la stabilité du DOM avant d'asserter : `WaitForSelectorAsync` ou `WaitForLoadStateAsync(LoadState.NetworkIdle)`
+- Si le port 5000 est pris, utiliser un port libre (5001, 5002, etc.)
+- Désactiver HTTPS redirect si l'appli force HTTPS — préférer `http://` pour les tests

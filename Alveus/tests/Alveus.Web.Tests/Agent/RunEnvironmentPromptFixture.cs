@@ -66,11 +66,11 @@ public sealed class RunEnvironmentPromptFixture : IAsyncLifetime
                     + "l'environnement local décrit par la consigne pour qu'il soit utilisable par un autre agent. "
                     + "Ton outil shell a un timeout de 30 secondes : lance les processus longue durée en arrière-plan "
                     + "(ex. 'nohup <commande> > /tmp/env.log 2>&1 & disown') plutôt qu'au premier plan. Quand tu "
-                    + "arrêtes de travailler, appelle l'outil Finish avec outcome='done' et : verdict='pass' si "
+                    + "arrêtes de travailler, appelle l'outil Finish avec outcome='pass' si "
                     + "l'environnement est démarré — résume alors dans summary des instructions d'utilisation "
                     + "précises (URL, ports, exemples de requêtes ou de commandes) destinées à un autre agent qui "
-                    + "n'a pas accès à ce système de fichiers ; verdict='fail' si le démarrage échoue (reason=détail "
-                    + "de l'échec) ; verdict='needmoreinfo' si la consigne ne précise pas comment démarrer "
+                    + "n'a pas accès à ce système de fichiers ; outcome='fail' si le démarrage échoue (reason=détail "
+                    + "de l'échec) ; outcome='needmoreinfo' si la consigne ne précise pas comment démarrer "
                     + "l'environnement (reason et questions).",
                 name: AgentName,
                 tools: tools);

@@ -6,30 +6,30 @@ namespace Alveus.Web.Tests.Tools;
 public sealed class FinishCallTests
 {
     [Fact]
-    public void FromArguments_Done_ParsesSummaryAndOutcome()
+    public void FromArguments_Pass_ParsesSummaryAndOutcome()
     {
         var arguments = new Dictionary<string, object?>
         {
             ["summary"] = "Fichier créé.",
-            ["outcome"] = "done",
+            ["outcome"] = "pass",
         };
 
         var finish = FinishCall.FromArguments(arguments);
 
         Assert.NotNull(finish);
-        Assert.Equal(AgentTaskOutcome.Done, finish!.Outcome);
+        Assert.Equal(AgentOutcome.Pass, finish!.Outcome);
         Assert.Equal("Fichier créé.", finish.Summary);
         Assert.Null(finish.Reason);
         Assert.Null(finish.Questions);
     }
 
     [Fact]
-    public void FromArguments_NeedsMoreInfo_ParsesReasonAndQuestions()
+    public void FromArguments_NeedMoreInfo_ParsesReasonAndQuestions()
     {
         var arguments = new Dictionary<string, object?>
         {
             ["summary"] = "Bloqué avant de continuer.",
-            ["outcome"] = "needsmoreinfo",
+            ["outcome"] = "needmoreinfo",
             ["reason"] = "Le nom du fichier cible n'est pas précisé.",
             ["questions"] = new[] { "Quel est le nom du fichier ?", "Quel répertoire ?" },
         };
@@ -37,7 +37,7 @@ public sealed class FinishCallTests
         var finish = FinishCall.FromArguments(arguments);
 
         Assert.NotNull(finish);
-        Assert.Equal(AgentTaskOutcome.NeedsMoreInfo, finish!.Outcome);
+        Assert.Equal(AgentOutcome.NeedMoreInfo, finish!.Outcome);
         Assert.Equal("Le nom du fichier cible n'est pas précisé.", finish.Reason);
         Assert.Equal(["Quel est le nom du fichier ?", "Quel répertoire ?"], finish.Questions);
     }
@@ -55,15 +55,32 @@ public sealed class FinishCallTests
         var finish = FinishCall.FromArguments(arguments);
 
         Assert.NotNull(finish);
-        Assert.Equal(AgentTaskOutcome.Blocked, finish!.Outcome);
+        Assert.Equal(AgentOutcome.Blocked, finish!.Outcome);
         Assert.Equal("Le service externe requis n'est pas accessible.", finish.Reason);
+    }
+
+    [Fact]
+    public void FromArguments_Fail_ParsesReason()
+    {
+        var arguments = new Dictionary<string, object?>
+        {
+            ["summary"] = "Vérification échouée.",
+            ["outcome"] = "fail",
+            ["reason"] = "Le test d'intégration a retourné une erreur 500.",
+        };
+
+        var finish = FinishCall.FromArguments(arguments);
+
+        Assert.NotNull(finish);
+        Assert.Equal(AgentOutcome.Fail, finish!.Outcome);
+        Assert.Equal("Le test d'intégration a retourné une erreur 500.", finish.Reason);
     }
 
     [Fact]
     public void FromArguments_ArgumentsAsJsonElements_AreParsed()
     {
         using var document = JsonDocument.Parse(
-            """{"summary":"s","outcome":"needsmoreinfo","reason":"r","questions":["a","b"]}""");
+            """{"summary":"s","outcome":"needmoreinfo","reason":"r","questions":["a","b"]}""");
 
         var arguments = new Dictionary<string, object?>
         {
@@ -76,7 +93,7 @@ public sealed class FinishCallTests
         var finish = FinishCall.FromArguments(arguments);
 
         Assert.NotNull(finish);
-        Assert.Equal(AgentTaskOutcome.NeedsMoreInfo, finish!.Outcome);
+        Assert.Equal(AgentOutcome.NeedMoreInfo, finish!.Outcome);
         Assert.Equal("s", finish.Summary);
         Assert.Equal("r", finish.Reason);
         Assert.Equal(["a", "b"], finish.Questions);
@@ -104,64 +121,13 @@ public sealed class FinishCallTests
         Assert.Null(FinishCall.FromArguments(null));
     }
 
-    [Theory]
-    [InlineData("pass", AgentVerdict.Pass)]
-    [InlineData("fail", AgentVerdict.Fail)]
-    [InlineData("needmoreinfo", AgentVerdict.NeedMoreInfo)]
-    [InlineData("NeedMoreInfo", AgentVerdict.NeedMoreInfo)]
-    public void FromArguments_KnownVerdict_ParsesVerdict(string verdictRaw, AgentVerdict expected)
-    {
-        var arguments = new Dictionary<string, object?>
-        {
-            ["summary"] = "Environnement démarré.",
-            ["outcome"] = "done",
-            ["verdict"] = verdictRaw,
-        };
-
-        var finish = FinishCall.FromArguments(arguments);
-
-        Assert.NotNull(finish);
-        Assert.Equal(expected, finish!.Verdict);
-    }
-
-    [Fact]
-    public void FromArguments_MissingVerdict_VerdictIsNull()
-    {
-        var arguments = new Dictionary<string, object?>
-        {
-            ["summary"] = "Fichier créé.",
-            ["outcome"] = "done",
-        };
-
-        var finish = FinishCall.FromArguments(arguments);
-
-        Assert.NotNull(finish);
-        Assert.Null(finish!.Verdict);
-    }
-
-    [Fact]
-    public void FromArguments_UnknownVerdict_VerdictIsNull()
-    {
-        var arguments = new Dictionary<string, object?>
-        {
-            ["summary"] = "Fichier créé.",
-            ["outcome"] = "done",
-            ["verdict"] = "frobnicate",
-        };
-
-        var finish = FinishCall.FromArguments(arguments);
-
-        Assert.NotNull(finish);
-        Assert.Null(finish!.Verdict);
-    }
-
     [Fact]
     public void FromArguments_MissingDownstreamInstructions_IsNull()
     {
         var arguments = new Dictionary<string, object?>
         {
             ["summary"] = "Documentation mise à jour.",
-            ["outcome"] = "done",
+            ["outcome"] = "pass",
         };
 
         var finish = FinishCall.FromArguments(arguments);
@@ -176,7 +142,7 @@ public sealed class FinishCallTests
         var arguments = new Dictionary<string, object?>
         {
             ["summary"] = "ADR 0027 ajouté.",
-            ["outcome"] = "done",
+            ["outcome"] = "pass",
             ["downstreamInstructions"] = new List<object?>
             {
                 new Dictionary<string, object?> { ["target"] = "worker", ["instruction"] = "Utiliser le nouveau client HTTP." },
@@ -200,7 +166,7 @@ public sealed class FinishCallTests
             """
             {
               "summary": "s",
-              "outcome": "done",
+              "outcome": "pass",
               "downstreamInstructions": [
                 {"target": "evaluator", "instruction": "Tester aussi le cas limite X."}
               ]

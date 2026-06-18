@@ -7,10 +7,11 @@ public sealed class FinishToolTests
     private readonly FinishTool _tool = new();
 
     [Theory]
-    [InlineData("done")]
-    [InlineData("needsmoreinfo")]
+    [InlineData("pass")]
+    [InlineData("fail")]
+    [InlineData("needmoreinfo")]
     [InlineData("blocked")]
-    [InlineData("Done")]
+    [InlineData("Pass")]
     [InlineData("BLOCKED")]
     public void Finish_ValidOutcome_ReturnsConfirmation(string outcome)
     {
@@ -28,38 +29,30 @@ public sealed class FinishToolTests
     [Fact]
     public void Finish_EmptySummary_Throws()
     {
-        Assert.Throws<ArgumentException>(() => _tool.Finish("", "done"));
+        Assert.Throws<ArgumentException>(() => _tool.Finish("", "pass"));
     }
 
     [Fact]
-    public void Finish_NeedsMoreInfoWithReasonAndQuestions_Succeeds()
+    public void Finish_NeedMoreInfoWithReasonAndQuestions_Succeeds()
     {
         var result = _tool.Finish(
             "Impossible de continuer sans précision.",
-            "needsmoreinfo",
+            "needmoreinfo",
             reason: "Le nom du fichier cible n'est pas précisé.",
             questions: ["Quel est le nom du fichier ?", "Dans quel répertoire ?"]);
 
         Assert.NotEmpty(result);
     }
 
-    [Theory]
-    [InlineData("pass")]
-    [InlineData("fail")]
-    [InlineData("needmoreinfo")]
-    [InlineData("Pass")]
-    [InlineData("NEEDMOREINFO")]
-    public void Finish_ValidVerdict_ReturnsConfirmation(string verdict)
+    [Fact]
+    public void Finish_FailWithReason_Succeeds()
     {
-        var result = _tool.Finish("résumé", "done", verdict: verdict);
+        var result = _tool.Finish(
+            "L'environnement ne démarre pas.",
+            "fail",
+            reason: "Le port 8080 est déjà utilisé.");
 
         Assert.NotEmpty(result);
-    }
-
-    [Fact]
-    public void Finish_UnknownVerdict_Throws()
-    {
-        Assert.Throws<ArgumentException>(() => _tool.Finish("résumé", "done", verdict: "frobnicate"));
     }
 
     [Theory]
@@ -71,7 +64,7 @@ public sealed class FinishToolTests
     {
         var result = _tool.Finish(
             "résumé",
-            "done",
+            "pass",
             downstreamInstructions: [new DownstreamInstruction(target, "Précision complémentaire.")]);
 
         Assert.NotEmpty(result);
@@ -82,7 +75,7 @@ public sealed class FinishToolTests
     {
         Assert.Throws<ArgumentException>(() => _tool.Finish(
             "résumé",
-            "done",
+            "pass",
             downstreamInstructions: [new DownstreamInstruction("frobnicate", "Précision complémentaire.")]));
     }
 }

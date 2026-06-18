@@ -22,7 +22,7 @@ public sealed class AskExpertTool(
 
     private const string ReminderPrompt =
         "Tu n'as pas appelé l'outil Finish. Réponds à la question posée et appelle Finish avec "
-        + "outcome='done' et summary=ta réponse complète.";
+        + "outcome='pass' et summary=ta réponse complète.";
 
     [Description("Consulte un expert de l'équipe (BusinessAnalyst, Qa, Technical, ou tout autre rôle configuré) "
         + "pour obtenir une réponse à une question précise sur la tâche en cours. La question et la réponse "
@@ -66,7 +66,7 @@ public sealed class AskExpertTool(
         var session = await agent.CreateSessionAsync(cancellationToken);
         var prompt = $"Un agent de l'équipe te pose la question suivante :\n\n{question}\n\n"
             + "Réponds de façon précise, en consultant ta documentation si nécessaire, "
-            + "puis appelle Finish avec outcome='done' et summary=ta réponse complète.";
+            + "puis appelle Finish avec outcome='pass' et summary=ta réponse complète.";
 
         for (var i = 0; i < MaxIterations; i++)
         {

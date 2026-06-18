@@ -144,7 +144,7 @@ foreach (var team in teams)
             tools.Add(AIFunctionFactory.Create(askExpert.AskExpertAsync));
             workerInstructions += " Si tu as besoin d'une information métier, UX ou technique pour accomplir la tâche, "
                 + "utilise l'outil AskExpert pour interroger directement l'expert concerné plutôt que de terminer "
-                + "en 'needsmoreinfo'.";
+                + "en 'needmoreinfo'.";
         }
 
         return new ChatClientAgent(chatClient, instructions: workerInstructions, name: "Alveus-Worker", tools: tools);
@@ -169,11 +169,11 @@ foreach (var team in teams)
                 + "soit utilisable par un autre agent. Ton outil shell a un timeout de 30 secondes : lance les "
                 + "processus longue durée en arrière-plan (ex. 'nohup <commande> > /tmp/env.log 2>&1 & disown') plutôt "
                 + "qu'au premier plan, puis vérifie leur démarrage (ex. en consultant le log ou en testant le port). "
-                + "Quand tu arrêtes de travailler, appelle l'outil Finish avec outcome='done' et : verdict='pass' si "
-                + "l'environnement est démarré — résume alors dans summary des instructions d'utilisation précises "
-                + "(URL, ports, exemples de requêtes ou de commandes) destinées à un autre agent qui n'a pas accès à ce "
-                + "système de fichiers ; verdict='fail' si le démarrage échoue (reason=détail de l'échec) ; "
-                + "verdict='needmoreinfo' si la consigne ne précise pas comment démarrer l'environnement (reason et "
+                + "Quand tu arrêtes de travailler, appelle l'outil Finish avec : outcome='pass' si l'environnement "
+                + "est démarré — résume alors dans summary des instructions d'utilisation précises (URL, ports, "
+                + "exemples de requêtes ou de commandes) destinées à un autre agent qui n'a pas accès à ce système de "
+                + "fichiers ; outcome='fail' si le démarrage échoue (reason=détail de l'échec) ; "
+                + "outcome='needmoreinfo' si la consigne ne précise pas comment démarrer l'environnement (reason et "
                 + "questions).",
             name: "Alveus-EnvironmentManager",
             tools: [AIFunctionFactory.Create(cmdRunTool.RunAsync), AIFunctionFactory.Create(editorTool.texteditor), AIFunctionFactory.Create(finishTool.Finish)]);
@@ -228,10 +228,10 @@ foreach (var team in teams)
                     + "exécute-le avec ton outil shell en interagissant avec l'environnement uniquement par le réseau "
                     + "(ex. curl) — tu n'as pas accès au système de fichiers du Worker. N'effectue pas la tâche "
                     + "toi-même. Quand tu arrêtes de travailler, "
-                    + "tu DOIS appeler l'outil Finish avec outcome='done' et : verdict='pass' si le jeu de test confirme "
-                    + "que l'environnement répond à la consigne ; verdict='fail' si ce n'est pas le cas (reason=rapport "
+                    + "tu DOIS appeler l'outil Finish avec : outcome='pass' si le jeu de test confirme que "
+                    + "l'environnement répond à la consigne ; outcome='fail' si ce n'est pas le cas (reason=rapport "
                     + "détaillé des problèmes rencontrés, transmis à Alveus-Worker pour correction) ; "
-                    + "verdict='needmoreinfo' si tu ne peux pas trancher sans information supplémentaire (reason et "
+                    + "outcome='needmoreinfo' si tu ne peux pas trancher sans information supplémentaire (reason et "
                     + "questions). Si tu es bloqué avant d'avoir pu écrire ou exécuter le jeu de test, utilise "
                     + "outcome='blocked' (reason) — sinon on te redemandera de le faire.",
                 Tools = tools,
@@ -269,7 +269,7 @@ foreach (var team in teams)
                 + "utilisateur (markdown, à la racine de ton espace de travail) pour refléter ce qui change pour "
                 + "l'utilisateur final, à partir de la consigne de tâche et des instructions complémentaires éventuelles "
                 + $"d'Alveus-Technical.{specialistSubdirNotes} Quand tu as terminé, appelle l'outil Finish avec "
-                + "outcome='done' (summary = ce qui a été documenté) ou outcome='needsmoreinfo'/'blocked' si tu ne peux "
+                + "outcome='pass' (summary = ce qui a été documenté) ou outcome='needmoreinfo'/'blocked' si tu ne peux "
                 + "pas avancer.",
             name: "Alveus-UserDoc",
             tools: [AIFunctionFactory.Create(cmdRunTool.RunAsync), AIFunctionFactory.Create(editorTool.texteditor), AIFunctionFactory.Create(finishTool.Finish)]);
@@ -303,8 +303,8 @@ foreach (var team in teams)
                 + "Tu participes à des réunions à plusieurs participants avec Alveus-Qa et les spécialistes configurés : "
                 + "utilise l'outil Raise pour signaler un point de désaccord ou une question aux autres participants, "
                 + "et Vote pour te positionner sur un topic ('agree'/'disagree', commentaire obligatoire si 'disagree'). "
-                + "Quand tu as terminé ton tour, appelle l'outil Finish avec outcome='done' (et, le cas échéant, "
-                + "downstreamInstructions pour Alveus-Worker et/ou Alveus-UserDoc) ou outcome='needsmoreinfo'/'blocked' "
+                + "Quand tu as terminé ton tour, appelle l'outil Finish avec outcome='pass' (et, le cas échéant, "
+                + "downstreamInstructions pour Alveus-Worker et/ou Alveus-UserDoc) ou outcome='needmoreinfo'/'blocked' "
                 + "si tu es bloqué.",
             name: "Alveus-Technical",
             tools: [AIFunctionFactory.Create(cmdRunTool.RunAsync), AIFunctionFactory.Create(editorTool.texteditor), AIFunctionFactory.Create(finishTool.Finish), AIFunctionFactory.Create(meetingTool.Raise), AIFunctionFactory.Create(meetingTool.Vote)]);
@@ -338,8 +338,8 @@ foreach (var team in teams)
                 + "Tu participes à des réunions à plusieurs participants avec Alveus-Technical et les "
                 + "spécialistes configurés : utilise l'outil Raise pour signaler un point de désaccord ou une question "
                 + "aux autres participants, et Vote pour te positionner sur un topic ('agree'/'disagree', commentaire "
-                + "obligatoire si 'disagree'). Quand tu as terminé ton tour, appelle l'outil Finish avec outcome='done' "
-                + "(et, le cas échéant, downstreamInstructions pour Alveus-Evaluator) ou outcome='needsmoreinfo'/'blocked' si tu es bloqué.",
+                + "obligatoire si 'disagree'). Quand tu as terminé ton tour, appelle l'outil Finish avec outcome='pass' "
+                + "(et, le cas échéant, downstreamInstructions pour Alveus-Evaluator) ou outcome='needmoreinfo'/'blocked' si tu es bloqué.",
             name: "Alveus-Qa",
             tools: [AIFunctionFactory.Create(cmdRunTool.RunAsync), AIFunctionFactory.Create(editorTool.texteditor), AIFunctionFactory.Create(finishTool.Finish), AIFunctionFactory.Create(meetingTool.Raise), AIFunctionFactory.Create(meetingTool.Vote)]);
     });

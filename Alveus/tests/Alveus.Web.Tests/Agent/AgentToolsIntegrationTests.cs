@@ -138,7 +138,7 @@ public sealed class AgentToolsIntegrationTests : IClassFixture<AgentFixture>
 
         var response = await RunAgentAsync(
             "Cette tâche ne demande aucune action : appelle directement ton outil de fin de tâche (Finish) "
-            + "avec outcome='done' et un résumé indiquant qu'il n'y avait rien à faire.");
+            + "avec outcome='pass' et un résumé indiquant qu'il n'y avait rien à faire.");
 
         var finishCall = response.Messages
             .SelectMany(m => m.Contents)
@@ -148,6 +148,6 @@ public sealed class AgentToolsIntegrationTests : IClassFixture<AgentFixture>
             .FirstOrDefault(f => f is not null);
 
         Assert.NotNull(finishCall);
-        Assert.Equal(AgentTaskOutcome.Done, finishCall!.Outcome);
+        Assert.Equal(AgentOutcome.Pass, finishCall!.Outcome);
     }
 }

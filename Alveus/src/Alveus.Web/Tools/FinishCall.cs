@@ -5,15 +5,12 @@ namespace Alveus.Web.Tools;
 /// <summary>
 /// Appel à <see cref="FinishTool.Finish"/> extrait de la réponse de l'agent (via les
 /// <c>FunctionCallContent</c> de <c>AgentResponse.Messages</c>) — cf. ADR 0019.
-/// <paramref name="Verdict"/> n'est renseigné que pour l'EnvironmentManager et l'Evaluator
-/// (cf. ADR 0023) — toujours <c>null</c> pour Alveus-Worker.
 /// </summary>
 public sealed record FinishCall(
-    AgentTaskOutcome Outcome,
+    AgentOutcome Outcome,
     string Summary,
     string? Reason,
     IReadOnlyList<string>? Questions,
-    AgentVerdict? Verdict,
     IReadOnlyList<DownstreamInstruction>? DownstreamInstructions = null)
 {
     /// <summary>
@@ -29,7 +26,7 @@ public sealed record FinishCall(
         }
 
         var outcomeRaw = ReadString(arguments, "outcome");
-        if (outcomeRaw is null || !Enum.TryParse<AgentTaskOutcome>(outcomeRaw, ignoreCase: true, out var outcome))
+        if (outcomeRaw is null || !Enum.TryParse<AgentOutcome>(outcomeRaw, ignoreCase: true, out var outcome))
         {
             return null;
         }
@@ -37,15 +34,9 @@ public sealed record FinishCall(
         var summary = ReadString(arguments, "summary") ?? string.Empty;
         var reason = ReadString(arguments, "reason");
         var questions = ReadStringList(arguments, "questions");
-
-        var verdictRaw = ReadString(arguments, "verdict");
-        AgentVerdict? verdict = verdictRaw is not null && Enum.TryParse<AgentVerdict>(verdictRaw, ignoreCase: true, out var parsedVerdict)
-            ? parsedVerdict
-            : null;
-
         var downstreamInstructions = ReadDownstreamInstructions(arguments, "downstreamInstructions");
 
-        return new FinishCall(outcome, summary, reason, questions, verdict, downstreamInstructions);
+        return new FinishCall(outcome, summary, reason, questions, downstreamInstructions);
     }
 
     private static string? ReadString(IDictionary<string, object?> arguments, string key)

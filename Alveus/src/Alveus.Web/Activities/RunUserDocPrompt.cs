@@ -23,7 +23,7 @@ public sealed class RunUserDocPrompt : AgentPromptActivityBase
     {
     }
 
-    protected override async ValueTask<string?> HandleDoneAsync(ActivityExecutionContext context, FinishCall finish)
+    protected override async ValueTask<string?> HandlePassAsync(ActivityExecutionContext context, FinishCall finish)
     {
         PostOutcome(context, $"{context.Activity.Id} → Done");
         await context.CompleteActivityWithOutcomesAsync(["Done"]);

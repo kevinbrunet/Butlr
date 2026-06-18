@@ -43,7 +43,7 @@ public sealed class RunFinalReviewMeetingTests : IClassFixture<MeetingFixture>
             "Résumé du travail effectué : la tâche a été correctement réalisée par Alveus-Worker, "
             + "Alveus-EnvironmentManager, Alveus-Evaluator et Alveus-UserDoc. Quel que soit ton rôle, vote "
             + "immédiatement sur le topic 'task-fulfilled' avec decision='agree', puis appelle ton outil de fin de "
-            + "tour (Finish) avec outcome='done' et un résumé confirmant ton accord.");
+            + "tour (Finish) avec outcome='pass' et un résumé confirmant ton accord.");
 
         var runner = _fixture.Services.GetRequiredService<IWorkflowRunner>();
         var result = await runner.RunAsync(activity, new RunWorkflowOptions(), CancellationToken.None);
@@ -77,7 +77,7 @@ public sealed class RunFinalReviewMeetingTests : IClassFixture<MeetingFixture>
             "Résumé du travail effectué : la tâche n'a PAS été correctement réalisée (rapport fictif pour ce test). "
             + "Quel que soit ton rôle, vote immédiatement sur le topic 'task-fulfilled' avec decision='disagree' et "
             + "comment='le travail ne correspond pas à la consigne (rapport fictif)', puis appelle ton outil de fin "
-            + "de tour (Finish) avec outcome='done' et un résumé de ton compte-rendu de désaccord.");
+            + "de tour (Finish) avec outcome='pass' et un résumé de ton compte-rendu de désaccord.");
 
         var runner = _fixture.Services.GetRequiredService<IWorkflowRunner>();
         var result = await runner.RunAsync(activity, new RunWorkflowOptions(), CancellationToken.None);

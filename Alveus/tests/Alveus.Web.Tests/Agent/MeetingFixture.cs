@@ -95,8 +95,8 @@ public sealed class MeetingFixture : IAsyncLifetime
                     + "(te positionner sur un topic, 'agree'/'disagree', commentaire obligatoire si 'disagree'). "
                     + "Si ton workspace est vide ou si tu ne trouves pas ta documentation, base-toi uniquement "
                     + "sur le résumé fourni et vote directement sans explorer le système de fichiers. "
-                    + "Quand tu as terminé ton tour, appelle l'outil Finish avec outcome='done' ou "
-                    + "outcome='needsmoreinfo'/'blocked' si tu es bloqué.",
+                    + "Quand tu as terminé ton tour, appelle l'outil Finish avec outcome='pass' ou "
+                    + "outcome='needmoreinfo'/'blocked' si tu es bloqué.",
                 name: agentName,
                 tools: tools);
         });

@@ -14,18 +14,15 @@ public sealed class FinishTool
     public const string FunctionName = "Finish";
 
     [Description("À appeler obligatoirement quand tu arrêtes de travailler : indique un résumé de ce qui a été fait "
-        + "et un résultat. outcome='done' si la tâche est terminée. outcome='needsmoreinfo' si tu as besoin "
+        + "et un résultat. outcome='pass' si la tâche est terminée et réussie. outcome='fail' si la tâche est "
+        + "terminée mais a échoué ou la vérification a échoué (donne reason). outcome='needmoreinfo' si tu as besoin "
         + "d'informations supplémentaires pour continuer (donne reason et questions). outcome='blocked' si tu ne "
         + "peux pas continuer (donne reason).")]
     public string Finish(
         [Description("Résumé de ce qui a été fait, ou de la situation actuelle si la tâche n'est pas terminée.")] string summary,
-        [Description("Résultat : 'done', 'needsmoreinfo' ou 'blocked'.")] string outcome,
-        [Description("Pour 'needsmoreinfo' ou 'blocked' : explique précisément le point de blocage. Pour verdict='fail' ou verdict='needmoreinfo' : décris pourquoi la vérification a échoué ou ce qui manque.")] string? reason = null,
-        [Description("Pour 'needsmoreinfo' : questions précises à poser pour pouvoir continuer.")] IList<string>? questions = null,
-        [Description("Uniquement si tu es l'agent EnvironmentManager ou Evaluator : ton jugement sur le résultat que "
-            + "tu viens de vérifier. 'pass' s'il est correct, 'fail' sinon (donne reason), 'needmoreinfo' si tu ne "
-            + "peux pas trancher sans information supplémentaire (donne reason et questions). Sans objet pour "
-            + "Alveus-Worker.")] string? verdict = null,
+        [Description("Résultat : 'pass', 'fail', 'needmoreinfo' ou 'blocked'.")] string outcome,
+        [Description("Pour 'fail', 'needmoreinfo' ou 'blocked' : explique précisément le point de blocage ou d'échec.")] string? reason = null,
+        [Description("Pour 'needmoreinfo' : questions précises à poser pour pouvoir continuer.")] IList<string>? questions = null,
         [Description("Instructions complémentaires pour un ou plusieurs agents en aval, en plus du ticket. "
             + "Chaque instruction précise sa cible ('worker', 'evaluator' ou 'userdoc') et son contenu. "
             + "Pertinent uniquement pour Alveus-Technical (cibles 'worker'/'userdoc') et Alveus-Qa (cible "
@@ -34,14 +31,9 @@ public sealed class FinishTool
         ArgumentException.ThrowIfNullOrWhiteSpace(summary);
         ArgumentException.ThrowIfNullOrWhiteSpace(outcome);
 
-        if (!Enum.TryParse<AgentTaskOutcome>(outcome, ignoreCase: true, out _))
+        if (!Enum.TryParse<AgentOutcome>(outcome, ignoreCase: true, out _))
         {
-            throw new ArgumentException($"outcome inconnu : '{outcome}'. Attendu : done, needsmoreinfo ou blocked.", nameof(outcome));
-        }
-
-        if (verdict is not null && !Enum.TryParse<AgentVerdict>(verdict, ignoreCase: true, out _))
-        {
-            throw new ArgumentException($"verdict inconnu : '{verdict}'. Attendu : pass, fail ou needmoreinfo.", nameof(verdict));
+            throw new ArgumentException($"outcome inconnu : '{outcome}'. Attendu : pass, fail, needmoreinfo ou blocked.", nameof(outcome));
         }
 
         if (downstreamInstructions is not null)

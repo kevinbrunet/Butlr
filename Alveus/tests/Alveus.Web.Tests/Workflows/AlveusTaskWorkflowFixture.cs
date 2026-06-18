@@ -4,6 +4,7 @@ using Alveus.Web.Conversations;
 using Alveus.Web.Tools;
 using Alveus.Web.Workflows;
 using Elsa.Extensions;
+using Elsa.Workflows.Runtime;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
@@ -81,7 +82,9 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
         IChatClient chatClient = TestChatClientFactory.Create();
 
         // Worker + EnvironmentManager : même workspace, mêmes outils (ADR 0023).
-        services.AddKeyedSingleton<CmdRunTool>(WorkerAgentName, (_, _) => new CmdRunTool(WorkerWorkspaceRoot));
+        // Timeout long pour les commandes dotnet (restore, build, new) qui peuvent dépasser 30s.
+        var longCommandTimeout = TimeSpan.FromMinutes(3);
+        services.AddKeyedSingleton<CmdRunTool>(WorkerAgentName, (_, _) => new CmdRunTool(WorkerWorkspaceRoot, commandTimeout: longCommandTimeout));
         services.AddKeyedSingleton<StrReplaceEditorTool>(WorkerAgentName, (_, _) => new StrReplaceEditorTool(WorkerWorkspaceRoot));
         services.AddSingleton<FinishTool>();
         services.AddSingleton<MeetingTool>();
@@ -108,6 +111,10 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
             return new ChatClientAgent(
                 chatClient,
                 instructions: "Tu es Alveus-Worker, l'agent d'exécution technique de Butlr. Réponds de façon concise. "
+                    + "Travaille exclusivement dans ton répertoire de travail courant (ton workspace) : crée tes "
+                    + "sous-répertoires et fichiers là où tu te trouves, sans faire `cd /tmp`, `cd ~`, `cd /home` ou "
+                    + "tout autre chemin absolu hors workspace. Si une commande échoue avec 'No such file or "
+                    + "directory', vérifie que tu es bien dans le workspace (commande `pwd`) avant de réessayer. "
                     + "Quand tu arrêtes de travailler (tâche terminée, besoin de précisions, ou bloqué), tu DOIS appeler "
                     + "l'outil Finish pour le signaler — sinon on te redemandera de le faire.",
                 name: WorkerAgentName,
@@ -139,11 +146,11 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
                     + "l'environnement local décrit par la consigne pour qu'il soit utilisable par un autre agent. "
                     + "Ton outil shell a un timeout de 30 secondes : lance les processus longue durée en "
                     + "arrière-plan (ex. 'nohup <commande> > /tmp/env.log 2>&1 & disown') plutôt qu'au premier plan. "
-                    + "Quand tu arrêtes de travailler, appelle l'outil Finish avec outcome='done' et : verdict='pass' "
+                    + "Quand tu arrêtes de travailler, appelle l'outil Finish avec outcome='pass' "
                     + "si l'environnement est démarré — résume alors dans summary des instructions d'utilisation "
                     + "précises (URL, ports, exemples de requêtes ou de commandes) destinées à un autre agent qui "
-                    + "n'a pas accès à ce système de fichiers ; verdict='fail' si le démarrage échoue (reason=détail "
-                    + "de l'échec) ; verdict='needmoreinfo' si la consigne ne précise pas comment démarrer "
+                    + "n'a pas accès à ce système de fichiers ; outcome='fail' si le démarrage échoue (reason=détail "
+                    + "de l'échec) ; outcome='needmoreinfo' si la consigne ne précise pas comment démarrer "
                     + "l'environnement (reason et questions).",
                 name: EnvironmentManagerAgentName,
                 tools: tools);
@@ -151,7 +158,7 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
 
         // Evaluator : workspace isolé (ADR 0021).
         var skillsRoot = AgentSkillFiles.FindRoot(AppContext.BaseDirectory);
-        services.AddKeyedSingleton<CmdRunTool>(EvaluatorAgentName, (_, _) => new CmdRunTool(EvaluatorWorkspaceRoot));
+        services.AddKeyedSingleton<CmdRunTool>(EvaluatorAgentName, (_, _) => new CmdRunTool(EvaluatorWorkspaceRoot, commandTimeout: longCommandTimeout));
         services.AddKeyedSingleton<StrReplaceEditorTool>(EvaluatorAgentName, (_, _) => new StrReplaceEditorTool(EvaluatorWorkspaceRoot));
         if (skillsRoot is not null)
             services.AddKeyedSingleton<LoadSkillTool>(EvaluatorAgentName, (_, _) => new LoadSkillTool(skillsRoot, EvaluatorSkillNames));
@@ -193,13 +200,15 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
                         + "écris un jeu de test (scripts, assertions) qui vérifie objectivement que l'environnement décrit "
                         + "par les instructions d'utilisation répond à la consigne. Ton espace de travail est vide au "
                         + "départ — initialise-le selon les besoins (ex. 'dotnet new xunit' pour un projet C#, ou un "
-                        + "script bash pour des assertions curl). Écris le jeu de test avec ton outil d'édition de "
+                        + "script bash pour des assertions curl). Travaille exclusivement dans ton répertoire de travail "
+                        + "courant : ne fais pas `cd /tmp`, `cd ~` ou similaire — crée tes sous-répertoires et fichiers "
+                        + "là où tu te trouves. Écris le jeu de test avec ton outil d'édition de "
                         + "fichiers, puis exécute-le avec ton outil shell en interagissant avec l'environnement "
                         + "uniquement par le réseau (ex. curl) — tu n'as pas accès au système de fichiers du Worker. "
                         + "N'effectue pas la tâche toi-même. Quand tu arrêtes de travailler, tu DOIS appeler l'outil "
-                        + "Finish avec outcome='done' et : verdict='pass' si le jeu de test confirme que l'environnement "
-                        + "répond à la consigne ; verdict='fail' si ce n'est pas le cas (reason=rapport détaillé des "
-                        + "problèmes rencontrés, transmis à Alveus-Worker pour correction) ; verdict='needmoreinfo' si "
+                        + "Finish avec outcome='pass' si le jeu de test confirme que l'environnement "
+                        + "répond à la consigne ; outcome='fail' si ce n'est pas le cas (reason=rapport détaillé des "
+                        + "problèmes rencontrés, transmis à Alveus-Worker pour correction) ; outcome='needmoreinfo' si "
                         + "tu ne peux pas trancher sans information supplémentaire (reason et questions). Si tu es bloqué "
                         + "avant d'avoir pu écrire ou exécuter le jeu de test, utilise outcome='blocked' (reason) — "
                         + "sinon on te redemandera de le faire.",
@@ -236,7 +245,7 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
                     + "après qu'Alveus-Evaluator a validé le travail d'Alveus-Worker. Ton rôle : mettre à jour la "
                     + "documentation utilisateur (markdown, à la racine de ton espace de travail) pour refléter ce "
                     + "qui change pour l'utilisateur final. Quand tu as terminé, appelle l'outil Finish avec "
-                    + "outcome='done' (summary = ce qui a été documenté) ou outcome='needsmoreinfo'/'blocked' si tu "
+                    + "outcome='pass' (summary = ce qui a été documenté) ou outcome='needmoreinfo'/'blocked' si tu "
                     + "ne peux pas avancer.",
                 name: UserDocAgentName,
                 tools: tools);
@@ -288,8 +297,8 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
                 instructions: $"Tu es {displayName}, un participant aux réunions de Butlr. Tu disposes des outils "
                     + "Raise (signaler un point de désaccord ou une question aux 2 autres participants) et Vote "
                     + "(te positionner sur un topic, 'agree'/'disagree', commentaire obligatoire si 'disagree'). "
-                    + "Quand tu as terminé ton tour, appelle l'outil Finish avec outcome='done' ou "
-                    + "outcome='needsmoreinfo'/'blocked' si tu es bloqué.",
+                    + "Quand tu as terminé ton tour, appelle l'outil Finish avec outcome='pass' ou "
+                    + "outcome='needmoreinfo'/'blocked' si tu es bloqué.",
                 name: agentName,
                 tools: tools);
         });
@@ -297,6 +306,11 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
+        // Peupler le store Elsa pour que CreateClientAsync/CreateInstanceAsync(ByDefinitionId)
+        // puisse résoudre la définition AlveusTaskWorkflow (cf. AwaitConversationReplyTests).
+        var populator = Services.GetRequiredService<IWorkflowDefinitionStorePopulator>();
+        await populator.PopulateStoreAsync(CancellationToken.None);
+
         var endpoint = TestLlamaCppConfig.Endpoint;
         if (endpoint is null)
             return;
@@ -313,6 +327,11 @@ public sealed class AlveusTaskWorkflowFixture : IAsyncLifetime
             IsLlamaCppAvailable = false;
         }
     }
+
+    // Remet le cwd du shell Worker sur son workspace root. À appeler au début des tests qui
+    // utilisent le Worker, afin de neutraliser un éventuel `cd /tmp` laissé par le test précédent.
+    public Task ResetWorkerShellCwdAsync(CancellationToken cancellationToken = default)
+        => Services.GetRequiredKeyedService<CmdRunTool>(WorkerAgentName).ResetWorkingDirectoryAsync(cancellationToken);
 
     public Task DisposeAsync()
     {

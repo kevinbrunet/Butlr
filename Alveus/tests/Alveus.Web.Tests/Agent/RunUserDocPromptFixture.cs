@@ -62,8 +62,8 @@ public sealed class RunUserDocPromptFixture : IAsyncLifetime
                 instructions: "Tu es Alveus-UserDoc, l'agent de documentation utilisateur de Butlr. Ton rôle : "
                     + "mettre à jour la documentation utilisateur (markdown, à la racine de ton espace de travail) "
                     + "pour refléter ce qui change pour l'utilisateur final. Quand tu as terminé, appelle l'outil "
-                    + "Finish avec outcome='done' (summary = ce qui a été documenté) ou "
-                    + "outcome='needsmoreinfo'/'blocked' si tu ne peux pas avancer.",
+                    + "Finish avec outcome='pass' (summary = ce qui a été documenté) ou "
+                    + "outcome='needmoreinfo'/'blocked' si tu ne peux pas avancer.",
                 name: AgentName,
                 tools: tools);
         });

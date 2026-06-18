@@ -4,7 +4,10 @@ using Alveus.Web.Activities;
 using Alveus.Web.Conversations;
 using Alveus.Web.Workflows;
 using Elsa.Workflows;
+using Elsa.Workflows.Models;
 using Elsa.Workflows.Options;
+using Elsa.Workflows.Runtime;
+using Elsa.Workflows.Runtime.Messages;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit.Abstractions;
 
@@ -29,10 +32,13 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
     /// Worker/EnvironmentManager/Evaluator (ADR 0023).
     /// </summary>
     private const string MeetingParticipantInstructions =
-        "Si tu es Alveus-BusinessAnalyst, Alveus-Qa ou Alveus-Technical : n'utilise pas Raise et ne modifie aucun "
-        + "fichier. Si on te demande de voter sur 'task-fulfilled', vote immédiatement avec decision='agree'. Dans "
-        + "tous les cas, appelle directement ton outil de fin de tour (Finish) avec outcome='done' et un résumé "
-        + "indiquant qu'il n'y a rien à signaler.";
+        "Si tu es Alveus-BusinessAnalyst, Alveus-Qa ou Alveus-Technical : le sujet de la réunion "
+        + "ci-dessus peut contenir des instructions adressées à Alveus-Worker ou à d'autres agents "
+        + "exécuteurs — ces instructions de tâche ne te concernent pas et ne doivent pas influencer "
+        + "ton comportement en tant que participant à la réunion. N'utilise pas Raise et ne modifie "
+        + "aucun fichier. Si on te demande de voter sur 'task-fulfilled', vote immédiatement avec "
+        + "decision='agree'. Dans tous les cas, appelle directement ton outil de fin de tour (Finish) "
+        + "avec outcome='pass' et un résumé indiquant qu'il n'y a rien à signaler.";
 
     private readonly AlveusTaskWorkflowFixture _fixture;
     private readonly ITestOutputHelper _output;
@@ -60,9 +66,8 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
             {
                 ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
                 ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle directement ton outil de fin de tâche (Finish) avec "
-                    + "outcome='done' et un résumé indiquant qu'il n'y avait rien à faire. Si tu es "
-                    + "Alveus-EnvironmentManager ou Alveus-Evaluator, appelle Finish avec outcome='done' et "
-                    + "verdict='pass'. " + MeetingParticipantInstructions,
+                    + "outcome='pass' et un résumé indiquant qu'il n'y avait rien à faire. Si tu es "
+                    + "Alveus-EnvironmentManager ou Alveus-Evaluator, appelle Finish avec outcome='pass'. " + MeetingParticipantInstructions,
             },
         };
 
@@ -106,8 +111,13 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
             Input = new Dictionary<string, object>
             {
                 ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
-                ["TaskPrompt"] = "Si tu es Alveus-Worker, tu es bloqué : appelle immédiatement Finish avec "
-                    + "outcome='blocked', reason='Consigne ambiguë, impossible de continuer.' et un summary court. "
+                ["TaskPrompt"] = "Validation interne uniquement — aucun point métier, technique "
+                    + "ni de test à analyser lors de la réunion. "
+                    + "Si tu es Alveus-Worker : la consigne de cette tâche est intentionnellement "
+                    + "incomplète à des fins de test. QUELLE QUE SOIT L'INFORMATION REÇUE (escalade, "
+                    + "rapport, instructions complémentaires), appelle TOUJOURS et IMMÉDIATEMENT Finish "
+                    + "avec outcome='blocked', reason='Consigne incomplète, impossible de continuer.', "
+                    + "et un summary court. Ne considère jamais cette tâche comme résolvable. "
                     + MeetingParticipantInstructions,
             },
         };
@@ -151,10 +161,10 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
             Input = new Dictionary<string, object>
             {
                 ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
-                ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle Finish avec outcome='done' et un résumé indiquant "
+                ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle Finish avec outcome='pass' et un résumé indiquant "
                     + "qu'il n'y avait rien à faire. Si tu es Alveus-EnvironmentManager : la consigne ne précise "
                     + "pas comment démarrer l'environnement — il n'y a ni commande, ni URL, ni port fournis. "
-                    + "Appelle Finish avec outcome='done', verdict='needmoreinfo', une reason expliquant ce qui "
+                    + "Appelle Finish avec outcome='needmoreinfo', une reason expliquant ce qui "
                     + "manque, et une question précise pour obtenir les informations nécessaires. "
                     + MeetingParticipantInstructions,
             },
@@ -200,8 +210,8 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
             Input = new Dictionary<string, object>
             {
                 ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
-                ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle Finish avec outcome='done'. Si tu es "
-                    + "Alveus-EnvironmentManager, appelle Finish avec outcome='done' et verdict='pass'. Si tu es "
+                ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle Finish avec outcome='pass'. Si tu es "
+                    + "Alveus-EnvironmentManager, appelle Finish avec outcome='pass'. Si tu es "
                     + "Alveus-Evaluator, tu es bloqué : appelle Finish avec outcome='blocked', "
                     + "reason='Impossible d'écrire le jeu de test.' et un summary court. " + MeetingParticipantInstructions,
             },
@@ -247,9 +257,8 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
             {
                 ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
                 ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle directement ton outil de fin de tâche (Finish) avec "
-                    + "outcome='done' et un résumé indiquant qu'il n'y avait rien à faire. Si tu es "
-                    + "Alveus-EnvironmentManager ou Alveus-Evaluator, appelle Finish avec outcome='done' et "
-                    + "verdict='pass'. " + MeetingParticipantInstructions,
+                    + "outcome='pass' et un résumé indiquant qu'il n'y avait rien à faire. Si tu es "
+                    + "Alveus-EnvironmentManager ou Alveus-Evaluator, appelle Finish avec outcome='pass'. " + MeetingParticipantInstructions,
             },
         };
 
@@ -287,11 +296,13 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
             Input = new Dictionary<string, object>
             {
                 ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
-                ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle Finish avec outcome='done' et un résumé indiquant "
-                    + "qu'il n'y avait rien à faire, même si un rapport d'évaluation précédent est joint au message. "
-                    + "Si tu es Alveus-EnvironmentManager, l'environnement ne démarre jamais : appelle "
-                    + "systématiquement Finish avec outcome='done', verdict='fail' et reason='L'environnement ne "
-                    + "démarre pas.'. N'appelle jamais Alveus-Evaluator. " + MeetingParticipantInstructions,
+                ["TaskPrompt"] = "Si tu es Alveus-Worker, appelle directement Finish avec outcome='pass' et summary='test'. "
+                    + "Si tu es Alveus-EnvironmentManager : démarre l'application en exécutant la commande "
+                    + "`./start-app.sh` (le Worker n'a rien créé — ce script n'existe pas). "
+                    + "Dès que la commande échoue, appelle immédiatement Finish(fail, "
+                    + "reason='Impossible de démarrer : start-app.sh introuvable.') "
+                    + "sans créer le script, sans chercher d'alternative, sans poser de questions. "
+                    + MeetingParticipantInstructions,
             },
         };
 
@@ -326,6 +337,8 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
             return;
         }
 
+        ClearWorkspace();
+
         var workflow = ActivatorUtilities.CreateInstance<AlveusTaskWorkflow>(_fixture.Services);
 
         var options = new RunWorkflowOptions
@@ -336,11 +349,10 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
                 ["TaskPrompt"] = "Si tu es Alveus-Worker : à la racine de ton espace de travail, crée une "
                     + "application console .NET (par exemple avec 'dotnet new console') dont le programme "
                     + "affiche exactement 'Hello World' (sans virgule) sur la sortie standard, puis appelle "
-                    + "Finish avec outcome='done'. Si tu es Alveus-EnvironmentManager : il n'y a rien à démarrer "
-                    + "pour une application console, appelle directement Finish avec outcome='done' et "
-                    + "verdict='pass'. Si tu es Alveus-Evaluator : appelle directement Finish avec outcome='done' "
-                    + "et verdict='pass'. Si tu es Alveus-UserDoc : appelle directement Finish avec "
-                    + "outcome='done'. " + MeetingParticipantInstructions,
+                    + "Finish avec outcome='pass'. Si tu es Alveus-EnvironmentManager : il n'y a rien à démarrer "
+                    + "pour une application console, appelle directement Finish avec outcome='pass'. "
+                    + "Si tu es Alveus-Evaluator : appelle directement Finish avec outcome='pass'. "
+                    + "Si tu es Alveus-UserDoc : appelle directement Finish avec outcome='pass'. " + MeetingParticipantInstructions,
             },
         };
 
@@ -356,7 +368,7 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
 
         Assert.Equal(WorkflowStatus.Finished, result.WorkflowState.Status);
 
-        var csprojPath = allFiles.FirstOrDefault(f => f.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase));
+        var csprojPath = FindLeafCsproj(allFiles);
         Assert.False(string.IsNullOrEmpty(csprojPath), $"Aucun .csproj trouvé dans {_fixture.WorkerWorkspaceRoot}.");
 
         var (exitCode, stdout, stderr) = await RunDotnetAsync(csprojPath, [], TimeSpan.FromMinutes(2));
@@ -383,10 +395,20 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
             return;
         }
 
-        var workflow = ActivatorUtilities.CreateInstance<AlveusTaskWorkflow>(_fixture.Services);
+        ClearWorkspace();
 
-        var options = new RunWorkflowOptions
+        var store = _fixture.Services.GetRequiredService<IConversationStore>();
+        var conversationId = store.Create().Id;
+
+        // IWorkflowRuntime (pas IWorkflowRunner) pour que l'instance soit liée à la définition
+        // enregistrée — requis pour que LocalWorkflowClient.RunInstanceAsync puisse résoudre le
+        // graph Elsa lors de la reprise après suspension (AwaitConversationReply).
+        var runtime = _fixture.Services.GetRequiredService<IWorkflowRuntime>();
+        var client = await runtime.CreateClientAsync(CancellationToken.None);
+        await client.CreateInstanceAsync(new CreateWorkflowInstanceRequest
         {
+            WorkflowDefinitionHandle = WorkflowDefinitionHandle.ByDefinitionId("AlveusTaskWorkflow"),
+            CorrelationId = conversationId,
             Input = new Dictionary<string, object>
             {
                 ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
@@ -400,28 +422,38 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
                     + "'done <id>' (marque la tâche d'identifiant <id> comme terminée). Les tâches doivent "
                     + "être persistées dans un fichier à côté du projet pour être conservées entre deux "
                     + "exécutions. Une fois l'application créée et son bon fonctionnement vérifié, appelle "
-                    + "Finish avec outcome='done'. Si tu es Alveus-EnvironmentManager : il n'y a rien à "
-                    + "démarrer pour une application console, appelle directement Finish avec outcome='done' "
-                    + "et verdict='pass'. Si tu es Alveus-Evaluator : appelle directement Finish avec "
-                    + "outcome='done' et verdict='pass'. Si tu es Alveus-UserDoc : appelle directement Finish "
-                    + "avec outcome='done'. " + MeetingParticipantInstructions,
+                    + "Finish avec outcome='pass'. Si tu es Alveus-EnvironmentManager : il n'y a rien à "
+                    + "démarrer pour une application console, appelle directement Finish avec outcome='pass'. "
+                    + "Si tu es Alveus-Evaluator : appelle directement Finish avec outcome='pass'. "
+                    + "Si tu es Alveus-UserDoc : appelle directement Finish avec outcome='pass'. " + MeetingParticipantInstructions,
             },
-        };
+        }, CancellationToken.None);
 
-        var runner = _fixture.Services.GetRequiredService<IWorkflowRunner>();
-        var result = await runner.RunAsync(workflow, options, CancellationToken.None);
+        var workflowInstanceId = client.WorkflowInstanceId;
+        store.SetWorkflowInstanceId(conversationId, workflowInstanceId);
+        var runResponse = await client.RunInstanceAsync(new RunWorkflowInstanceRequest(), CancellationToken.None);
 
-        var outputRegister = result.WorkflowExecutionContext.GetActivityOutputRegister();
-        var workerSummary = outputRegister.FindOutputByActivityId("RunWorker", nameof(RunAgentPrompt.Summary)) as string;
+        var workflowFinished = runResponse.SubStatus == WorkflowSubStatus.Finished;
+        if (!workflowFinished && runResponse.SubStatus == WorkflowSubStatus.Suspended)
+            workflowFinished = await ResumeWorkflowIfSuspendedAsync(conversationId, workflowInstanceId);
 
         var allFiles = Directory.GetFiles(_fixture.WorkerWorkspaceRoot, "*", SearchOption.AllDirectories);
-        _output.WriteLine($"Statut workflow : {result.WorkflowState.Status}, résumé worker : {workerSummary}");
+        _output.WriteLine($"Workflow terminé : {workflowFinished}, SubStatus : {runResponse.SubStatus}");
         _output.WriteLine($"Fichiers dans l'espace de travail : {string.Join(", ", allFiles.Select(f => Path.GetRelativePath(_fixture.WorkerWorkspaceRoot, f)))}");
 
-        Assert.Equal(WorkflowStatus.Finished, result.WorkflowState.Status);
+        Assert.True(workflowFinished, $"Workflow non terminé — SubStatus : {runResponse.SubStatus}.");
 
-        var csprojPath = allFiles.FirstOrDefault(f => f.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase));
+        var csprojPath = FindLeafCsproj(allFiles);
         Assert.False(string.IsNullOrEmpty(csprojPath), $"Aucun .csproj trouvé dans {_fixture.WorkerWorkspaceRoot}.");
+
+        // Le Worker a pu tester l'app en ajoutant/marquant des tâches — supprimer tous les fichiers
+        // de données (non .cs / non .csproj) du répertoire projet pour repartir d'un état propre.
+        foreach (var dataFile in Directory.GetFiles(Path.GetDirectoryName(csprojPath)!))
+        {
+            var ext = Path.GetExtension(dataFile).ToLowerInvariant();
+            if (ext is not ".cs" and not ".csproj")
+                File.Delete(dataFile);
+        }
 
         var timeout = TimeSpan.FromMinutes(2);
 
@@ -476,10 +508,21 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
             return;
         }
 
-        var workflow = ActivatorUtilities.CreateInstance<AlveusTaskWorkflow>(_fixture.Services);
+        ClearWorkspace();
+        ClearEvaluatorWorkspace();
 
-        var options = new RunWorkflowOptions
+        var store = _fixture.Services.GetRequiredService<IConversationStore>();
+        var conversationId = store.Create().Id;
+
+        // IWorkflowRuntime (pas IWorkflowRunner) pour que l'instance soit liée à la définition
+        // enregistrée — requis pour que LocalWorkflowClient.RunInstanceAsync puisse résoudre le
+        // graph Elsa lors de la reprise après suspension (AwaitConversationReply).
+        var runtime = _fixture.Services.GetRequiredService<IWorkflowRuntime>();
+        var client = await runtime.CreateClientAsync(CancellationToken.None);
+        await client.CreateInstanceAsync(new CreateWorkflowInstanceRequest
         {
+            WorkflowDefinitionHandle = WorkflowDefinitionHandle.ByDefinitionId("AlveusTaskWorkflow"),
+            CorrelationId = conversationId,
             Input = new Dictionary<string, object>
             {
                 ["TeamName"] = AlveusTaskWorkflowFixture.TeamName,
@@ -490,81 +533,36 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
                     + "+ bouton 'Ajouter') pour créer une nouvelle tâche ; permet de marquer une tâche comme "
                     + "terminée via une case à cocher ou un bouton (rechargement de page accepté). Les tâches "
                     + "sont conservées en mémoire (pas de base de données). Si tu es Alveus-Worker : une fois "
-                    + "l'application créée et son démarrage local vérifié, appelle Finish avec outcome='done'. "
+                    + "l'application créée et son démarrage local vérifié, appelle Finish avec outcome='pass'. "
                     + "Si tu es Alveus-Evaluator : écris, à la racine de ton espace de travail, un projet de "
                     + "test xUnit C# (ex. 'dotnet new xunit') référençant le package NuGet Microsoft.Playwright "
                     + "(charge le skill 'playwright' pour les instructions détaillées), avec au moins un test "
                     + "qui pilote un navigateur contre la page d'accueil de l'application pour vérifier "
                     + "l'affichage de la liste de tâches, l'ajout d'une nouvelle tâche via le formulaire, et le "
                     + "marquage d'une tâche comme terminée. Exécute ce projet avec 'dotnet test' et n'appelle "
-                    + "Finish avec verdict='pass' que si ces tests Playwright passent. "
-                    + "Si tu es Alveus-UserDoc : appelle directement Finish avec outcome='done'. "
+                    + "Finish avec outcome='pass' que si ces tests Playwright passent, sinon outcome='fail'. "
+                    + "Si tu es Alveus-UserDoc : appelle directement Finish avec outcome='pass'. "
                     + MeetingParticipantInstructions,
             },
-        };
+        }, CancellationToken.None);
 
-        var runner = _fixture.Services.GetRequiredService<IWorkflowRunner>();
-        var result = await runner.RunAsync(workflow, options, CancellationToken.None);
+        var workflowInstanceId = client.WorkflowInstanceId;
+        store.SetWorkflowInstanceId(conversationId, workflowInstanceId);
+        var runResponse = await client.RunInstanceAsync(new RunWorkflowInstanceRequest(), CancellationToken.None);
 
-        var outputRegister = result.WorkflowExecutionContext.GetActivityOutputRegister();
-        var workerSummary = outputRegister.FindOutputByActivityId("RunWorker", nameof(RunAgentPrompt.Summary)) as string;
-        var envSummary = outputRegister.FindOutputByActivityId("RunEnvironmentManager", nameof(RunEnvironmentPrompt.Summary)) as string;
-        var evaluatorSummary = outputRegister.FindOutputByActivityId("RunEvaluator", nameof(RunEvaluatorPrompt.Summary)) as string;
-        var userDocSummary = outputRegister.FindOutputByActivityId("RunUserDoc", nameof(RunUserDocPrompt.Summary)) as string;
+        var workflowFinished = runResponse.SubStatus == WorkflowSubStatus.Finished;
+        if (!workflowFinished && runResponse.SubStatus == WorkflowSubStatus.Suspended)
+            workflowFinished = await ResumeWorkflowIfSuspendedAsync(conversationId, workflowInstanceId);
 
-        _output.WriteLine($"Statut workflow : {result.WorkflowState.Status}");
-        _output.WriteLine($"Résumé worker : {workerSummary}");
-        _output.WriteLine($"Résumé environment manager : {envSummary}");
-        _output.WriteLine($"Résumé evaluator : {evaluatorSummary}");
-        _output.WriteLine($"Résumé userdoc : {userDocSummary}");
-
-        // Diagnostics en cas d'échec : si l'Evaluator (ou un autre agent) sort par "NeedsMoreInfo"/"Blocked"
-        // au lieu de "Passed", AgentEscalationLoopGuard renvoie vers RunPreTaskMeeting jusqu'à
-        // AgentEscalationLoopGuard.MaxIterations (cf. ADR 0028), puis le workflow se termine sans
-        // jamais atteindre RunUserDoc — sans ces sorties, la cause (quel agent, pourquoi) est invisible.
-        if (string.IsNullOrWhiteSpace(userDocSummary))
+        _output.WriteLine($"Workflow terminé : {workflowFinished}, SubStatus : {runResponse.SubStatus}");
+        if (!workflowFinished)
         {
-            var workerReason = outputRegister.FindOutputByActivityId("RunWorker", nameof(RunAgentPrompt.Reason)) as string;
-            var workerQuestions = outputRegister.FindOutputByActivityId("RunWorker", nameof(RunAgentPrompt.Questions)) as IReadOnlyList<string>;
-            var envReason = outputRegister.FindOutputByActivityId("RunEnvironmentManager", nameof(RunEnvironmentPrompt.Reason)) as string;
-            var evaluatorReason = outputRegister.FindOutputByActivityId("RunEvaluator", nameof(RunEvaluatorPrompt.Reason)) as string;
-            var evaluatorQuestions = outputRegister.FindOutputByActivityId("RunEvaluator", nameof(RunEvaluatorPrompt.Questions)) as IReadOnlyList<string>;
-            var escalationIteration = outputRegister.FindOutputByActivityId("AgentEscalationLoopGuard", nameof(AgentEscalationLoopGuard.Iteration));
-
-            _output.WriteLine($"[diag] Reason worker : {workerReason}");
-            _output.WriteLine($"[diag] Questions worker : {(workerQuestions is null ? null : string.Join(" | ", workerQuestions))}");
-            _output.WriteLine($"[diag] Reason environment manager : {envReason}");
-            _output.WriteLine($"[diag] Reason evaluator : {evaluatorReason}");
-            _output.WriteLine($"[diag] Questions evaluator : {(evaluatorQuestions is null ? null : string.Join(" | ", evaluatorQuestions))}");
-            _output.WriteLine($"[diag] Itération AgentEscalationLoopGuard : {escalationIteration}");
-
-            // Liste brute (réflexion) des (ActivityId, OutputName) pour lesquels une sortie a été
-            // enregistrée — permet de voir jusqu'où le flowchart a réellement progressé même quand
-            // les accesseurs typés ci-dessus renvoient tous null/vide.
-            var recordsField = outputRegister.GetType().GetField("_recordsByActivityIdAndOutputName", BindingFlags.NonPublic | BindingFlags.Instance);
-            if (recordsField?.GetValue(outputRegister) is System.Collections.IDictionary records)
-            {
-                var keys = records.Keys.Cast<object>().Select(k => k.ToString());
-                _output.WriteLine($"[diag] Sorties enregistrées (ActivityId:OutputName) : {string.Join(", ", keys)}");
-            }
-
-            // SubStatus + incidents : un incident (ex. exception non gérée dans une activité)
-            // laisse WorkflowStatus="Finished" mais SubStatus peut signaler "Faulted" — invisible
-            // sans ça.
-            _output.WriteLine($"[diag] SubStatus workflow : {result.WorkflowState.SubStatus}");
-            foreach (var incident in result.WorkflowState.Incidents)
-            {
-                _output.WriteLine($"[diag] Incident sur {incident.ActivityId} ({incident.ActivityType}) : {incident.Message}");
-                if (incident.Exception is not null)
-                {
-                    _output.WriteLine($"[diag]   Exception : {incident.Exception.Type} - {incident.Exception.Message}");
-                    _output.WriteLine($"[diag]   StackTrace : {incident.Exception.StackTrace}");
-                }
-            }
+            var items = store.GetItems(conversationId);
+            _output.WriteLine($"[diag] Items conversation ({items.Count}) : "
+                + string.Join(", ", items.TakeLast(10).Select(i => $"{i.Kind}:{i.Metadata.GetValueOrDefault("phase", i.Metadata.GetValueOrDefault("source", "?"))}")));
         }
 
-        Assert.Equal(WorkflowStatus.Finished, result.WorkflowState.Status);
-        Assert.False(string.IsNullOrWhiteSpace(userDocSummary), "Alveus-UserDoc jamais atteint — l'Evaluator n'a probablement pas rendu verdict='pass'.");
+        Assert.True(workflowFinished, $"Workflow non terminé — SubStatus : {runResponse.SubStatus}.");
 
         var evaluatorCsprojFiles = Directory.GetFiles(_fixture.EvaluatorWorkspaceRoot, "*.csproj", SearchOption.AllDirectories);
         _output.WriteLine($"Projets de test trouvés : {string.Join(", ", evaluatorCsprojFiles.Select(f => Path.GetRelativePath(_fixture.EvaluatorWorkspaceRoot, f)))}");
@@ -579,9 +577,94 @@ public sealed class AlveusTaskWorkflowTests : IClassFixture<AlveusTaskWorkflowFi
     }
 
     /// <summary>
+    /// Reprend un workflow suspendu sur <see cref="AwaitConversationReply"/> en répondant
+    /// automatiquement "Pas de question spécifique. Procède avec ton meilleur jugement." —
+    /// jusqu'à ce que le workflow se termine ou atteigne la limite de reprises.
+    /// </summary>
+    private async Task<bool> ResumeWorkflowIfSuspendedAsync(string conversationId, string workflowInstanceId, int maxReplies = 5)
+    {
+        var store = _fixture.Services.GetRequiredService<IConversationStore>();
+        var runtime = _fixture.Services.GetRequiredService<IWorkflowRuntime>();
+
+        // L'AwaitConversationReply a posté SetPendingBookmark mais pas SetWorkflowInstanceId
+        // (c'est normalement fait par l'endpoint HTTP avant de lancer le workflow en arrière-plan).
+        store.SetWorkflowInstanceId(conversationId, workflowInstanceId);
+
+        for (var attempt = 0; attempt < maxReplies; attempt++)
+        {
+            var pending = store.TryResolvePendingBookmark(conversationId);
+            if (pending is null)
+                return false;
+
+            _output.WriteLine($"[NeedsHelp] Reprise automatique tentative {attempt + 1}/{maxReplies} — bookmarkId={pending.Value.BookmarkId}");
+
+            var resumeClient = await runtime.CreateClientAsync(pending.Value.WorkflowInstanceId, CancellationToken.None);
+            var resumeResponse = await resumeClient.RunInstanceAsync(new RunWorkflowInstanceRequest
+            {
+                BookmarkId = pending.Value.BookmarkId,
+                Input = new Dictionary<string, object> { ["Reply"] = "Pas de question spécifique. Procède avec ton meilleur jugement." },
+            }, CancellationToken.None);
+
+            _output.WriteLine($"[NeedsHelp] SubStatus après reprise : {resumeResponse.SubStatus}");
+
+            if (resumeResponse.SubStatus == WorkflowSubStatus.Finished)
+                return true;
+            if (resumeResponse.SubStatus is WorkflowSubStatus.Faulted or WorkflowSubStatus.Cancelled)
+                return false;
+            // WorkflowSubStatus.Suspended : AwaitConversationReply a posté un nouveau bookmark → boucler
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Exécute <c>dotnet run --project &lt;csprojPath&gt; -- &lt;arguments&gt;</c> dans le dossier du
     /// projet, et retourne le code de sortie ainsi que la sortie standard/erreur.
     /// </summary>
+    private void ClearWorkspace()
+    {
+        // Vide le contenu sans supprimer le répertoire : CmdRunTool (singleton) garde ce
+        // répertoire comme cwd de son shell bash — le supprimer provoquerait un getcwd()
+        // ENOENT dans le shell au prochain appel dotnet/shell.
+        ClearDirectory(_fixture.WorkerWorkspaceRoot);
+        // Remet le cwd sur le workspace root : un test précédent peut avoir laissé le shell
+        // sur /tmp (bwrap tmpfs) ou dans un sous-répertoire supprimé.
+        _fixture.ResetWorkerShellCwdAsync().GetAwaiter().GetResult();
+    }
+
+    private void ClearEvaluatorWorkspace()
+    {
+        ClearDirectory(_fixture.EvaluatorWorkspaceRoot);
+    }
+
+    private static void ClearDirectory(string path)
+    {
+        foreach (var file in Directory.GetFiles(path))
+            File.Delete(file);
+        foreach (var dir in Directory.GetDirectories(path))
+            Directory.Delete(dir, recursive: true);
+    }
+
+    // Sélectionne le csproj "feuille" : le plus profond qui n'a aucun autre csproj dans son
+    // sous-arbre. Évite de pointer vers un csproj parent qui inclurait des fichiers d'un
+    // sous-projet (ex. `dotnet new console` exécuté deux fois depuis des répertoires imbriqués).
+    private static string? FindLeafCsproj(string[] allFiles)
+    {
+        var csprojPaths = allFiles
+            .Where(f => f.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (csprojPaths.Count == 0)
+            return null;
+        var leaf = csprojPaths
+            .OrderByDescending(p => p.Count(c => c == Path.DirectorySeparatorChar))
+            .FirstOrDefault(p =>
+            {
+                var dir = Path.GetDirectoryName(p)! + Path.DirectorySeparatorChar;
+                return !csprojPaths.Any(other => other != p && other.StartsWith(dir, StringComparison.Ordinal));
+            });
+        return leaf ?? csprojPaths[0];
+    }
+
     private static Task<(int ExitCode, string StdOut, string StdErr)> RunDotnetAsync(string csprojPath, IEnumerable<string> arguments, TimeSpan timeout)
     {
         var dotnetArguments = new List<string> { "run", "--project", csprojPath, "--" };

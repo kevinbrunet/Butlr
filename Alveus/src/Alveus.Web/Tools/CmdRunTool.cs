@@ -16,22 +16,26 @@ namespace Alveus.Web.Tools;
 /// </summary>
 public sealed class CmdRunTool : IDisposable
 {
-    private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan DefaultCommandTimeout = TimeSpan.FromSeconds(30);
 
     private static readonly Lazy<bool> BwrapAvailableLazy = new(() => FindOnPath("bwrap") is not null);
 
     private readonly Process _shell;
     private readonly SemaphoreSlim _lock = new(1, 1);
     private readonly string? _bwrapKillSignature;
+    private readonly string _workspaceRoot;
+    private readonly TimeSpan _commandTimeout;
     private bool _disposed;
 
     public static bool IsBwrapAvailable => BwrapAvailableLazy.Value;
 
-    public CmdRunTool(string workspaceRoot, ILogger<CmdRunTool>? logger = null)
+    public CmdRunTool(string workspaceRoot, ILogger<CmdRunTool>? logger = null, TimeSpan? commandTimeout = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        _commandTimeout = commandTimeout ?? DefaultCommandTimeout;
 
         Directory.CreateDirectory(workspaceRoot);
+        _workspaceRoot = workspaceRoot;
 
         _shell = new Process
         {
@@ -50,6 +54,15 @@ public sealed class CmdRunTool : IDisposable
         // Fusionne stderr dans stdout pour tout le reste de la session : on n'a qu'un
         // seul flux à lire pour détecter la fin d'une commande.
         _shell.StandardInput.WriteLine("exec 2>&1");
+
+        // ~/.dotnet n'est pas dans PATH par défaut (installation locale). On l'ajoute pour que
+        // `dotnet` soit utilisable directement dans le shell de l'agent.
+        var dotnetDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dotnet");
+        if (Directory.Exists(dotnetDir))
+        {
+            _shell.StandardInput.WriteLine($"export PATH=\"{dotnetDir}:$PATH\"");
+            _shell.StandardInput.WriteLine($"export DOTNET_ROOT=\"{dotnetDir}\"");
+        }
     }
 
     private static ProcessStartInfo BuildStartInfo(string workspaceRoot, ILogger<CmdRunTool>? logger)
@@ -91,7 +104,13 @@ public sealed class CmdRunTool : IDisposable
         }
 
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        foreach (var rwPath in new[] { Path.Combine(home, ".nuget"), Path.Combine(home, ".dotnet"), workspaceRoot })
+        // ~/.cache/ms-playwright : le CLI playwright install a besoin d'accès en écriture pour
+        // vérifier/extraire les navigateurs même quand ils sont déjà présents.
+        foreach (var rwPath in new[] {
+            Path.Combine(home, ".nuget"),
+            Path.Combine(home, ".dotnet"),
+            Path.Combine(home, ".cache", "ms-playwright"),
+            workspaceRoot })
         {
             if (Directory.Exists(rwPath))
             {
@@ -145,7 +164,7 @@ public sealed class CmdRunTool : IDisposable
             await _shell.StandardInput.FlushAsync(cancellationToken).ConfigureAwait(false);
 
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(CommandTimeout);
+            timeoutCts.CancelAfter(_commandTimeout);
 
             var output = new StringBuilder();
             string? line;
@@ -165,7 +184,7 @@ public sealed class CmdRunTool : IDisposable
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return $"[timeout après {CommandTimeout.TotalSeconds}s — la commande continue peut-être en arrière-plan et perturber l'appel suivant]";
+            return $"[timeout après {_commandTimeout.TotalSeconds}s — la commande continue peut-être en arrière-plan et perturber l'appel suivant]";
         }
         catch (OperationCanceledException)
         {
@@ -180,6 +199,11 @@ public sealed class CmdRunTool : IDisposable
             _lock.Release();
         }
     }
+
+    // Remet le cwd du shell persistant sur workspaceRoot. À appeler entre les tests qui partagent
+    // le même outil singleton, au cas où un test précédent aurait fait `cd /tmp` ou similaire.
+    public Task ResetWorkingDirectoryAsync(CancellationToken cancellationToken = default)
+        => RunAsync($"cd '{_workspaceRoot}'", cancellationToken);
 
     public void Dispose()
     {

@@ -12,12 +12,12 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Alveus.Web.Activities;
 
 /// <summary>
-/// Base commune à <see cref="RunAgentPrompt"/> et <see cref="RunEvaluatorPrompt"/> : envoie
-/// <see cref="Prompt"/> à l'agent désigné par <see cref="AgentName"/> (résolu via les services à
-/// clé enregistrés dans <c>Program.cs</c>), relance l'agent tant qu'il n'a pas appelé
-/// <see cref="FinishTool"/> (cf. ADR 0019), et gère la persistance de session entre exécutions de
-/// l'activité (cf. ADR 0018). Le traitement de l'issue "Done" — seule étape qui diffère entre les
-/// deux activités — est délégué à <see cref="HandleDoneAsync"/>.
+/// Base commune à <see cref="RunAgentPrompt"/>, <see cref="RunEnvironmentPrompt"/> et consorts :
+/// envoie <see cref="Prompt"/> à l'agent désigné par <see cref="AgentName"/>, relance l'agent tant
+/// qu'il n'a pas appelé <see cref="FinishTool"/> (cf. ADR 0019), et gère la persistance de session
+/// entre exécutions de l'activité (cf. ADR 0018). Le traitement des issues <see cref="AgentOutcome.Pass"/>
+/// et <see cref="AgentOutcome.Fail"/> — seules étapes qui diffèrent entre les activités — est délégué
+/// à <see cref="HandlePassAsync"/> et <see cref="HandleFailAsync"/>.
 /// </summary>
 public abstract class AgentPromptActivityBase : CodeActivity
 {
@@ -27,10 +27,10 @@ public abstract class AgentPromptActivityBase : CodeActivity
     private const int MaxIterations = 6;
 
     private const string ReminderPrompt =
-        "Tu n'as pas appelé l'outil de fin de tâche (Finish). Si la tâche est terminée, appelle-le avec "
-        + "outcome='done'. Si tu as besoin d'informations pour continuer, appelle-le avec outcome='needsmoreinfo' "
-        + "en précisant reason et questions. Si tu ne peux pas continuer, appelle-le avec outcome='blocked' en "
-        + "précisant reason.";
+        "Tu n'as pas appelé l'outil de fin de tâche (Finish). Si la tâche est terminée et réussie, appelle-le avec "
+        + "outcome='pass'. Si la tâche a échoué, appelle-le avec outcome='fail' en précisant reason. Si tu as besoin "
+        + "d'informations pour continuer, appelle-le avec outcome='needmoreinfo' en précisant reason et questions. "
+        + "Si tu ne peux pas continuer, appelle-le avec outcome='blocked' en précisant reason.";
 
     private readonly IAgentSessionCompactionService _compactionService;
 
@@ -89,7 +89,7 @@ public abstract class AgentPromptActivityBase : CodeActivity
             var finish = FindFinishCall(response);
             if (finish is not null)
             {
-                var retryMessage = await TryCompleteAsync(context, finish);
+                var retryMessage = await TryCompleteAsync(context, finish, sessionStatePropertyName);
                 if (retryMessage is null)
                 {
                     return;
@@ -106,52 +106,26 @@ public abstract class AgentPromptActivityBase : CodeActivity
         context.Set(Summary, string.Empty);
         context.Set(Reason, "Nombre maximal de relances atteint sans confirmation finale validée (boucle évitée).");
         PostOutcome(context, $"{context.Activity.Id} → Bloqué (max itérations atteint)");
+        context.SetProperty(sessionStatePropertyName, (string?)null);
         await context.CompleteActivityWithOutcomesAsync(["Blocked"]);
     }
 
     /// <summary>
-    /// Traite l'issue "Done" d'un appel à <see cref="FinishTool"/>. Retourne <c>null</c> si
-    /// l'activité s'est terminée (issue posée via
-    /// <see cref="ActivityExecutionContext.CompleteActivityWithOutcomesAsync"/>), ou un message à
-    /// renvoyer à l'agent si la boucle doit continuer.
+    /// Traite l'issue <see cref="AgentOutcome.Pass"/>. Retourne <c>null</c> si l'activité s'est
+    /// terminée, ou un message de relance si la boucle doit continuer (ex. vérification échouée).
     /// </summary>
-    protected abstract ValueTask<string?> HandleDoneAsync(ActivityExecutionContext context, FinishCall finish);
+    protected abstract ValueTask<string?> HandlePassAsync(ActivityExecutionContext context, FinishCall finish);
 
     /// <summary>
-    /// Traite <see cref="FinishCall.Verdict"/> pour les activités EnvironmentManager et Evaluator
-    /// (cf. ADR 0023) : <see cref="AgentVerdict.Pass"/> termine avec <paramref name="passOutcome"/>,
-    /// <see cref="AgentVerdict.Fail"/> avec "Failed" (en reportant <see cref="FinishCall.Reason"/>),
-    /// <see cref="AgentVerdict.NeedMoreInfo"/> avec "NeedsMoreInfo" (en reportant
-    /// <see cref="FinishCall.Reason"/> et <see cref="FinishCall.Questions"/>). Si
-    /// <see cref="FinishCall.Verdict"/> est absent, retourne un message de relance demandant à
-    /// l'agent de le préciser.
+    /// Traite l'issue <see cref="AgentOutcome.Fail"/>. Par défaut, sort par "Blocked" — les
+    /// activités qui distinguent échec et blocage (EM, Evaluator) surchargent cette méthode.
     /// </summary>
-    protected async ValueTask<string?> HandleVerdictAsync(ActivityExecutionContext context, FinishCall finish, string passOutcome)
+    protected virtual async ValueTask<string?> HandleFailAsync(ActivityExecutionContext context, FinishCall finish)
     {
-        switch (finish.Verdict)
-        {
-            case AgentVerdict.Pass:
-                context.Set(Reason, null);
-                PostOutcome(context, $"{context.Activity.Id} → {passOutcome}");
-                await context.CompleteActivityWithOutcomesAsync([passOutcome]);
-                return null;
-
-            case AgentVerdict.Fail:
-                context.Set(Reason, finish.Reason);
-                PostOutcome(context, $"{context.Activity.Id} → Échec : {finish.Reason}");
-                await context.CompleteActivityWithOutcomesAsync(["Failed"]);
-                return null;
-
-            case AgentVerdict.NeedMoreInfo:
-                context.Set(Reason, finish.Reason);
-                context.Set(Questions, finish.Questions);
-                PostOutcome(context, $"{context.Activity.Id} → NeedsMoreInfo : {finish.Reason}");
-                await context.CompleteActivityWithOutcomesAsync(["NeedsMoreInfo"]);
-                return null;
-
-            default:
-                return "Précise verdict='pass', 'fail' ou 'needmoreinfo' dans ton appel Finish.";
-        }
+        context.Set(Reason, finish.Reason);
+        PostOutcome(context, $"{context.Activity.Id} → Fail (traité comme Blocked) : {finish.Reason}");
+        await context.CompleteActivityWithOutcomesAsync(["Blocked"]);
+        return null;
     }
 
     protected void PostOutcome(ActivityExecutionContext context, string outcomeLabel)
@@ -185,25 +159,41 @@ public abstract class AgentPromptActivityBase : CodeActivity
         return null;
     }
 
-    private async ValueTask<string?> TryCompleteAsync(ActivityExecutionContext context, FinishCall finish)
+    private async ValueTask<string?> TryCompleteAsync(ActivityExecutionContext context, FinishCall finish, string sessionStatePropertyName)
     {
         context.Set(Summary, finish.Summary);
 
         switch (finish.Outcome)
         {
-            case AgentTaskOutcome.Done:
-                return await HandleDoneAsync(context, finish);
+            case AgentOutcome.Pass:
+            {
+                var retryMessage = await HandlePassAsync(context, finish);
+                // Clear session on completion so the next loop iteration starts fresh (see ADR 0018).
+                if (retryMessage is null)
+                    context.SetProperty(sessionStatePropertyName, (string?)null);
+                return retryMessage;
+            }
 
-            case AgentTaskOutcome.NeedsMoreInfo:
+            case AgentOutcome.Fail:
+            {
+                var retryMessage = await HandleFailAsync(context, finish);
+                if (retryMessage is null)
+                    context.SetProperty(sessionStatePropertyName, (string?)null);
+                return retryMessage;
+            }
+
+            case AgentOutcome.NeedMoreInfo:
                 context.Set(Reason, finish.Reason);
                 context.Set(Questions, finish.Questions);
                 PostOutcome(context, $"{context.Activity.Id} → NeedsMoreInfo : {finish.Reason}");
+                context.SetProperty(sessionStatePropertyName, (string?)null);
                 await context.CompleteActivityWithOutcomesAsync(["NeedsMoreInfo"]);
                 return null;
 
-            case AgentTaskOutcome.Blocked:
+            case AgentOutcome.Blocked:
                 context.Set(Reason, finish.Reason);
                 PostOutcome(context, $"{context.Activity.Id} → Bloqué : {finish.Reason}");
+                context.SetProperty(sessionStatePropertyName, (string?)null);
                 await context.CompleteActivityWithOutcomesAsync(["Blocked"]);
                 return null;
 

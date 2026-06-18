@@ -28,7 +28,7 @@ public sealed class RunAgentPrompt : AgentPromptActivityBase
     {
     }
 
-    protected override async ValueTask<string?> HandleDoneAsync(ActivityExecutionContext context, FinishCall finish)
+    protected override async ValueTask<string?> HandlePassAsync(ActivityExecutionContext context, FinishCall finish)
     {
         // Résolution tardive : essaie d'abord la clé équipe, se rabat sur le service non-keyed (tests, usage isolé).
         var sp = context.GetRequiredService<IServiceProvider>();
