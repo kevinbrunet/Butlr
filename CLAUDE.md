@@ -32,7 +32,7 @@ Si une décision change, **mets à jour l'ADR** (ou crée-en un nouveau). Ne mod
 | `mcp-home` tests | xUnit | `mcp-home/tests/Butlr.McpHome.Tests/` |
 | `carlson` | Python 3.11+, Pipecat, `mcp` SDK, faster-whisper, Piper, openWakeWord | venv + `pip install -e .[all,dev]` |
 | LLM runtime | llama.cpp server (OpenAI-compat, CUDA) | Qwen 2.5 7B Instruct GGUF Q5_K_M ; flag `--jinja` pour tool calling |
-| Scripts setup | PowerShell 7+ (Windows) | `scripts/` — à lancer depuis *Developer PowerShell for VS 2022* |
+| Scripts setup | Bash (Fedora Workstation) | `scripts/` — requiert CUDA Toolkit, cmake, jq, curl |
 
 ## Conventions importantes
 
@@ -52,17 +52,15 @@ dotnet run --project mcp-home/src/Butlr.McpHome  # http://localhost:5090
 
 # carlson
 cd carlson
-python -m venv .venv && . .venv/bin/activate  # (ou .venv\Scripts\Activate.ps1 sur Win)
+python3 -m venv .venv && . .venv/bin/activate
 pip install -e .[all,dev]
 pytest
 carlson
 
-# stack locale (Windows, Developer PowerShell for VS 2022)
+# stack locale (Fedora Workstation) — LLM distant sur 192.168.1.85:8083
 cd scripts
-.\Check-Prereqs.ps1
-.\Build-Llama.ps1
-.\Get-LlamaModel.ps1
-.\Start-LlamaServer.ps1
+./check-prereqs.sh
+./test-llama-server.sh
 ```
 
 ## Ce qu'il NE faut PAS faire

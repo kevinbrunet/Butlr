@@ -19,7 +19,7 @@ Thumbs.db
 .env
 .env.*
 !.env.example
-scripts/env.ps1
+scripts/env.sh
 
 # --- OS / divers ---
 *.log

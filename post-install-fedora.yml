@@ -1,0 +1,658 @@
+---
+# post-install-fedora.yml — Setup post-installation Fedora Workstation
+#
+# Collections requises (une seule fois) :
+#   ansible-galaxy collection install ansible.posix community.general
+#
+# Usage :
+#   # Secure Boot actif → phase 1 (enrollment MOK) PUIS reboot PUIS phase 2 :
+#   sudo ansible-playbook post-install-fedora.yml --tags phase1
+#   sudo ansible-playbook post-install-fedora.yml --tags phase2
+#
+#   # Secure Boot désactivé → phase 2 directement (comportement par défaut) :
+#   sudo ansible-playbook post-install-fedora.yml
+#
+# Architecture containers :
+#   rootful  → llama-server (GPU, systemd natif)
+#   rootless → Open WebUI (pointe sur llama-server via API OpenAI-compat)
+#   Réseau   → Network=host sur les containers.
+#
+# ⚠ Adapter les variables dans la section vars avant d'exécuter.
+
+- name: Post-install Fedora Workstation
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+
+  vars:
+    # -------------------------------------------------------------------------
+    # CONFIGURATION — À ADAPTER
+    # -------------------------------------------------------------------------
+    luks_partition: /dev/nvme0n1p3
+    real_user: "{{ lookup('env', 'SUDO_USER') | default('kevinbrunet') }}"
+    # llama.cpp
+    llama_src_dir: /opt/llama.cpp
+    llama_install_dir: /usr/local/bin
+    llama_models_dir: /opt/llama-models
+    # ~ URL et fichier à vérifier selon le modèle exact souhaité.
+    # Adapter la quantization (Q4_K_M ↔ Q5_K_M) selon la VRAM disponible.
+    llama_model_url: "https://huggingface.co/bartowski/Qwen3-30B-A3B-GGUF/resolve/main/Qwen3-30B-A3B-Q4_K_M.gguf"
+    llama_model_file: "Qwen3-30B-A3B-Q4_K_M.gguf"
+    llama_host: "0.0.0.0"
+    llama_port: "8081"        # port interne — ne pas exposer directement
+    llama_ctx: "32768"
+    llama_ngl: "99"
+    # ~ --jinja requis pour le tool calling OpenAI-compat — à confirmer
+    # avec la version llama.cpp buildée.
+    llama_extra_flags: "--jinja"
+
+    # llama-proxy (reverse proxy devant llama-server)
+    llama_proxy_port_direct: "8082"   # Open WebUI — pas d'injection
+    llama_proxy_port_inject: "8083"   # Butlr/carlson — injecte enable_thinking=false
+
+  pre_tasks:
+
+    - name: Résoudre l'utilisateur réel
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ real_user }}"
+      tags: always
+
+    - name: Calculer les facts dérivés
+      ansible.builtin.set_fact:
+        real_home: "{{ ansible_facts.getent_passwd[real_user][4] }}"
+        real_uid: "{{ ansible_facts.getent_passwd[real_user][2] }}"
+        xdg_runtime_dir: "/run/user/{{ ansible_facts.getent_passwd[real_user][2] }}"
+      tags: always
+
+    # -- Pre-flight -----------------------------------------------------------
+
+    - name: "Pre-flight : vérifier la partition LUKS"
+      ansible.builtin.stat:
+        path: "{{ luks_partition }}"
+      register: luks_stat
+      tags: always
+
+    - name: "Pre-flight : assertion partition LUKS accessible"
+      ansible.builtin.assert:
+        that: luks_stat.stat.exists
+        fail_msg: "Partition {{ luks_partition }} introuvable. Ajuster luks_partition."
+      tags: always
+
+    - name: "Pre-flight : assertion home utilisateur accessible"
+      ansible.builtin.assert:
+        that: real_home | length > 0
+        fail_msg: "Home de {{ real_user }} introuvable."
+      tags: always
+
+    - name: "Pre-flight : version Fedora"
+      ansible.builtin.command: cat /etc/fedora-release
+      register: fedora_release
+      changed_when: false
+      tags: always
+
+    - name: "Pre-flight : résumé"
+      ansible.builtin.debug:
+        msg: "{{ fedora_release.stdout }} | user={{ real_user }} | home={{ real_home }}"
+      tags: always
+
+    # -- Détection Secure Boot / MOK -----------------------------------------
+
+    - name: "SB/MOK : détecter l'état Secure Boot"
+      ansible.builtin.shell: mokutil --sb-state 2>/dev/null || true
+      register: sb_state_raw
+      changed_when: false
+      failed_when: false
+      tags: always
+
+    - name: "SB/MOK : vérifier la présence du certificat MOK akmods"
+      ansible.builtin.stat:
+        path: /etc/pki/akmods/certs/public_key.der
+      register: mok_cert_stat
+      tags: always
+
+    - name: "SB/MOK : tester l'enrollment de la clé MOK"
+      ansible.builtin.shell: mokutil --test-key /etc/pki/akmods/certs/public_key.der 2>&1 || true
+      register: mok_test_raw
+      changed_when: false
+      when: mok_cert_stat.stat.exists
+      tags: always
+
+    - name: "SB/MOK : calculer les facts"
+      ansible.builtin.set_fact:
+        sb_enabled: "{{ 'SecureBoot enabled' in sb_state_raw.stdout }}"
+        mok_enrolled: >-
+          {{
+            mok_cert_stat.stat.exists and
+            ('is already enrolled' in ((mok_test_raw | default({})).stdout | default('')))
+          }}
+      tags: always
+
+    - name: "SB/MOK : état détecté"
+      ansible.builtin.debug:
+        msg:
+          - "Secure Boot actif : {{ sb_enabled }}"
+          - "MOK NVIDIA enrollé : {{ mok_enrolled }}"
+      tags: always
+
+  tasks:
+
+    # =========================================================================
+    # PHASE 1 — Secure Boot : génération et enrollment de la clé MOK
+    #
+    # Doit être suivi d'un reboot avant Phase 2.
+    # Ne s'exécute QUE si --tags phase1 est passé explicitement.
+    # =========================================================================
+
+    - name: PHASE 1 — Secure Boot / MOK enrollment
+      tags: [phase1, never]
+      block:
+
+        - name: "Phase1 : mise à jour système"
+          ansible.builtin.dnf:
+            name: "*"
+            state: latest
+
+        - name: "Phase1 : installer RPM Fusion (pour akmods)"
+          ansible.builtin.dnf:
+            name:
+              - "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-{{ ansible_distribution_major_version }}.noarch.rpm"
+              - "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-{{ ansible_distribution_major_version }}.noarch.rpm"
+            state: present
+            disable_gpg_check: true
+
+        - name: "Phase1 : installer akmods (fournit kmodgenca)"
+          ansible.builtin.dnf:
+            name: akmods
+            state: present
+
+        - name: "Phase1 : générer la clé MOK (kmodgenca)"
+          ansible.builtin.command: kmodgenca -a
+          args:
+            creates: /etc/pki/akmods/certs/public_key.der
+
+        - name: "Phase1 : instructions enrollment MOK"
+          ansible.builtin.pause:
+            prompt: |
+
+              ┌─────────────────────────────────────────────────────────────────┐
+              │  ENROLLMENT MOK — INSTRUCTIONS                                  │
+              ├─────────────────────────────────────────────────────────────────┤
+              │  Un mot de passe va vous être demandé.                           │
+              │  Ce mot de passe est utilisé UNE SEULE FOIS au prochain boot.    │
+              │                                                                 │
+              │  Recommandation : utilisez quelque chose de simple (ex: 0000)   │
+              │  Le clavier est en QWERTY dans l'écran MOK Manager au boot.     │
+              │                                                                 │
+              │  Séquence au prochain reboot (écran bleu MOK Manager) :         │
+              │    1. Enroll MOK → Continue → Yes                               │
+              │    2. Entrer le mot de passe choisi ici                          │
+              │    3. Reboot                                                    │
+              │                                                                 │
+              │  Après ce reboot, relancer :                                    │
+              │    sudo ansible-playbook post-install-fedora.yml --tags phase2  │
+              └─────────────────────────────────────────────────────────────────┘
+
+              Appuyez sur Entrée pour lancer mokutil --import (le mot de passe vous sera demandé)
+
+        # ⚠ mokutil --import est interactif (demande le mot de passe 2×).
+        # Fonctionne en connection: local depuis un terminal TTY.
+        - name: "Phase1 : importer la clé MOK dans la base UEFI"
+          ansible.builtin.command: mokutil --import /etc/pki/akmods/certs/public_key.der
+          changed_when: true
+
+        - name: "Phase1 : clé MOK importée"
+          ansible.builtin.debug:
+            msg: "Clé MOK importée. Rebooter pour enrollment dans MOK Manager (écran bleu UEFI)."
+
+        - name: "Phase1 : demander confirmation de reboot"
+          ansible.builtin.pause:
+            prompt: "Rebooter maintenant ? (o pour oui, Entrée pour passer)"
+          register: reboot_confirm
+
+        - name: "Phase1 : reboot MOK"
+          ansible.builtin.reboot:
+            msg: "Reboot Ansible — enrollment MOK Manager à l'écran suivant"
+            reboot_timeout: 600
+          when: reboot_confirm.user_input | lower == 'o'
+
+    # =========================================================================
+    # PHASE 2 — Installation complète
+    #
+    # Comportement par défaut (sans --tags). Peut aussi être ciblé avec --tags phase2.
+    # =========================================================================
+
+    - name: PHASE 2 — Installation complète
+      tags: phase2
+      block:
+
+        - name: "Phase2 : assertion cohérence Secure Boot / MOK"
+          ansible.builtin.assert:
+            that: not (sb_enabled | bool) or (mok_enrolled | bool)
+            fail_msg: >
+              Secure Boot actif mais MOK NVIDIA non enrollé.
+              Exécuter --tags phase1 puis rebooter avant --tags phase2.
+
+        # -- 1/8 Mise à jour système ------------------------------------------
+
+        - name: "1/8 — Mise à jour système"
+          ansible.builtin.dnf:
+            name: "*"
+            state: latest
+
+        # -- 2/8 RPM Fusion + NVIDIA ------------------------------------------
+
+        - name: "2/8 — Installer RPM Fusion"
+          ansible.builtin.dnf:
+            name:
+              - "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-{{ ansible_distribution_major_version }}.noarch.rpm"
+              - "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-{{ ansible_distribution_major_version }}.noarch.rpm"
+            state: present
+            disable_gpg_check: true
+
+        - name: "2/8 — Installer drivers NVIDIA + kernel headers + outils build"
+          ansible.builtin.dnf:
+            name:
+              - akmod-nvidia
+              - xorg-x11-drv-nvidia
+              - xorg-x11-drv-nvidia-cuda
+              - xorg-x11-drv-nvidia-cuda-libs
+              - libva-nvidia-driver
+              - kernel-devel
+              - kernel-headers
+              - akmods
+              - cmake
+              - gcc-c++
+              - git
+            state: present
+
+        # ⚠ Si Secure Boot actif, akmods signe automatiquement avec la clé
+        # enrollée dans /etc/pki/akmods/ (celle de la Phase 1).
+        - name: "2/8 — Builder le module akmods-nvidia (~2-5 min)"
+          ansible.builtin.command: akmods --force
+          changed_when: true
+          timeout: 600
+
+        - name: "2/8 — Régénérer l'initramfs"
+          ansible.builtin.command: dracut --force
+          changed_when: true
+
+        # -- 3/8 TPM2 + LUKS cryptenroll --------------------------------------
+
+        - name: "3/8 — Installer tpm2-tools + tpm2-abrmd"
+          ansible.builtin.dnf:
+            name:
+              - tpm2-tools
+              - tpm2-abrmd
+            state: present
+
+        - name: "3/8 — Vérifier si le slot TPM2 est déjà enrollé"
+          ansible.builtin.shell: |
+            cryptsetup luksDump "{{ luks_partition }}" 2>/dev/null | grep -q "systemd-tpm2" \
+              && echo "enrolled" || echo "not_enrolled"
+          register: tpm2_status
+          changed_when: false
+
+        - name: "3/8 — Régénérer l'initramfs avant cryptenroll"
+          ansible.builtin.command: dracut --force
+          changed_when: true
+          when: tpm2_status.stdout == "not_enrolled"
+
+        - name: "3/8 — Confirmation avant enrollment TPM2"
+          ansible.builtin.pause:
+            prompt: "Enrollment TPM2 sur {{ luks_partition }} — Entrée pour continuer (Ctrl+C pour annuler)"
+          when: tpm2_status.stdout == "not_enrolled"
+
+        - name: "3/8 — Enroller LUKS dans le TPM2 (PCRs 7+11+14)"
+          ansible.builtin.command: >
+            systemd-cryptenroll
+            --wipe-slot tpm2
+            --tpm2-device auto
+            --tpm2-pcrs 7+11+14
+            {{ luks_partition }}
+          changed_when: true
+          when: tpm2_status.stdout == "not_enrolled"
+
+        - name: "3/8 — TPM2 déjà enrollé (skip)"
+          ansible.builtin.debug:
+            msg: "Slot TPM2 déjà présent sur {{ luks_partition }} — étape ignorée."
+          when: tpm2_status.stdout == "enrolled"
+
+        # -- 4/8 Podman + NVIDIA Container Toolkit ----------------------------
+
+        - name: "4/8 — Installer Podman"
+          ansible.builtin.dnf:
+            name:
+              - podman
+              - podman-compose
+            state: present
+
+        - name: "4/8 — Activer podman.socket rootful"
+          ansible.builtin.systemd:
+            name: podman.socket
+            enabled: true
+            state: started
+
+        - name: "4/8 — Ajouter le repo NVIDIA Container Toolkit"
+          ansible.builtin.get_url:
+            url: https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo
+            dest: /etc/yum.repos.d/nvidia-container-toolkit.repo
+            mode: '0644'
+
+        - name: "4/8 — Installer NVIDIA Container Toolkit"
+          ansible.builtin.dnf:
+            name: nvidia-container-toolkit
+            state: present
+
+        - name: "4/8 — Créer le répertoire CDI"
+          ansible.builtin.file:
+            path: /etc/cdi
+            state: directory
+            mode: '0755'
+
+        # ⚠ nvidia-ctk cdi generate nécessite le driver NVIDIA chargé (NVML).
+        # Si le driver n'est pas encore chargé (premier boot post-install),
+        # nvidia-cdi-refresh.service regénère la spec au démarrage suivant.
+        - name: "4/8 — Générer la spec CDI NVIDIA"
+          ansible.builtin.command: nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+          register: cdi_gen
+          changed_when: true
+          failed_when: false
+
+        - name: "4/8 — Résultat CDI"
+          ansible.builtin.debug:
+            msg: >-
+              {{
+                'CDI spec générée : /etc/cdi/nvidia.yaml'
+                if cdi_gen.rc == 0
+                else 'CDI non générée (driver pas encore chargé) — nvidia-cdi-refresh.service s''en chargera au prochain boot'
+              }}
+
+        # -- 5/8 llama.cpp (build, install, modèle, service systemd) -------------
+
+        - name: "5/8 — Créer les répertoires llama.cpp"
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            mode: '0755'
+          loop:
+            - "{{ llama_src_dir }}"
+            - "{{ llama_models_dir }}"
+
+        # On prend HEAD master. ~ À épingler sur un tag stable avant prod.
+        - name: "5/8 — Cloner / mettre à jour llama.cpp"
+          ansible.builtin.git:
+            repo: https://github.com/ggerganov/llama.cpp
+            dest: "{{ llama_src_dir }}"
+            version: master
+            update: true
+          register: llama_git
+
+        - name: "5/8 — Vérifier si llama-server est déjà installé"
+          ansible.builtin.stat:
+            path: "{{ llama_install_dir }}/llama-server"
+          register: llama_server_stat
+
+        # Rebuild si nouveau commit depuis le dernier run, ou binaire absent.
+        - name: "5/8 — Configurer CMake (GGML_CUDA=ON)"
+          ansible.builtin.command:
+            cmd: cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
+            chdir: "{{ llama_src_dir }}"
+          when: llama_git.changed or not llama_server_stat.stat.exists
+          changed_when: true
+
+        - name: "5/8 — Builder llama.cpp (~5-15 min)"
+          ansible.builtin.command:
+            cmd: cmake --build build --config Release --parallel
+            chdir: "{{ llama_src_dir }}"
+          when: llama_git.changed or not llama_server_stat.stat.exists
+          changed_when: true
+          timeout: 1800
+
+        - name: "5/8 — Installer llama-server dans {{ llama_install_dir }}"
+          ansible.builtin.copy:
+            src: "{{ llama_src_dir }}/build/bin/llama-server"
+            dest: "{{ llama_install_dir }}/llama-server"
+            mode: '0755'
+            remote_src: true
+          when: llama_git.changed or not llama_server_stat.stat.exists
+
+        - name: "5/8 — Vérifier si le modèle GGUF est déjà présent"
+          ansible.builtin.stat:
+            path: "{{ llama_models_dir }}/{{ llama_model_file }}"
+          register: gguf_stat
+
+        # curl -C - reprend le téléchargement si interrompu (fichier volumineux).
+        # ~ Taille variable selon la quantization choisie — prévoir plusieurs GB.
+        - name: "5/8 — Télécharger le modèle GGUF ({{ llama_model_file }})"
+          ansible.builtin.shell: >
+            curl -L -C - --progress-bar --fail
+            -o "{{ llama_models_dir }}/{{ llama_model_file }}"
+            "{{ llama_model_url }}"
+          when: not gguf_stat.stat.exists
+          changed_when: true
+          timeout: 14400
+
+        # ⚠ --jinja : requis pour le tool calling OpenAI-compat ~
+        # ⚠ Multi-ligne avec \ dans ExecStart : chaque continuation doit
+        #   être sur la même ligne logique pour systemd — on utilise une seule
+        #   ligne via la variable llama_extra_flags.
+        - name: "5/8 — Écrire l'unité systemd llama-server"
+          ansible.builtin.copy:
+            dest: /etc/systemd/system/llama-server.service
+            mode: '0644'
+            content: |
+              [Unit]
+              Description=llama.cpp server ({{ llama_model_file }})
+              After=network.target
+              Wants=network.target
+
+              [Service]
+              Type=simple
+              ExecStart={{ llama_install_dir }}/llama-server -m {{ llama_models_dir }}/{{ llama_model_file }} -ngl {{ llama_ngl }} -c {{ llama_ctx }} --host {{ llama_host }} --port {{ llama_port }} {{ llama_extra_flags }}
+              Restart=on-failure
+              RestartSec=10
+              TimeoutStartSec=300
+
+              [Install]
+              WantedBy=multi-user.target
+
+        - name: "5/8 — Activer et démarrer llama-server"
+          ansible.builtin.systemd:
+            name: llama-server.service
+            daemon_reload: true
+            enabled: true
+            state: restarted
+
+        - name: "5/8 — Attendre que llama-server soit prêt (/health)"
+          ansible.builtin.uri:
+            url: "http://127.0.0.1:{{ llama_port }}/health"
+            method: GET
+            status_code: 200
+          register: llama_health
+          until: llama_health.status == 200
+          retries: 60
+          delay: 5
+
+        # -- 6/8 llama-proxy (reverse proxy Go, build + service) ---------------
+
+        - name: "6/8 — Installer Go"
+          ansible.builtin.dnf:
+            name: golang
+            state: present
+
+        - name: "6/8 — Vérifier si llama-proxy est déjà installé"
+          ansible.builtin.stat:
+            path: /usr/local/bin/llama-proxy
+          register: proxy_bin_stat
+
+        - name: "6/8 — Vérifier si les sources ont changé (dernier jour)"
+          ansible.builtin.find:
+            paths: "{{ playbook_dir }}/llama-proxy"
+            patterns: "*.go"
+            age: "-1d"
+          register: proxy_sources_changed
+          when: proxy_bin_stat.stat.exists
+
+        - name: "6/8 — Builder llama-proxy (stdlib uniquement, rapide)"
+          ansible.builtin.command:
+            cmd: go build -o /usr/local/bin/llama-proxy .
+            chdir: "{{ playbook_dir }}/llama-proxy"
+          when: >
+            not proxy_bin_stat.stat.exists or
+            (proxy_sources_changed is defined and proxy_sources_changed.files | length > 0)
+          changed_when: true
+          environment:
+            GOPATH: /root/go
+            GOCACHE: /root/.cache/go-build
+
+        - name: "6/8 — Écrire l'unité systemd llama-proxy"
+          ansible.builtin.copy:
+            dest: /etc/systemd/system/llama-proxy.service
+            mode: '0644'
+            content: |
+              [Unit]
+              Description=llama.cpp proxy (direct :{{ llama_proxy_port_direct }}, inject :{{ llama_proxy_port_inject }})
+              After=llama-server.service
+              Wants=llama-server.service
+
+              [Service]
+              Type=simple
+              ExecStart=/usr/local/bin/llama-proxy --target http://127.0.0.1:{{ llama_port }} --port-direct {{ llama_proxy_port_direct }} --port-inject {{ llama_proxy_port_inject }}
+              Restart=always
+              RestartSec=5
+
+              [Install]
+              WantedBy=multi-user.target
+
+        - name: "6/8 — Activer et démarrer llama-proxy"
+          ansible.builtin.systemd:
+            name: llama-proxy.service
+            daemon_reload: true
+            enabled: true
+            state: restarted
+
+        - name: "6/8 — Ouvrir les ports proxy dans le firewall"
+          ansible.posix.firewalld:
+            port: "{{ item }}/tcp"
+            permanent: true
+            immediate: true
+            state: enabled
+          loop:
+            - "{{ llama_proxy_port_direct }}"
+            - "{{ llama_proxy_port_inject }}"
+
+        # -- 7/8 Open WebUI (rootless, Quadlet user) --------------------------
+
+        - name: "7/8 — Créer le volume rootless open-webui"
+          ansible.builtin.command: podman volume create open-webui
+          become: true
+          become_user: "{{ real_user }}"
+          environment:
+            XDG_RUNTIME_DIR: "{{ xdg_runtime_dir }}"
+          register: owui_vol
+          changed_when: owui_vol.rc == 0
+          failed_when: owui_vol.rc != 0 and 'already exists' not in owui_vol.stderr
+
+        - name: "7/8 — Créer le répertoire Quadlet user"
+          ansible.builtin.file:
+            path: "{{ real_home }}/.config/containers/systemd"
+            state: directory
+            owner: "{{ real_user }}"
+            group: "{{ real_user }}"
+            mode: '0755'
+
+        # ⚠ Network=host : le container rootless partage le namespace réseau
+        # de l'hôte → 127.0.0.1:{{ llama_port }} atteint llama-server.
+        # ⚠ OPENAI_API_KEY doit être non-vide — la valeur est ignorée par llama-server.
+        - name: "7/8 — Écrire le Quadlet Open WebUI"
+          ansible.builtin.copy:
+            dest: "{{ real_home }}/.config/containers/systemd/open-webui.container"
+            owner: "{{ real_user }}"
+            group: "{{ real_user }}"
+            mode: '0644'
+            content: |
+              [Container]
+              Image=ghcr.io/open-webui/open-webui:main
+              ContainerName=open-webui
+              Network=host
+              Volume=open-webui:/app/backend/data:z
+              Environment=OPENAI_API_BASE_URL=http://127.0.0.1:{{ llama_proxy_port_direct }}/v1
+              Environment=OPENAI_API_KEY=sk-not-needed
+
+              [Service]
+              Restart=always
+              TimeoutStartSec=120
+
+              [Install]
+              WantedBy=default.target
+
+        - name: "7/8 — Activer le linger pour {{ real_user }}"
+          ansible.builtin.command: loginctl enable-linger "{{ real_user }}"
+          changed_when: true
+
+        - name: "7/8 — Recharger le daemon systemd user"
+          ansible.builtin.shell: >
+            XDG_RUNTIME_DIR="{{ xdg_runtime_dir }}"
+            DBUS_SESSION_BUS_ADDRESS="unix:path={{ xdg_runtime_dir }}/bus"
+            systemctl --user daemon-reload
+          become: true
+          become_user: "{{ real_user }}"
+          changed_when: false
+
+        - name: "7/8 — Info Open WebUI"
+          ansible.builtin.debug:
+            msg: >-
+              Open WebUI configuré (démarrage auto au boot via linger).
+              Pour démarrer maintenant sans sudo : systemctl --user start open-webui
+
+        # -- 8/8 Steam (Flatpak) ---------------------------------------------
+
+        - name: "8/8 — Ajouter Flathub (user)"
+          community.general.flatpak_remote:
+            name: flathub
+            flatpakrepo_url: https://dl.flathub.org/repo/flathub.flatpakrepo
+            method: user
+            state: present
+          become: true
+          become_user: "{{ real_user }}"
+
+        - name: "8/8 — Installer Steam via Flatpak"
+          community.general.flatpak:
+            name: com.valvesoftware.Steam
+            remote: flathub
+            method: user
+            state: present
+          become: true
+          become_user: "{{ real_user }}"
+
+        - name: "8/8 — Libs 32-bit pour Steam"
+          ansible.builtin.dnf:
+            name:
+              - glibc.i686
+              - libgcc.i686
+            state: present
+          failed_when: false
+
+        # -- Récapitulatif ----------------------------------------------------
+
+        - name: Récapitulatif
+          ansible.builtin.debug:
+            msg:
+              - "╔══════════════════════════════════════════════════════════════╗"
+              - "║            POST-INSTALL TERMINÉ                              ║"
+              - "╠══════════════════════════════════════════════════════════════╣"
+              - "║  llama-server → http://localhost:{{ llama_port }}  (systemd, GPU)       ║"
+              - "║  llama-proxy  → :{{ llama_proxy_port_direct }} direct  :{{ llama_proxy_port_inject }} inject           ║"
+              - "║  Open WebUI   → http://localhost:8080  (rootless container) ║"
+              - "║  Steam        → Flatpak                                     ║"
+              - "╠══════════════════════════════════════════════════════════════╣"
+              - "║  VÉRIFICATIONS MANUELLES REQUISES                           ║"
+              - "║  1. nvidia-smi                              (GPU chargé)    ║"
+              - "║  2. systemctl status llama-server           (service actif) ║"
+              - "║  3. systemctl status llama-proxy            (proxy actif)   ║"
+              - "║  4. curl http://localhost:{{ llama_port }}/v1/models  (API interne)  ║"
+              - "║  5. systemctl --user start open-webui       (si pas encore) ║"
+              - "║  6. Reboot → LUKS/TPM2 sans passphrase                     ║"
+              - "╚══════════════════════════════════════════════════════════════╝"

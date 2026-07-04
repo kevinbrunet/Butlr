@@ -30,15 +30,15 @@ Conventions à respecter dans tout le repo. Objectif : homogénéité et lisibil
 - **Pas de magic numbers** : toute constante numérique significative a un nom (ex. `FILLER_DELAY_MS`, pas `500`).
 - **Tests** : `pytest`. Nom `test_<module>.py`. Pas de classes de test sauf si grouping sémantique fort.
 
-## PowerShell (scripts/)
+## Bash (scripts/)
 
-- **PS 7+** (`#Requires -Version 7` en tête).
-- **Strict mode** : `Set-StrictMode -Version Latest` + `$ErrorActionPreference = 'Stop'`.
-- **Nommage Verb-Noun** pour les fichiers de script (`Build-Llama.ps1`, `Get-LlamaModel.ps1`).
-- **Dot-source `_Lib.ps1`** en tête, puis `Import-BtlrEnv`.
-- **Exit codes natifs** : après toute commande native (`curl.exe`, `cmake`, `git`), check explicite de `$LASTEXITCODE` — `$ErrorActionPreference=Stop` ne l'attrape pas.
-- **`curl.exe` explicite** pour les gros downloads (pas l'alias PS de `Invoke-WebRequest`).
-- **Chemins** : `Join-Path` plutôt que concaténation de strings. `Test-Path -LiteralPath`.
+- **`set -euo pipefail`** en tête de chaque script.
+- **Nommage kebab-case minuscule** (`build-llama.sh`, `get-llama-model.sh`).
+- **Source `_lib.sh`** en tête via `. "$(dirname "$(realpath "$0")")/_lib.sh"`, puis `import_btlr_env`.
+- **Exit codes** : `set -e` attrape les échecs ; pas de check `$?` manuel sauf dans les blocs `if`.
+- **`curl` avec `--fail`** pour les downloads — exit != 0 sur HTTP 4xx/5xx.
+- **Chemins** : variables avec `${}`, pas de concaténation nue. `realpath` pour les chemins absolus.
+- **Tableaux bash** : `declare -a` ou assignation directe `arr=(...)` ; `"${arr[@]}"` pour l'expansion sûre.
 
 ## Markdown (docs/)
 
