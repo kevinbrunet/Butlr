@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Alveus.Web/Alveus.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Alveus.Web.Tests/Alveus.Web.Tests.csproj" />
+  </Folder>
+</Solution>

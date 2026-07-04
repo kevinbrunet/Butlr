@@ -1,0 +1,189 @@
+using System.Text.Json;
+using Alveus.Web.Tools;
+
+namespace Alveus.Web.Tests.Tools;
+
+public sealed class FinishCallTests
+{
+    [Fact]
+    public void FromArguments_Pass_ParsesSummaryAndOutcome()
+    {
+        var arguments = new Dictionary<string, object?>
+        {
+            ["summary"] = "Fichier créé.",
+            ["outcome"] = "pass",
+        };
+
+        var finish = FinishCall.FromArguments(arguments);
+
+        Assert.NotNull(finish);
+        Assert.Equal(AgentOutcome.Pass, finish!.Outcome);
+        Assert.Equal("Fichier créé.", finish.Summary);
+        Assert.Null(finish.Reason);
+        Assert.Null(finish.Questions);
+    }
+
+    [Fact]
+    public void FromArguments_NeedMoreInfo_ParsesReasonAndQuestions()
+    {
+        var arguments = new Dictionary<string, object?>
+        {
+            ["summary"] = "Bloqué avant de continuer.",
+            ["outcome"] = "needmoreinfo",
+            ["reason"] = "Le nom du fichier cible n'est pas précisé.",
+            ["questions"] = new[] { "Quel est le nom du fichier ?", "Quel répertoire ?" },
+        };
+
+        var finish = FinishCall.FromArguments(arguments);
+
+        Assert.NotNull(finish);
+        Assert.Equal(AgentOutcome.NeedMoreInfo, finish!.Outcome);
+        Assert.Equal("Le nom du fichier cible n'est pas précisé.", finish.Reason);
+        Assert.Equal(["Quel est le nom du fichier ?", "Quel répertoire ?"], finish.Questions);
+    }
+
+    [Fact]
+    public void FromArguments_Blocked_ParsesReason()
+    {
+        var arguments = new Dictionary<string, object?>
+        {
+            ["summary"] = "Impossible de continuer.",
+            ["outcome"] = "blocked",
+            ["reason"] = "Le service externe requis n'est pas accessible.",
+        };
+
+        var finish = FinishCall.FromArguments(arguments);
+
+        Assert.NotNull(finish);
+        Assert.Equal(AgentOutcome.Blocked, finish!.Outcome);
+        Assert.Equal("Le service externe requis n'est pas accessible.", finish.Reason);
+    }
+
+    [Fact]
+    public void FromArguments_Fail_ParsesReason()
+    {
+        var arguments = new Dictionary<string, object?>
+        {
+            ["summary"] = "Vérification échouée.",
+            ["outcome"] = "fail",
+            ["reason"] = "Le test d'intégration a retourné une erreur 500.",
+        };
+
+        var finish = FinishCall.FromArguments(arguments);
+
+        Assert.NotNull(finish);
+        Assert.Equal(AgentOutcome.Fail, finish!.Outcome);
+        Assert.Equal("Le test d'intégration a retourné une erreur 500.", finish.Reason);
+    }
+
+    [Fact]
+    public void FromArguments_ArgumentsAsJsonElements_AreParsed()
+    {
+        using var document = JsonDocument.Parse(
+            """{"summary":"s","outcome":"needmoreinfo","reason":"r","questions":["a","b"]}""");
+
+        var arguments = new Dictionary<string, object?>
+        {
+            ["summary"] = document.RootElement.GetProperty("summary"),
+            ["outcome"] = document.RootElement.GetProperty("outcome"),
+            ["reason"] = document.RootElement.GetProperty("reason"),
+            ["questions"] = document.RootElement.GetProperty("questions"),
+        };
+
+        var finish = FinishCall.FromArguments(arguments);
+
+        Assert.NotNull(finish);
+        Assert.Equal(AgentOutcome.NeedMoreInfo, finish!.Outcome);
+        Assert.Equal("s", finish.Summary);
+        Assert.Equal("r", finish.Reason);
+        Assert.Equal(["a", "b"], finish.Questions);
+    }
+
+    [Fact]
+    public void FromArguments_UnknownOutcome_ReturnsNull()
+    {
+        var arguments = new Dictionary<string, object?> { ["summary"] = "s", ["outcome"] = "frobnicate" };
+
+        Assert.Null(FinishCall.FromArguments(arguments));
+    }
+
+    [Fact]
+    public void FromArguments_MissingOutcome_ReturnsNull()
+    {
+        var arguments = new Dictionary<string, object?> { ["summary"] = "s" };
+
+        Assert.Null(FinishCall.FromArguments(arguments));
+    }
+
+    [Fact]
+    public void FromArguments_NullArguments_ReturnsNull()
+    {
+        Assert.Null(FinishCall.FromArguments(null));
+    }
+
+    [Fact]
+    public void FromArguments_MissingDownstreamInstructions_IsNull()
+    {
+        var arguments = new Dictionary<string, object?>
+        {
+            ["summary"] = "Documentation mise à jour.",
+            ["outcome"] = "pass",
+        };
+
+        var finish = FinishCall.FromArguments(arguments);
+
+        Assert.NotNull(finish);
+        Assert.Null(finish!.DownstreamInstructions);
+    }
+
+    [Fact]
+    public void FromArguments_DownstreamInstructions_ParsesTargetAndInstruction()
+    {
+        var arguments = new Dictionary<string, object?>
+        {
+            ["summary"] = "ADR 0027 ajouté.",
+            ["outcome"] = "pass",
+            ["downstreamInstructions"] = new List<object?>
+            {
+                new Dictionary<string, object?> { ["target"] = "worker", ["instruction"] = "Utiliser le nouveau client HTTP." },
+                new Dictionary<string, object?> { ["target"] = "userdoc", ["instruction"] = "Documenter le nouveau endpoint." },
+            },
+        };
+
+        var finish = FinishCall.FromArguments(arguments);
+
+        Assert.NotNull(finish);
+        Assert.NotNull(finish!.DownstreamInstructions);
+        Assert.Equal(2, finish.DownstreamInstructions!.Count);
+        Assert.Equal(new DownstreamInstruction("worker", "Utiliser le nouveau client HTTP."), finish.DownstreamInstructions[0]);
+        Assert.Equal(new DownstreamInstruction("userdoc", "Documenter le nouveau endpoint."), finish.DownstreamInstructions[1]);
+    }
+
+    [Fact]
+    public void FromArguments_DownstreamInstructions_ArgumentsAsJsonElements_AreParsed()
+    {
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "summary": "s",
+              "outcome": "pass",
+              "downstreamInstructions": [
+                {"target": "evaluator", "instruction": "Tester aussi le cas limite X."}
+              ]
+            }
+            """);
+
+        var arguments = new Dictionary<string, object?>
+        {
+            ["summary"] = document.RootElement.GetProperty("summary"),
+            ["outcome"] = document.RootElement.GetProperty("outcome"),
+            ["downstreamInstructions"] = document.RootElement.GetProperty("downstreamInstructions"),
+        };
+
+        var finish = FinishCall.FromArguments(arguments);
+
+        Assert.NotNull(finish);
+        Assert.NotNull(finish!.DownstreamInstructions);
+        Assert.Equal([new DownstreamInstruction("evaluator", "Tester aussi le cas limite X.")], finish.DownstreamInstructions);
+    }
+}
