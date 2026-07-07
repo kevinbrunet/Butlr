@@ -37,10 +37,13 @@ class SeamlessTranslator:
     gère nativement l'entrée multilingue : `tgt_lang` seul suffit, pas besoin de langue
     source explicite comme pour NLLB (texte).
 
-    ⚠ Non testable sur cette machine (pas de GPU/CUDA ici, cf. mémoire "machine
-    d'exécution distincte") : la signature exacte de `generate()` et le format de sortie
-    pour `ForSpeechToText` n'ont pas été exécutés réellement — à confirmer au premier run
-    sur la machine cible.
+    ⚠ Constaté empiriquement (premier run réel, 2026-07-15, corpus ZH, segments de 10s) :
+    plus aucune hallucination de mot type "auto"/"voiture" (contrairement à NLLB, cf.
+    ADR-0040) — mais boucles de répétition récurrentes en fin de segment ("les maisons,
+    les maisons, les maisons..." ×20). Mode de dégénérescence connu du décodage
+    autoregressif glouton sur des séquences longues, pas la même cause que le bug NLLB.
+    `no_repeat_ngram_size`/`repetition_penalty` ajoutés à `generate()` pour le corriger —
+    valeurs non calibrées empiriquement, à ajuster selon le prochain run.
     """
 
     def __init__(self, model_name: str = MODEL_NAME, device: str = "cuda") -> None:
@@ -54,7 +57,14 @@ class SeamlessTranslator:
         """Traduit un segment audio 16kHz mono (un tour de parole complet) vers
         `target_lang` (code ISO 639-1, ex. "fr")."""
         tgt_lang = resolve_language_code(target_lang)
-        inputs = self._processor(audios=audio, sampling_rate=SAMPLE_RATE_HZ, return_tensors="pt")
+        # ✓ "audio=" (pas "audios=", déprécié depuis transformers 4.59 — corrigé après le
+        # FutureWarning observé au premier run réel).
+        inputs = self._processor(audio=audio, sampling_rate=SAMPLE_RATE_HZ, return_tensors="pt")
         inputs = {k: v.to(self._device) for k, v in inputs.items()}
-        output_tokens = self._model.generate(**inputs, tgt_lang=tgt_lang)[0]
+        output_tokens = self._model.generate(
+            **inputs,
+            tgt_lang=tgt_lang,
+            no_repeat_ngram_size=3,
+            repetition_penalty=1.2,
+        )[0]
         return self._processor.decode(output_tokens.tolist(), skip_special_tokens=True)
