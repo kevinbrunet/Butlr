@@ -6,7 +6,7 @@ Sous-projet de [Butlr](../CLAUDE.md) — dont il hérite toutes les conventions 
 
 Loom = POC d'interprétariat simultané EN/ZH → FR. Audio d'un intervenant (anglais ou chinois) en entrée → audio français en sortie, une voix synthétique clonée par intervenant. Cible latence bout-en-bout p95 : 1,5-2s. Hardware de dev : RTX 5090 / Fedora. Cible future de dimensionnement (hors POC) : Raspberry Pi 5 + AI HAT+2.
 
-**Stade actuel : T1.4 validé, premier câblage bout-en-bout en cours (préliminaire à T2.3).** STT WLK confirmé fidèle sur corpus réel (2026-07-14). Traduction NLLB abandonnée (hallucinations récurrentes) au profit de SeamlessM4T v2, validé sur la machine cible (2026-07-15, repli boucles de répétition corrigé). Diarisation Sortformer/NeMo installée et validée sur un run à 2 locuteurs avec recouvrement (2026-07-15) : `speaker_id` stables, contamination de contenu résiduelle en zone de recouvrement (cf. ADR-0034). Premier harnais WLK→Seamless→Pocket TTS écrit (`bench/harness_pipeline.py`), pas encore exécuté sur la machine cible. Voir le backlog complet transmis par Kevin (Phases 0-4) pour le détail des tâches.
+**Stade actuel : T1.4 validé, câblage bout-en-bout en pause le temps d'implémenter une vraie politique de commit (ADR-0041).** STT WLK confirmé fidèle sur corpus réel (2026-07-14). Traduction NLLB abandonnée (hallucinations récurrentes) au profit de SeamlessM4T v2, validé sur la machine cible (2026-07-15, repli boucles de répétition corrigé). Diarisation Sortformer/NeMo installée et validée sur un run à 2 locuteurs avec recouvrement (2026-07-15) : `speaker_id` stables, contamination de contenu résiduelle en zone de recouvrement (cf. ADR-0034). Premier harnais WLK→Seamless→Pocket TTS écrit (`bench/harness_pipeline.py`) puis mis en pause : sceller un "tour" sur les lignes WLK s'est révélé structurellement faux (les lignes WLK ne changent que sur changement de locuteur, jamais sur pause/ponctuation, cf. ADR-0041) — remplacé par une politique de commit maison (ponctuation + pause de confirmation), pas encore implémentée. Sonde TTS isolée (`bench/harness_tts.py`) : time-to-first-chunk dans le budget de 400ms sur des phrases courtes/moyennes, mais un warning `Maximum generation length reached without EOS` et un nombre de chunks très variable sur la même phrase suggèrent un problème de fin de génération à investiguer avant de faire confiance au composant. Voir le backlog complet transmis par Kevin (Phases 0-4) pour le détail des tâches.
 
 ## Documentation de référence
 
@@ -18,6 +18,7 @@ Loom = POC d'interprétariat simultané EN/ZH → FR. Audio d'un intervenant (an
   - `0037` — Orchestration en asyncio pur, sans Pipecat (*superseded par 0039 sur la topologie process*)
   - `0039` — Process unique, bibliothèques embarquées (pas de serveur, pas de WebSocket)
   - `0040` — SeamlessM4T v2 remplace NLLB pour la traduction, en 2 phases (batch puis streaming) — **ADR de référence pour la traduction actuelle**
+  - `0041` — Politique de commit orientée ponctuation+pause, découplée des lignes WLK — **ADR de référence pour la segmentation avant traduction**
 
 ## Architecture
 
