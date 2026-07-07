@@ -36,6 +36,7 @@ async def run_benchmark(
     corpus_dir: Path = corpus.CORPUS_DIR,
     diarization: bool = True,
     nllb_size: str = "600M",
+    lan: str = "auto",
 ) -> BenchmarkResult:
     """T0.4 — une commande = replay du corpus + latences + transcript FR (pour lecture qualité).
 
@@ -64,12 +65,15 @@ async def run_benchmark(
     (qui avance à chaque mise à jour) plutôt que `start` (figé au début du segment) comme
     référence temporelle de la parole.
 
-    ⚠ Constaté empiriquement en T1.1 : avec `nllb_size` par défaut (`"600M"`, la plus petite
-    variante distillée de NLLB — cf. `whisperlivekit/config.py`), la traduction FR contient des
-    hallucinations récurrentes d'un même mot ("voiture"/"auto" à la place de mots sans rapport :
-    "bank", "book", "well", "White Rabbit"...). Avant de conclure au no-go NLLB prévu par T1.3,
-    `nllb_size` plus grand (`"1.3B"`/`"3.3B"` — ⚠ valeurs non confirmées côté WLK) est le premier
-    test à faire.
+    ⚠ Constaté empiriquement en T1.1 : hallucination récurrente du mot "auto"/"voiture" dans la
+    traduction FR (à la place de mots sans rapport : "bank", "book", "well", "White Rabbit"...),
+    **identique avec `nllb_size="600M"` et `"1.3B"`** — donc pas un problème de taille/qualité du
+    modèle NLLB. Hypothèse la plus probable : la chaîne littérale `lan="auto"` (config de
+    détection automatique de langue) fuite dans le pipeline de traduction — "auto" est un vrai
+    mot français (synonyme de "voiture"), ce qui expliquerait les deux formes observées.
+    Détection auto confirmée fiable sur ce corpus (`Detected language: en with p=0.9912` dans les
+    logs WLK) : forcer `lan="en"` ne coûte rien et isole cette hypothèse. Premier test à faire
+    avant d'incriminer NLLB lui-même ou de suivre la piste `nllb_size`.
     """
     corpus.validate(corpus_key, corpus_dir=corpus_dir)
     wav_path = corpus.resolve(corpus_key, corpus_dir=corpus_dir)
@@ -89,7 +93,7 @@ async def run_benchmark(
         pcm_input=True,
         diarization=diarization,
         diarization_backend="sortformer",
-        lan="auto",
+        lan=lan,
         target_language="fr",
         nllb_size=nllb_size,
     )
@@ -160,6 +164,13 @@ def main() -> None:
         help="Taille du modèle NLLB (défaut whisperlivekit : '600M'). Essayer '1.3B' ou "
         "'3.3B' si la traduction hallucine (⚠ valeurs non confirmées côté WLK).",
     )
+    parser.add_argument(
+        "--lan",
+        default="auto",
+        help="Langue source ('auto', 'en', 'zh'...). Défaut 'auto' suspecté de fuiter dans la "
+        "traduction FR (cf. docstring de run_benchmark) — essayer la langue explicite du "
+        "corpus si la traduction hallucine autour du mot 'auto'.",
+    )
     args = parser.parse_args()
 
     result = asyncio.run(
@@ -169,6 +180,7 @@ def main() -> None:
             args.corpus_dir,
             diarization=not args.no_diarization,
             nllb_size=args.nllb_size,
+            lan=args.lan,
         )
     )
 
