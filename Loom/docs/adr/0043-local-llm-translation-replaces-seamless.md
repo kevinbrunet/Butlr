@@ -1,0 +1,46 @@
+# ADR 0043 — Un petit LLM local (Qwen, llama.cpp embarqué) remplace Seamless pour la traduction
+
+## Status
+
+Accepted — supersede [ADR 0040](0040-seamless-m4t-replaces-nllb-translation.md) (le choix Seamless pour la traduction) et la partie "politique de commit côté Seamless" d'[ADR 0041](0041-commit-policy-alignatt.md) (l'algorithme AlignAtt pur, `alignatt.py`, n'est pas nécessairement caduc — cf. Conséquences).
+
+## Context
+
+ADR-0042 a mesuré (2026-07-15, corpus `b`) que `AlignAttSeamlessTranslator.translate_partial` réencode l'intégralité de l'audio de la ligne à chaque poll, sans borne — coût qui grandit avec la longueur de la ligne (translate 639ms→3413ms sur une même ligne) et pic mémoire qui grandit avec elle (13,09→13,80 Go sur 11,5s d'audio), cause confirmée des OOM CUDA observés au-delà de ~30-50s de ligne continue.
+
+Cette limite n'est pas un bug d'implémentation isolé — elle est structurelle à l'architecture encodeur-décodeur de Seamless (et de NLLB avant lui, cf. [ADR 0040](0040-seamless-m4t-replaces-nllb-translation.md)) : l'encodeur (audio ou texte) est ~bidirectionnel — chaque position dépend de toute la séquence, passé *et futur*. Quand l'entrée grandit, la représentation encodeur de la partie déjà vue **change réellement**. Réutiliser un cache décodeur calculé contre l'ancienne représentation encodeur, alors que l'encodeur a été recalculé sur une entrée plus longue, est mathématiquement incohérent — c'est la cause confirmée par lecture de code du bug NLLB (`_continue_generation_with_cache()`, ADR-0040 §Context) qui produisait des hallucinations de mots. ADR-0041 interdisait donc explicitement ce pattern côté Seamless ("pas de réutilisation de cache décodeur entre appels à audio de longueur différente"), au prix du réencodage complet à chaque poll — ce choix défensif est la cause directe du problème mesuré par ADR-0042.
+
+Un LLM decoder-only (attention causale) n'a pas ce problème : la représentation d'un token ne dépend que des tokens précédents, jamais du futur. Ajouter du contexte est donc un ajout strict, mathématiquement sûr à mettre en cache (KV-cache) — pas de recalcul de l'existant, pas de mismatch encodeur/décodeur.
+
+ADR-0040 avait déjà envisagé cette famille de solution : WhisperLiveKit expose un second backend de traduction, `--translation-backend alignatt`, un LLM (Gemma) piloté par une politique d'alignement d'attention — rejeté à l'époque pour des raisons **de contraintes**, pas de principe : ~40 Go de VRAM (vLLM + Gemma-4-E4B, au-delà des ~31 Go disponibles), couverture de langues insuffisante sur le repli léger (Qwen3-1.7B, EN→de seulement, pas EN→FR), et changement de backend ASR requis (`qwen3-streaming`, remettant en cause ADR-0033). Un petit modèle Qwen dédié à la seule traduction (pas de changement d'ASR, WLK/simulstreaming inchangé) répond à la contrainte VRAM sans les deux autres contraintes.
+
+⚠ Ce choix rouvre un risque explicitement évité par ADR-0040 en adoptant Seamless : traduire le texte STT de WLK (cascade ASR→MT, erreurs qui s'accumulent) plutôt que l'audio directement (traduction "audio-native" que permettait `SeamlessM4Tv2ForSpeechToText`). C'est un compromis assumé, pas un angle mort — la mitigation est un mécanisme différent (prompt LLM instruit pour traduire, plutôt que décodage seq2seq brut de NLLB), à valider empiriquement comme pour NLLB puis Seamless avant lui.
+
+## Decision
+
+Un petit modèle Qwen, chargé **en process embarqué** via des bindings Python de llama.cpp (ex. `llama-cpp-python`) — jamais un serveur séparé — remplace `SeamlessM4Tv2ForSpeechToText`/`AlignAttSeamlessTranslator` pour la traduction EN/ZH→FR.
+
+Explicitement écarté : un `llama-server` distant sur le LAN (le pattern déjà utilisé pour carson, cf. `scripts/README.md` — Qwen 3 sur serveur distant) — violerait ADR-0039 ("process unique, bibliothèques embarquées, pas de serveur, pas de websocket") pour Loom spécifiquement. Le choix inverse de carson est délibéré : carson est un client léger qui peut se permettre un aller-retour réseau vers un LLM partagé ; Loom vise un ear-voice span de 1,5-2s où un aller-retour réseau supplémentaire mangerait une part significative du budget.
+
+WLK reste responsable du STT + diarisation (ADR-0033, inchangé) — c'est son texte transcrit (pas l'audio brut) qui devient l'entrée de la traduction. Le module Expressive/vocoder de Seamless n'était de toute façon jamais utilisé (ADR-0040) ; `SeamlessM4Tv2ForSpeechToText` et `transformers`/`sentencepiece` comme dépendance de traduction disparaissent entièrement.
+
+## Consequences
+
+- ⚠ Choix de modèle/quantization pas encore tranché — "petit Qwen" reste à préciser (taille, GGUF, quantization) en fonction du budget VRAM réellement disponible une fois WLK+Sortformer+SepFormer+ECAPA+Pocket TTS chargés (~13 Go mesuré en baseline, ADR-0042) sur les ~31 Go de la RTX 5090.
+- ⚠ Qualité de traduction EN/ZH→FR d'un petit Qwen via prompt entièrement à valider empiriquement — aucune mesure à ce jour, contrairement à Seamless qui avait été validé (ADR-0040 Révisions, corpus `c`, ZH) avant d'être remis en cause aujourd'hui pour un problème de coût, pas de qualité.
+- ⚠ Prompt engineering pour la traduction devient un nouveau chantier (Seamless traduisait nativement, sans prompt) — risque d'instructions mal suivies ou de dérive de format, à surveiller comme pour tout usage LLM en boucle.
+- La politique de commit incrémental doit être repensée : AlignAtt sur l'attention croisée de Seamless (ADR-0041) n'a plus de sens sans Seamless. L'algorithme pur `alignatt.py` (`safe_token_count`, indépendant de Seamless) reste potentiellement réutilisable si le petit Qwen expose une attention croisée exploitable de façon analogue — sinon, la politique de commit par segmentation ponctuation/pause/changement de locuteur (version initiale d'ADR-0041, jamais implémentée) redevient pertinente, cette fois sans le défaut de coût qu'elle avait à l'époque puisque le KV-cache causal rend l'extension de contexte peu coûteuse. Pas encore tranché.
+- Nouvelle dépendance : bindings Python de llama.cpp (`llama-cpp-python` ou équivalent) — jamais utilisés dans Loom jusqu'ici (carson passe par HTTP vers un `llama-server` distant, pattern explicitement écarté ici).
+- `SeamlessM4Tv2ForSpeechToText`, `translation_seamless.py` (`SeamlessTranslator`, `AlignAttSeamlessTranslator`) et la dépendance `transformers`/`sentencepiece` pour la traduction sortent du périmètre — à supprimer une fois le remplacement validé (pas avant, cf. convention "mesurer avant d'optimiser" : garder Seamless comme repli tant que le petit Qwen n'a pas prouvé une qualité/latence au moins équivalente).
+- `harness_seamless.py` et le harnais Seamless de `harness_pipeline.py` devront être remplacés par un équivalent pour le nouveau traducteur avant toute mesure comparable.
+
+## Alternatives considérées
+
+- **Garder Seamless, borner l'audio par segmentation ponctuation/pause/changement de locuteur** (discussion en chat avant cet ADR) : pas rejetée sur le fond — aurait résolu le problème de coût sans reprendre le risque de cascade ASR→MT. Écartée en faveur du LLM local parce que l'architecture causale règle le problème de fond (extension de contexte) plutôt que de le contourner par un plafond de durée, et parce que la piste LLM était déjà identifiée comme filet de repli dans ADR-0040. Reste une option si le petit Qwen échoue en qualité ou latence.
+- **Backend `alignatt` de WLK (Gemma + vLLM)** : toujours rejeté — ~40 Go de VRAM, pas de couverture EN→FR sur le repli léger, changement d'ASR requis. Cf. Context.
+- **`llama-server` distant (pattern carson)** : rejeté — violerait ADR-0039 pour Loom, ajouterait un aller-retour réseau incompatible avec la cible de latence 1,5-2s.
+- **`SeamlessStreaming` (Phase 2 d'ADR-0040)** : toujours pas retenu — dépendance SimulEval/fairseq2 non mainstream, le même obstacle qui l'avait fait écarter la première fois. Le petit Qwen local répond au même besoin (traduction incrémentale à faible latence) sans cette dépendance.
+
+## Révisions
+
+- 2026-07-15 — création, suite à la confirmation empirique (ADR-0042) que le coût de `translate_partial` est structurel, pas un bug isolé.
