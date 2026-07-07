@@ -36,3 +36,12 @@ export WHISPER_MODEL_DIR="$MODELS_DIR/whisper/faster-whisper-large-v3"
 export STT_MODEL="$WHISPER_MODEL_DIR"
 export WHISPER_DEVICE="cuda"
 export WHISPER_COMPUTE_TYPE="float16"    # ou "int8_float16" si tension VRAM.
+
+# CUDA 13 : ctranslate2 cherche libcublas.so.12 mais CUDA 13 n'installe que .so.13.
+# Workaround : exposer les libs nvidia du venv et créer un symlink de compat.
+#
+#   ln -sf .venv/lib/python3.*/site-packages/nvidia/cu13/lib/libcublas.so.13 \
+#           .venv/lib/python3.*/site-packages/nvidia/cu13/lib/libcublas.so.12
+#
+# Puis décommenter la ligne ci-dessous (adapter python3.X si besoin) :
+# export LD_LIBRARY_PATH="$HOME/Butlr/carlson/.venv/lib/python3.14/site-packages/nvidia/cu13/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
