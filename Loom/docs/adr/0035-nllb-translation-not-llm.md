@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR 0040](0040-seamless-m4t-replaces-nllb-translation.md) — le choix NLLB s'est révélé peu fiable en usage réel (hallucinations récurrentes, cf. ADR-0040). Le principe "pas de LLM généraliste par défaut" (rejet de la traduction via llama.cpp) reste valable pour l'instant, mais c'est SeamlessM4T v2 qui remplace NLLB, pas un LLM.
 
 ## Context
 
@@ -27,3 +27,4 @@ La traduction est déléguée à NLLB via l'intégration native de WLK (`--targe
 ## Révisions
 
 - 2026-07-07 — création
+- 2026-07-14 — superseded par ADR 0040 : NLLB (via le sous-package `nllw` de WLK) confirmé peu fiable en streaming (hallucinations récurrentes, cause probable dans le cache décodeur incrémental de `nllw`, cf. ADR-0040) — remplacé par SeamlessM4T v2.
