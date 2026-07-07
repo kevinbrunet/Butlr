@@ -19,6 +19,7 @@ from loom_orchestrator.bench.aggregate import (
     load_events,
 )
 from loom_orchestrator.bench.instrumentation import STAGE_WLK, EventLogger, LatencyEvent
+from loom_orchestrator.bench.line_tracking import extract_updates
 from loom_orchestrator.bench.replay import replay_realtime
 from loom_orchestrator.bench.timestamps import hms_to_seconds
 
@@ -37,7 +38,7 @@ async def run_benchmark(
 ) -> BenchmarkResult:
     """T0.4 — une commande = replay du corpus + latences + transcript FR (pour lecture qualité).
 
-    ⚠ Ne mesure aujourd'hui que l'étage WLK (audio → ligne commitée) : les étages
+    ⚠ Ne mesure aujourd'hui que l'étage WLK (audio → mise à jour de ligne) : les étages
     orchestrateur/TTS n'existent pas encore (Phase 2 du backlog).
 
     ✓ Vérifié par lecture directe du code source (whisperlivekit/audio_processor.py,
@@ -48,16 +49,19 @@ async def run_benchmark(
       "start": "H:MM:SS.cc", "end": "H:MM:SS.cc", "translation"?: str,
       "detected_language"?: str}], "buffer_transcription", "buffer_diarization",
       "buffer_translation", "remaining_time_transcription", "remaining_time_diarization", ...}`.
-    - `lines` est **cumulatif** (mode `"full"`, le défaut d'`AudioProcessor` — renvoie tout
-      l'historique à chaque poll, pas un delta) : le suivi de `known_line_count` ci-dessous est
-      donc correct, pas une hypothèse à vérifier.
-    - `start`/`end` sont formatés par `format_time()` en `H:MM:SS.cc` (précision au
-      **centième de seconde**, pas à la seconde entière — la limite de précision notée dans une
-      version précédente de ce module était fausse).
     - `pcm_input=True` est **obligatoire** dans la config du moteur : sans ce flag, WLK route
       l'audio entrant vers un process FFmpeg (pensé pour de l'audio compressé façon navigateur,
       webm/opus) au lieu de le traiter comme du PCM brut 16kHz mono — notre replay casserait
       silencieusement sans ce flag.
+
+    ⚠ Constaté empiriquement en T1.1 (premier run réel sur la machine cible, pas une lecture de
+    code) : `lines` n'est PAS append-only — le texte d'un index existant continue de grandir sur
+    de nombreux polls (une phrase peut rester à l'index 0 pendant >60s avant qu'une nouvelle
+    ligne n'apparaisse). Un premier harnais qui ne suivait que `len(lines)` ratait silencieusement
+    toute cette croissance après le tout premier événement. cf. `line_tracking.extract_updates`
+    pour le suivi correct (diff de texte par index, pas juste des nouveaux index), et `end`
+    (qui avance à chaque mise à jour) plutôt que `start` (figé au début du segment) comme
+    référence temporelle de la parole.
     """
     corpus.validate(corpus_key, corpus_dir=corpus_dir)
     wav_path = corpus.resolve(corpus_key, corpus_dir=corpus_dir)
@@ -66,6 +70,7 @@ async def run_benchmark(
     log_path = out_dir / f"{run_id}.jsonl"
     transcript_path = out_dir / f"{run_id}.transcript.txt"
     out_dir.mkdir(parents=True, exist_ok=True)
+    transcript_path.write_text("", encoding="utf-8")
 
     # ✓ Champs vérifiés contre whisperlivekit/config.py (WhisperLiveKitConfig) : pcm_input,
     # diarization, lan, target_language, diarization_backend existent bien avec ces noms.
@@ -81,38 +86,41 @@ async def run_benchmark(
     )
     processor = AudioProcessor(transcription_engine=engine, mode="full")
 
-    with EventLogger(log_path) as logger, transcript_path.open("w", encoding="utf-8") as transcript:
+    with EventLogger(log_path) as logger:
         replay_start_monotonic = time.monotonic()
-        known_line_count = 0
+        known_texts: list[str] = []
 
         async def send(chunk_bytes: bytes) -> None:
             await processor.process_audio(chunk_bytes)
 
         async def consume() -> None:
-            nonlocal known_line_count
             results_generator = await processor.create_tasks()
             async for response in results_generator:
                 data = response.to_dict()
                 lines = data.get("lines", [])
 
-                for idx, line in enumerate(lines[known_line_count:], start=known_line_count):
-                    start = line.get("start")
-                    text = line.get("translation") or line.get("text")
-                    if start is None or not text:
-                        # Marqueur de silence (speaker == -2, text=None) ou ligne sans texte
-                        # exploitable — ignoré du benchmark, ne pollue pas les stats de latence.
+                updates = extract_updates(lines, known_texts)
+                for idx, line, text in updates:
+                    end = line.get("end")
+                    if end is None:
                         continue
 
-                    segment_id = f"{corpus_key}-line{idx}"
-                    t_in = hms_to_seconds(start)
+                    segment_id = f"{corpus_key}-line{idx}-{len(text)}"
+                    t_in = hms_to_seconds(end)
                     t_out = time.monotonic() - replay_start_monotonic
                     logger.log(LatencyEvent.create(segment_id, STAGE_WLK, t_in, t_out))
 
-                    speaker = line.get("speaker", "?")
-                    transcript.write(f"[{speaker}] {text}\n")
-                    transcript.flush()
-
-                known_line_count = len(lines)
+                if updates:
+                    transcript_lines = []
+                    for line in lines:
+                        text = line.get("translation") or line.get("text")
+                        if not text:
+                            continue
+                        speaker = line.get("speaker", "?")
+                        transcript_lines.append(f"[{speaker}] {text}")
+                    transcript_path.write_text(
+                        "\n".join(transcript_lines) + "\n", encoding="utf-8"
+                    )
 
         consumer_task = asyncio.create_task(consume())
         await replay_realtime(wav_path, send)
