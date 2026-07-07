@@ -127,6 +127,27 @@ def _separate_and_track(
     return streams[matched_idx], stream_embeddings[matched_idx]
 
 
+def _release_gpu_state(state: LineCommitState) -> None:
+    """Libère l'état de continuation TTS (`voice_state`, cf. `tts_pocket.
+    synthesize_continuation`) une fois une ligne définitivement scellée — plus jamais
+    réutilisé après ce point, donc pas de raison de le garder en mémoire.
+
+    ⚠ Constaté par exécution réelle (2026-07-15, cf. Révisions ADR-0042) : fuite mémoire GPU
+    observée sur un run réel — 13,9 Go → 29,85 Go de VRAM utilisée en 30s (`nvidia-smi`),
+    utilisation GPU restée basse (17-21%) pendant ce temps, signe d'une accumulation plutôt
+    que d'un calcul intense. `state.voice_state` restait vivant pour toute la durée du run
+    (jamais nettoyé après scellement d'une ligne) — suspect le plus probable, faute d'accès
+    au contenu interne de cet objet (opaque, cf. `tts_pocket.PocketTtsSynthesizer`).
+    """
+    state.voice_state = None
+    state.audio_chunks = []
+
+    import torch
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
 def _consume_continuation(
     synth: PocketTtsSynthesizer, state: object, text: str
 ) -> tuple[list, float]:
@@ -341,16 +362,19 @@ async def run_benchmark(
             logger.log(LatencyEvent.create(segment_id, STAGE_SEAMLESS, end_s, t_translate_end))
 
             increment, is_consistent = compute_increment(state.committed_fr, final_fr)
-            if not is_consistent:
+            if is_consistent:
+                state.committed_fr = final_fr
+                await emit_increment(idx, speaker, increment, t_translate_end)
+            else:
                 print(
                     f"WARNING: traduction finale de line{idx} incohérente avec le texte déjà "
                     f"commité (committed={state.committed_fr!r}, final={final_fr!r}). "
                     "Texte déjà commité conservé, tail final ignoré."
                 )
-                return
 
-            state.committed_fr = final_fr
-            await emit_increment(idx, speaker, increment, t_translate_end)
+            # Ligne définitivement scellée à ce point (dernier appel jamais fait pour idx) —
+            # libère l'état GPU retenu, cf. fuite mémoire constatée (Révisions ADR-0042).
+            _release_gpu_state(state)
 
         async def consume() -> None:
             results_generator = await processor.create_tasks()
