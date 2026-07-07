@@ -5,7 +5,7 @@
 
 ## Contexte
 
-Le serveur MCP `mcp-home` expose les tools de pilotage de la maison. Initialement pensé en Python (par cohérence avec Carlson), mais Kevin code en .NET au quotidien et veut mettre sa productivité à profit. MCP étant un protocole cross-langage via JSON-RPC (transport SSE/HTTP, cf. ADR 0003), le choix de langage de serveur n'a aucun impact sur le client Python.
+Le serveur MCP `mcp-home` expose les tools de pilotage de la maison. Initialement pensé en Python (par cohérence avec Carson), mais Kevin code en .NET au quotidien et veut mettre sa productivité à profit. MCP étant un protocole cross-langage via JSON-RPC (transport SSE/HTTP, cf. ADR 0003), le choix de langage de serveur n'a aucun impact sur le client Python.
 
 ## Décision
 
@@ -13,7 +13,7 @@ Le serveur MCP `mcp-home` expose les tools de pilotage de la maison. Initialemen
 - **Langage** : C#. Plus d'écosystème et de tooling que F#, plus simple à déboguer sur les problèmes de sérialisation MCP.
 - **Hosting** : ASP.NET Core + `Microsoft.Extensions.Hosting` (Generic Host + Kestrel). DI, configuration, logging et options pattern fournis nativement. Kestrel sert le transport SSE/HTTP que MCP utilise d'emblée (cf. ADR 0003 — pas de stdio intermédiaire).
 - **Namespace racine** : `Butlr.McpHome`.
-- **Packaging** : `dotnet publish -c Release --self-contained -p:PublishSingleFile=true` → un binaire autonome déployé en **service long-running** (unité `systemd` sous Linux, Windows Service sous Windows, ou simple `dotnet run` en dev). Plus jamais invoqué en sous-processus par Carlson. Taille estimée ~30–50 Mo ⚠ à mesurer.
+- **Packaging** : `dotnet publish -c Release --self-contained -p:PublishSingleFile=true` → un binaire autonome déployé en **service long-running** (unité `systemd` sous Linux, Windows Service sous Windows, ou simple `dotnet run` en dev). Plus jamais invoqué en sous-processus par Carson. Taille estimée ~30–50 Mo ⚠ à mesurer.
 - **Dépendances principales** : `ModelContextProtocol` + `ModelContextProtocol.AspNetCore` ~ (SDK C# officiel Anthropic, à pinner à l'install), `MQTTnet` ✓, `YamlDotNet` ✓, `xUnit` ✓.
 
 ## Alternatives considérées
@@ -35,7 +35,7 @@ Le serveur MCP `mcp-home` expose les tools de pilotage de la maison. Initialemen
 ### Négatif
 - Deux toolchains à maintenir dans le repo (cf. ADR 0001).
 - SDK MCP C# moins mature que son homologue Python ~ — on risque quelques allers-retours sur les versions, bugs de jeunesse. Mitigation : rester sur une version stable, remonter les bugs upstream.
-- Pas de partage de code trivial entre Carlson et mcp-home — acceptable, la frontière est déjà le protocole MCP.
+- Pas de partage de code trivial entre Carson et mcp-home — acceptable, la frontière est déjà le protocole MCP.
 
 ## Révisions
 - **2026-04-23** : création.

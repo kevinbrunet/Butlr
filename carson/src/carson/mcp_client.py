@@ -2,7 +2,7 @@
 
 Transport : **Streamable HTTP** (cf. ADR 0003). mcp-home est un service
 long-running accessible à `MCP_HOME_URL`, câblé avec `.WithHttpTransport()`
-côté .NET. Carlson utilise donc `streamablehttp_client` du SDK Python.
+côté .NET. Carson utilise donc `streamablehttp_client` du SDK Python.
 
 Flux :
   1. Ouvrir la session vers `MCP_HOME_URL` avec l'entête Authorization.
@@ -31,7 +31,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 from mcp.shared._httpx_utils import MCP_DEFAULT_SSE_READ_TIMEOUT, MCP_DEFAULT_TIMEOUT
 
-log = logging.getLogger("carlson.mcp_client")
+log = logging.getLogger("carson.mcp_client")
 
 _MAX_RETRIES = 5
 _INITIAL_BACKOFF_S = 1.0

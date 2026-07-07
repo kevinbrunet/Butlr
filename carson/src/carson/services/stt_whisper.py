@@ -6,7 +6,7 @@ from typing import Any
 
 from ..config import Config
 
-log = logging.getLogger("carlson.stt")
+log = logging.getLogger("carson.stt")
 
 
 def build_stt_service(config: Config):

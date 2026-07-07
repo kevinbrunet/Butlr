@@ -19,7 +19,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from carlson.services.wake_word import WakeWordProcessor, _CONFIRMATION_CHUNKS, _CHUNK_SAMPLES
+from carson.services.wake_word import WakeWordProcessor, _CONFIRMATION_CHUNKS, _CHUNK_SAMPLES
 
 
 # ---------------------------------------------------------------------------
@@ -38,7 +38,7 @@ def _make_audio_frame(n_chunks: int = 1) -> Any:
 def _mock_model(score: float) -> MagicMock:
     """Retourne un mock dont predict() retourne toujours {model: score}."""
     model = MagicMock()
-    model.predict.return_value = {"hey_carlson": score}
+    model.predict.return_value = {"hey_carson": score}
     return model
 
 
@@ -130,8 +130,8 @@ def test_confirmation_resets_on_low_score_chunk() -> None:
             nonlocal call_count
             call_count += 1
             if call_count == 2:
-                return {"hey_carlson": 0.1}  # chunk creux au milieu
-            return {"hey_carlson": 0.9}
+                return {"hey_carson": 0.1}  # chunk creux au milieu
+            return {"hey_carson": 0.9}
 
         model.predict.side_effect = side_effect
 

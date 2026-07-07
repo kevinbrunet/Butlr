@@ -44,4 +44,4 @@ export WHISPER_COMPUTE_TYPE="float16"    # ou "int8_float16" si tension VRAM.
 #           .venv/lib/python3.*/site-packages/nvidia/cu13/lib/libcublas.so.12
 #
 # Puis décommenter la ligne ci-dessous (adapter python3.X si besoin) :
-# export LD_LIBRARY_PATH="$HOME/Butlr/carlson/.venv/lib/python3.14/site-packages/nvidia/cu13/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# export LD_LIBRARY_PATH="$HOME/Butlr/carson/.venv/lib/python3.14/site-packages/nvidia/cu13/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"

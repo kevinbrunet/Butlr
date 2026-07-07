@@ -1,7 +1,7 @@
 """Butlr / Phase 1 — smoke test faster-whisper sur un WAV court.
 
 Usage :
-    # depuis le venv carlson (pip install -e .[all]) :
+    # depuis le venv carson (pip install -e .[all]) :
     python Test-Whisper.py <chemin-vers-wav>
 
 Variables d'env lues (avec fallback) :
@@ -42,7 +42,7 @@ def main() -> int:
         from faster_whisper import WhisperModel
     except ImportError:
         print(
-            "faster-whisper non installé. Dans le venv carlson : pip install -e .[all]",
+            "faster-whisper non installé. Dans le venv carson : pip install -e .[all]",
             file=sys.stderr,
         )
         return 2

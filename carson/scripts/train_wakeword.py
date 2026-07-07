@@ -1,4 +1,4 @@
-"""Utilitaire de configuration pour l'entraînement du wake word "Hey Carlson".
+"""Utilitaire de configuration pour l'entraînement du wake word "Hey Carson".
 
 Ce script gère la config YAML et peut lancer l'entraînement nanowakeword directement.
 L'entraînement passe normalement par Docker pour isoler les deps lourdes (torch, etc.) :
@@ -7,13 +7,13 @@ L'entraînement passe normalement par Docker pour isoler les deps lourdes (torch
     ./scripts/train-wakeword.sh --gpu          # entraînement GPU
 
 Usage :
-    python carlson/scripts/train_wakeword.py                   # affiche les instructions
-    python carlson/scripts/train_wakeword.py --generate-config # écrit le YAML de config
-    python carlson/scripts/train_wakeword.py --run             # lance si nanowakeword[train] installé
+    python carson/scripts/train_wakeword.py                   # affiche les instructions
+    python carson/scripts/train_wakeword.py --generate-config # écrit le YAML de config
+    python carson/scripts/train_wakeword.py --run             # lance si nanowakeword[train] installé
 
 Sortie attendue :
-    carlson/assets/wakeword/hey_carlson.onnx        (modèle principal)
-    carlson/assets/wakeword/hey_carlson_lite.onnx   (modèle lite/distilled)
+    carson/assets/wakeword/hey_carson.onnx        (modèle principal)
+    carson/assets/wakeword/hey_carson_lite.onnx   (modèle lite/distilled)
 """
 
 from __future__ import annotations
@@ -28,17 +28,17 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 log = logging.getLogger("train_wakeword")
 
 _SCRIPT_DIR = Path(__file__).parent
-_CARLSON_DIR = _SCRIPT_DIR.parent
-_ASSETS_DIR = _CARLSON_DIR / "assets" / "wakeword"
+_CARSON_DIR = _SCRIPT_DIR.parent
+_ASSETS_DIR = _CARSON_DIR / "assets" / "wakeword"
 _CONFIG_PATH = _ASSETS_DIR / "training_config.yaml"
 
 # ~ Format basé sur nanowakeword>=2.0 — cf. CONFIGURATION_GUIDE.md pour la liste complète.
 _TRAINING_CONFIG = """\
-# nanowakeword — config d'entraînement pour "Hey Carlson"
+# nanowakeword — config d'entraînement pour "Hey Carson"
 # Référence : https://github.com/arcosoph/nanowakeword/blob/main/CONFIGURATION_GUIDE.md
 
 # Identifiant du modèle (nom des fichiers .onnx en sortie)
-model_name: hey_carlson
+model_name: hey_carson
 
 # Architecture réseau.
 # lstm = bonne robustesse bruit pour phrase multi-syllabique. ~
@@ -46,7 +46,7 @@ model_name: hey_carlson
 model_type: lstm
 
 # Phrase cible — nanowakeword génère les samples positifs synthétiques via TTS interne.
-target_phrase: "Hey Carlson"
+target_phrase: "Hey Carson"
 
 # Dossier de clips réels enregistrés avec record_wakeword.py (optionnel mais recommandé).
 # Comble le gap entre voix TTS et voix humaine réelle.
@@ -56,7 +56,7 @@ target_phrase: "Hey Carlson"
 # augmenter à 300-500 pour une meilleure précision.
 n_epochs: 100
 
-# Seuil de score pour la détection (repris dans Carlson via WAKEWORD_THRESHOLD).
+# Seuil de score pour la détection (repris dans Carson via WAKEWORD_THRESHOLD).
 # Valeur plus haute = moins de faux positifs, mais plus de manqués.
 detection_threshold: 0.5
 """
@@ -84,15 +84,15 @@ def print_docker_instructions() -> None:
         "  ./scripts/train-wakeword.sh --gpu     # GPU NVIDIA (~20-40 min)",
         "",
         "  Le container va :",
-        '    a) Generer les clips audio "Hey Carlson" via TTS interne nanowakeword',
+        '    a) Generer les clips audio "Hey Carson" via TTS interne nanowakeword',
         "    b) Extraire les features audio",
         "    c) Entrainer le modele LSTM et le distiller",
-        "    d) Produire hey_carlson.onnx + hey_carlson_lite.onnx",
+        "    d) Produire hey_carson.onnx + hey_carson_lite.onnx",
         "",
         "ETAPE 2 -- Teste localement",
         "  export USE_WAKEWORD=1",
-        "  carlson",
-        "  -> Dis 'Hey Carlson' et verifie que Carlson repond.",
+        "  carson",
+        "  -> Dis 'Hey Carson' et verifie que Carson repond.",
         "  -> Laisse tourner 10 min en silence, compte les faux declenchements.",
         "     Objectif : <= 1 declenchement intempestif sur 10 min d'ambiant.",
         "  -> Trop de faux positifs : augmente WAKEWORD_THRESHOLD (0.6, 0.7...)",
@@ -103,7 +103,7 @@ def print_docker_instructions() -> None:
         "-" * 70,
         "",
         "    pip install 'nanowakeword[train]>=2.0'",
-        "    python carlson/scripts/train_wakeword.py --run",
+        "    python carson/scripts/train_wakeword.py --run",
         "",
     ]
     print("\n".join(lines))
@@ -151,7 +151,7 @@ def run_training(config_path: Path) -> None:
     if onnx_files:
         for f in onnx_files:
             log.info("Modele produit : %s", f)
-        log.info("Active le wake word : USE_WAKEWORD=1 carlson")
+        log.info("Active le wake word : USE_WAKEWORD=1 carson")
     else:
         log.error("Aucun .onnx trouve dans %s — verifier les logs.", output_dir)
         sys.exit(1)
@@ -159,7 +159,7 @@ def run_training(config_path: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Prépare et lance l'entraînement du wake word Hey Carlson"
+        description="Prépare et lance l'entraînement du wake word Hey Carson"
     )
     parser.add_argument(
         "--generate-config",

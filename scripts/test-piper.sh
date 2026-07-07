@@ -4,7 +4,7 @@
 # Suppose que `piper` est sur le PATH (venv activé ou installé globalement).
 #
 # Usage :
-#   . ../carlson/.venv/bin/activate
+#   . ../carson/.venv/bin/activate
 #   ./get-piper-voices.sh
 #   ./test-piper.sh
 #
@@ -45,12 +45,12 @@ ensure_dir "$out_dir"
 
 invoke_piper_say \
     "$PIPER_VOICE_FR_NAME" \
-    "Bonjour, je suis Carlson. Comment puis-je vous servir ?" \
+    "Bonjour, je suis Carson. Comment puis-je vous servir ?" \
     "$out_dir/test-fr.wav"
 
 invoke_piper_say \
     "$PIPER_VOICE_EN_NAME" \
-    "Good evening, I am Carlson. How may I help you today?" \
+    "Good evening, I am Carson. How may I help you today?" \
     "$out_dir/test-en.wav"
 
 log_ok "Piper opérationnel. Échantillons : $out_dir"

@@ -27,7 +27,7 @@ from ..config import Config
 if TYPE_CHECKING:
     from nanowakeword import NanoInterpreter
 
-log = logging.getLogger("carlson.wake_word")
+log = logging.getLogger("carson.wake_word")
 
 # ~ nanowakeword traite l'audio en chunks de 80 ms à 16 kHz → 1280 samples int16.
 _CHUNK_SAMPLES = 1280

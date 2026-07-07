@@ -1,6 +1,6 @@
 # Wake word assets
 
-Placer ici le modèle `hey_carlson.tflite` une fois entraîné.
+Placer ici le modèle `hey_carson.tflite` une fois entraîné.
 
 Procédure d'entraînement (à détailler dans `docs/wake-word-training.md`) :
 1. Installer openWakeWord avec les deps d'entraînement.

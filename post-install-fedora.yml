@@ -49,7 +49,7 @@
 
     # llama-proxy (reverse proxy devant llama-server)
     llama_proxy_port_direct: "8082"   # Open WebUI — pas d'injection
-    llama_proxy_port_inject: "8083"   # Butlr/carlson — injecte enable_thinking=false
+    llama_proxy_port_inject: "8083"   # Butlr/carson — injecte enable_thinking=false
 
   pre_tasks:
 

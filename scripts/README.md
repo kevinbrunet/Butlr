@@ -1,6 +1,6 @@
 # scripts — setup Phase 1 (Bash / Fedora)
 
-Outillage pour monter la stack locale de Carlson : faster-whisper (STT), Piper TTS, wake word.
+Outillage pour monter la stack locale de Carson : faster-whisper (STT), Piper TTS, wake word.
 
 Le LLM (Qwen 3) tourne sur un serveur distant du LAN (`LLM_BASE_URL` dans `env.sh`).
 
@@ -34,7 +34,7 @@ Par défaut, tout atterrit dans `~/butlr-env/` (modèles, voix) — hors du repo
 ### Whisper (STT)
 
 ```bash
-cd carlson
+cd carson
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e '.[all]'
 # Télécharge le modèle faster-whisper large-v3 (~3 GB).
@@ -46,7 +46,7 @@ python3 Test-Whisper.py testdata/sample.wav
 ### Piper (TTS)
 
 ```bash
-cd carlson && . .venv/bin/activate
+cd carson && . .venv/bin/activate
 pip install piper-tts
 
 cd ../scripts
@@ -76,4 +76,4 @@ cd ../scripts
 
 - Le LLM distant doit exposer une API OpenAI-compatible (`/v1/models`, `/v1/chat/completions`).
 - Les versions (faster-whisper, piper-tts) ne sont **pas épinglées** ici — à faire avant Phase 2.
-- Aucune TLS : LAN de dev. Le bearer token entre Carlson et mcp-home est défini dans l'environnement de Carlson, pas ici.
+- Aucune TLS : LAN de dev. Le bearer token entre Carson et mcp-home est défini dans l'environnement de Carson, pas ici.

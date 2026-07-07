@@ -31,7 +31,7 @@ from .services.stt_whisper import build_stt_service
 from .services.tts_piper import build_tts_service
 from .services.wake_word import build_wake_word_service
 
-log = logging.getLogger("carlson.pipeline")
+log = logging.getLogger("carson.pipeline")
 
 
 def _make_ptt_gate() -> Any:
@@ -174,7 +174,7 @@ async def build_pipeline(config: Config, mcp: McpHomeClient) -> tuple[Any, Any]:
         )
 
     if config.use_wakeword:
-        # Phase 4 — Slice 3 : wake word "Hey Carlson" en amont du STT.
+        # Phase 4 — Slice 3 : wake word "Hey Carson" en amont du STT.
         # Silero reste actif pour détecter la fin du tour (VADUserStoppedSpeakingFrame).
         transport = _make_vad_transport()
         wake_word = build_wake_word_service(config)

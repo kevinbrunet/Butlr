@@ -13,8 +13,8 @@ Donne à Kevin un état synthétique de l'avancement, pour qu'il sache où il en
    - Vérifier leur existence / leur état :
      - Étape 1 : `mcp-home/src/Butlr.McpHome/*.cs`, tests xUnit — **coquille .NET**.
      - Étape 2 : SDK MCP C# câblé, outils exposés sur `/mcp` SSE.
-     - Étape 3 : `carlson/src/carlson/mcp_client.py` — client SSE réel.
-     - Étape 4 : `carlson/src/carlson/services/llm_local.py` — OpenAILLMService câblé.
+     - Étape 3 : `carson/src/carson/mcp_client.py` — client SSE réel.
+     - Étape 4 : `carson/src/carson/services/llm_local.py` — OpenAILLMService câblé.
      - Étape 5+ : pipeline Pipecat, wake word, TTS, end-to-end.
    - Statut possible : `✓ fait` / `~ partiel` / `⚠ scaffold seulement` / `✗ pas commencé`.
 

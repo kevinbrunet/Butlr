@@ -2,7 +2,7 @@
 
 llama-server expose /v1/chat/completions au format OpenAI (cf. ADR 0006).
 Pipecat's OpenAILLMService accepte n'importe quelle base_url — aucune
-adaptation nécessaire côté Carlson.
+adaptation nécessaire côté Carson.
 
 ~ Flag --jinja OBLIGATOIRE au démarrage de llama-server pour que le
   tool calling soit correctement formaté dans les réponses (Qwen 2.5 template).
@@ -18,7 +18,7 @@ import logging
 
 from ..config import Config
 
-log = logging.getLogger("carlson.llm")
+log = logging.getLogger("carson.llm")
 
 
 def build_llm_service(config: Config):

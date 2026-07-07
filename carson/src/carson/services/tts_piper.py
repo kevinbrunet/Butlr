@@ -25,7 +25,7 @@ import logging
 
 from ..config import Config
 
-log = logging.getLogger("carlson.tts")
+log = logging.getLogger("carson.tts")
 
 
 def build_tts_service(config: Config):

@@ -5,13 +5,13 @@ Lit chaque .wav, le passe chunk par chunk dans le modèle (identique au pipeline
 WakeWordProcessor), et rapporte le score max, la détection et les faux négatifs.
 
 Usage :
-    python carlson/scripts/eval_wakeword.py
-    python carlson/scripts/eval_wakeword.py --dir carlson/assets/wakeword/my_recordings
-    python carlson/scripts/eval_wakeword.py --threshold 0.3 --confirmation 1
+    python carson/scripts/eval_wakeword.py
+    python carson/scripts/eval_wakeword.py --dir carson/assets/wakeword/my_recordings
+    python carson/scripts/eval_wakeword.py --threshold 0.3 --confirmation 1
 
     # Diagnostic : tester avec un modèle built-in OWW (hey_jarvis, alexa, …)
     # pour vérifier que le script lui-même fonctionne.
-    python carlson/scripts/eval_wakeword.py --builtin hey_jarvis
+    python carson/scripts/eval_wakeword.py --builtin hey_jarvis
 """
 from __future__ import annotations
 
@@ -130,7 +130,7 @@ def _bar(value: float, width: int = 20) -> str:
 
 def main() -> None:
     default_dir = Path(__file__).parent.parent / "assets" / "wakeword" / "my_recordings"
-    default_model = Path(__file__).parent.parent / "assets" / "wakeword" / "hey_carlson.onnx"
+    default_model = Path(__file__).parent.parent / "assets" / "wakeword" / "hey_carson.onnx"
 
     parser = argparse.ArgumentParser(description="Évaluation wake word par fichier WAV")
     parser.add_argument("--dir", default=str(default_dir), help="Dossier de fichiers WAV")
@@ -148,7 +148,7 @@ def main() -> None:
         "--builtin",
         metavar="NAME",
         help="Charger un modèle built-in OWW par nom (ex: hey_jarvis, alexa) "
-             "pour vérifier que le script fonctionne indépendamment de hey_carlson",
+             "pour vérifier que le script fonctionne indépendamment de hey_carson",
     )
     parser.add_argument(
         "--no-reset",

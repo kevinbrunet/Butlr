@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Butlr / Phase 4 — Entraîne le wake word "Hey Carlson" via Docker (nanowakeword).
+# Butlr / Phase 4 — Entraîne le wake word "Hey Carson" via Docker (nanowakeword).
 #
 # Lance un container Linux (nanowakeword[train] + Python 3.13) qui :
-#   1. Génère les clips audio "Hey Carlson" via TTS interne nanowakeword
+#   1. Génère les clips audio "Hey Carson" via TTS interne nanowakeword
 #   2. Extrait les features audio
-#   3. Entraîne le modèle et produit hey_carlson.onnx + hey_carlson_lite.onnx
+#   3. Entraîne le modèle et produit hey_carson.onnx + hey_carson_lite.onnx
 #
 # Prérequis : Docker installé et en cours d'exécution.
 # GPU       : si NVIDIA Container Toolkit configuré,
@@ -34,14 +34,14 @@ while [[ $# -gt 0 ]]; do
 done
 
 repo_root="$(realpath "$(dirname "$(realpath "$0")")/..")"
-carlson_dir="$repo_root/carlson"
-assets_dir="$carlson_dir/assets/wakeword"
+carson_dir="$repo_root/carson"
+assets_dir="$carson_dir/assets/wakeword"
 config_path="$assets_dir/training_config.yaml"
 # Cache des features HuggingFace (~4-6 GB) — persistant entre les runs.
 # Stocké hors du repo (trop volumineux pour git).
 features_dir="${XDG_DATA_HOME:-$HOME/.local/share}/butlr/wakeword-features"
 image_name="butlr-wakeword-train"
-dockerfile="carlson/docker/Dockerfile.wakeword-train"
+dockerfile="carson/docker/Dockerfile.wakeword-train"
 
 # -- Vérifie Docker -----------------------------------------------------------
 assert_cmd docker "https://docs.docker.com/engine/install/fedora/"
@@ -55,11 +55,11 @@ fi
 if $generate_config; then
     log_info "Génération du fichier de config YAML..."
 
-    venv_python="$carlson_dir/.venv/bin/python"
-    train_script="$carlson_dir/scripts/train_wakeword.py"
+    venv_python="$carson_dir/.venv/bin/python"
+    train_script="$carson_dir/scripts/train_wakeword.py"
 
     if [ ! -f "$venv_python" ]; then
-        log_err "venv carlson introuvable : $venv_python"
+        log_err "venv carson introuvable : $venv_python"
         log_gray "Crée-le d'abord avec pip install -e '.[all,dev]'"
         exit 1
     fi
@@ -76,16 +76,16 @@ fi
 if [ ! -f "$config_path" ]; then
     log_warn "training_config.yaml absent — génération automatique..."
 
-    venv_python="$carlson_dir/.venv/bin/python"
-    train_script="$carlson_dir/scripts/train_wakeword.py"
+    venv_python="$carson_dir/.venv/bin/python"
+    train_script="$carson_dir/scripts/train_wakeword.py"
 
     if [ -f "$venv_python" ]; then
         "$venv_python" "$train_script" --generate-config
     else
         mkdir -p "$assets_dir"
         cat > "$config_path" <<'YAML'
-model_name: hey_carlson
-target_phrase: "Hey Carlson"
+model_name: hey_carson
+target_phrase: "Hey Carson"
 n_positive_samples: 5000
 n_epochs: 100
 detection_threshold: 0.5
@@ -129,7 +129,7 @@ echo ""
 log_info "Lancement de l'entraînement..."
 log_gray "Config    : $config_path"
 log_gray "Features  : $features_dir (cache persistant, ~4-6 GB au 1er run)"
-log_gray "Sortie    : $assets_dir/hey_carlson.onnx"
+log_gray "Sortie    : $assets_dir/hey_carson.onnx"
 if $gpu; then
     log_gray "Durée     : ~20-40 min (GPU)"
 else
@@ -140,7 +140,7 @@ echo ""
 docker "${docker_args[@]}"
 
 # -- Résultat ------------------------------------------------------------------
-onnx="$assets_dir/hey_carlson.onnx"
+onnx="$assets_dir/hey_carson.onnx"
 if [ -f "$onnx" ]; then
     size_kb=$(( $(stat -c%s "$onnx") / 1024 ))
     echo ""
@@ -148,7 +148,7 @@ if [ -f "$onnx" ]; then
     echo ""
     echo "Active le wake word :"
     echo "  export USE_WAKEWORD=1"
-    echo "  carlson"
+    echo "  carson"
 else
-    log_warn "hey_carlson.onnx introuvable après l'entraînement. Vérifie les logs."
+    log_warn "hey_carson.onnx introuvable après l'entraînement. Vérifie les logs."
 fi

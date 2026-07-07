@@ -8,10 +8,10 @@
 
 ## 1. Position dans l'archi globale
 
-`architecture.md` §2 décrit deux artefacts : `carlson/` (pipeline vocal Python) et `mcp-home/` (serveur MCP .NET 10). La couche VDevice est **interne à `mcp-home`** : elle vit derrière la surface MCP exposée à Carlson.
+`architecture.md` §2 décrit deux artefacts : `carson/` (pipeline vocal Python) et `mcp-home/` (serveur MCP .NET 10). La couche VDevice est **interne à `mcp-home`** : elle vit derrière la surface MCP exposée à Carson.
 
 ```
-                 [Carlson] ──MCP/SSE──┐
+                 [Carson] ──MCP/SSE──┐
                  [Claude Desktop] ────┤
                  [CLI admin] ─────────┴─► [mcp-home]
                                             │
@@ -32,19 +32,19 @@
                                                                └─ ZWaveJS
 ```
 
-Carlson (et tout autre client MCP) **ne parle pas directement au modèle VDevice**. Il parle aux tools MCP, qui transforment l'appel en déclaration d'intention vers l'orchestrateur.
+Carson (et tout autre client MCP) **ne parle pas directement au modèle VDevice**. Il parle aux tools MCP, qui transforment l'appel en déclaration d'intention vers l'orchestrateur.
 
-**Distinction structurante (cf. ADR 0013)** : Carlson n'est **pas** une app comme les autres. C'est un **agent-utilisateur** — il transmet l'intention de l'utilisateur, il ne porte pas d'intention propre. Quand l'utilisateur dit « allume la lumière », l'auteur de l'intention c'est l'utilisateur ; Carlson est le **canal**.
+**Distinction structurante (cf. ADR 0013)** : Carson n'est **pas** une app comme les autres. C'est un **agent-utilisateur** — il transmet l'intention de l'utilisateur, il ne porte pas d'intention propre. Quand l'utilisateur dit « allume la lumière », l'auteur de l'intention c'est l'utilisateur ; Carson est le **canal**.
 
 Concrètement, deux catégories de citoyens cohabitent dans le modèle :
 
 | Catégorie | Exemples | Tag VDevice | `actor_kind` |
 |---|---|---|---|
 | **Application autonome** | App Cocooning, App ChauffageEco, arbitres custom | `app` | `app` |
-| **Agent-utilisateur** | Carlson, UI web, app mobile, interrupteur de pièce niveau 2 | `user_agent` | `user_agent` |
+| **Agent-utilisateur** | Carson, UI web, app mobile, interrupteur de pièce niveau 2 | `user_agent` | `user_agent` |
 | **Système** | Détecteurs intégrés (CO, fumée), composants signés du système | `system` | `system` |
 
-Le payload d'intention porte donc `actor_kind`, `actor_user_id` (pour les agents-utilisateur), `via_agent_id` (le canal : `carlson`, `ui-web`, `switch:salon`...), `app_id` (pour les apps autonomes), et un `tier_id` optionnel. Le **niveau cible** est résolu automatiquement par admission de tags si non spécifié — cf. [ADR 0014](adr/0014-dynamic-tiers-arbiters.md). Détails dans ADR 0013, ADR 0014 et §4 ci-dessous.
+Le payload d'intention porte donc `actor_kind`, `actor_user_id` (pour les agents-utilisateur), `via_agent_id` (le canal : `carson`, `ui-web`, `switch:salon`...), `app_id` (pour les apps autonomes), et un `tier_id` optionnel. Le **niveau cible** est résolu automatiquement par admission de tags si non spécifié — cf. [ADR 0014](adr/0014-dynamic-tiers-arbiters.md). Détails dans ADR 0013, ADR 0014 et §4 ci-dessous.
 
 ---
 
@@ -138,10 +138,10 @@ Toutes les opérations significatives produisent des **spans, logs structurés e
 
 L'orchestrateur expose son API via :
 
-- **Tools MCP** pour les agents-utilisateur côté MCP (Carlson, Claude Desktop, CLI admin) et les apps autonomes implémentées comme clients MCP. Le tool reçoit du client une intention et la traduit en `POST /vdevice` interne en remplissant le bon `actor_kind` (cf. ADR 0013).
+- **Tools MCP** pour les agents-utilisateur côté MCP (Carson, Claude Desktop, CLI admin) et les apps autonomes implémentées comme clients MCP. Le tool reçoit du client une intention et la traduit en `POST /vdevice` interne en remplissant le bon `actor_kind` (cf. ADR 0013).
 - **Endpoint HTTP/SSE dédié** pour les apps autonomes tierces qui ne sont pas des clients MCP (apps domotiques externes, scripts perso) et pour l'**UI web/mobile** (agents-utilisateur côté UI).
 
-L'**actor_kind n'est pas choisi par le client** : il est posé par la couche d'entrée selon le canal. Un tool MCP `set_thermostat` exposé à Carlson force `actor_kind=user_agent` ; un endpoint `/vdevice` consommé par App Cocooning force `actor_kind=app`. Cette séparation par canal d'entrée empêche un client malveillant de se déclarer agent-utilisateur (au POC bearer token unique, plus strict avec l'identité signée Phase 2+ — cf. ADR 0013 §"Authentification").
+L'**actor_kind n'est pas choisi par le client** : il est posé par la couche d'entrée selon le canal. Un tool MCP `set_thermostat` exposé à Carson force `actor_kind=user_agent` ; un endpoint `/vdevice` consommé par App Cocooning force `actor_kind=app`. Cette séparation par canal d'entrée empêche un client malveillant de se déclarer agent-utilisateur (au POC bearer token unique, plus strict avec l'identité signée Phase 2+ — cf. ADR 0013 §"Authentification").
 
 ⚠ Le double canal (MCP + HTTP direct) est à confirmer au moment du wiring. Tout faire passer par MCP reste possible si on préfère un seul transport — à arbitrer une fois la première app tierce non-MCP rencontrée.
 
@@ -288,7 +288,7 @@ POST /vdevice
 {
   "actor_kind": "user_agent",
   "actor_user_id": "kevin",         // requis si actor_kind=user_agent
-  "via_agent_id": "carlson",        // canal : carlson | ui-web | ui-mobile | switch:salon ...
+  "via_agent_id": "carson",        // canal : carson | ui-web | ui-mobile | switch:salon ...
   "device_id": "thermostat-salon",
   "tier_id": "user-override",       // optionnel : auto-résolu via tag user_agent
   "priority": 100,                  // priorité utilisateur intra-niveau (ADR 0008)

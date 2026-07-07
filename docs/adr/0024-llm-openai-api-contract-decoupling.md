@@ -6,19 +6,19 @@ Accepted — supersedes ADR 0006
 
 ## Context
 
-ADR 0006 ancrait le LLM dans la machine qui fait tourner Carlson : llama.cpp compilé localement, GGUF téléchargé localement, flags de runtime (`-ngl`, `-c`, `--jinja`) gérés par les scripts du repo. Ce couplage avait du sens au POC — on maîtrisait la totalité de la stack sur un seul poste.
+ADR 0006 ancrait le LLM dans la machine qui fait tourner Carson : llama.cpp compilé localement, GGUF téléchargé localement, flags de runtime (`-ngl`, `-c`, `--jinja`) gérés par les scripts du repo. Ce couplage avait du sens au POC — on maîtrisait la totalité de la stack sur un seul poste.
 
 Deux problèmes sont apparus depuis :
 
 1. **Friction opérationnelle.** Construire llama.cpp avec CUDA, télécharger un GGUF de ~5 GB, ajuster les flags à chaque changement de version ou de modèle, c'est du travail répété à chaque machine ou reset d'environnement.
 
-2. **Couplage artificiel modèle / application.** La seule chose dont Carlson a besoin du LLM, c'est une API `/v1/chat/completions` conforme à la spec OpenAI. Le moteur de serving, la quantization, la VRAM, le matériel — tout ça est orthogonal à la logique applicative.
+2. **Couplage artificiel modèle / application.** La seule chose dont Carson a besoin du LLM, c'est une API `/v1/chat/completions` conforme à la spec OpenAI. Le moteur de serving, la quantization, la VRAM, le matériel — tout ça est orthogonal à la logique applicative.
 
 Par ailleurs, un serveur Qwen 3.6 tourne désormais en permanence sur le LAN (`192.168.1.85:8083`). Le maintenir dans l'application serait une duplication.
 
 ## Decision
 
-Carlson consomme le LLM via **un unique point de configuration : `LLM_BASE_URL`**. Cette variable pointe vers n'importe quel backend exposant une API OpenAI-compatible (`/v1/chat/completions`, `/v1/models`).
+Carson consomme le LLM via **un unique point de configuration : `LLM_BASE_URL`**. Cette variable pointe vers n'importe quel backend exposant une API OpenAI-compatible (`/v1/chat/completions`, `/v1/models`).
 
 Le repo ne contient plus ni script de build de llama.cpp, ni script de téléchargement de GGUF, ni logique de démarrage de serveur local. L'identité du backend (moteur, modèle, machine) est une préoccupation d'infrastructure, pas d'application.
 
@@ -34,7 +34,7 @@ Valeur par défaut : `http://192.168.1.85:8083/v1` (Qwen 3.6 sur le LAN local).
 - Les autres composants locaux (STT faster-whisper, TTS Piper, wake word) ne sont pas affectés — ils restent on-device.
 
 ### Négatif
-- Carlson dépend d'un service réseau LAN pour le LLM. Si le serveur est éteint ou injoignable, la fonctionnalité LLM est indisponible. C'était déjà le cas en pratique avec un serveur local qu'il fallait lancer manuellement.
+- Carson dépend d'un service réseau LAN pour le LLM. Si le serveur est éteint ou injoignable, la fonctionnalité LLM est indisponible. C'était déjà le cas en pratique avec un serveur local qu'il fallait lancer manuellement.
 - Le principe *local-first* s'applique maintenant par couche : STT/TTS/wake word restent locaux ; le LLM peut être local ou LAN selon la machine qui l'héberge.
 - ~ Les capacités exactes du modèle distant (context window, tool calling, vitesse) ne sont pas contrôlées par ce repo. À documenter dans `env.sh` ou un README d'infrastructure séparé.
 

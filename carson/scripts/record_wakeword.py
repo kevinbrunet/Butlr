@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Enregistre des clips "Hey Carlson" pour le training OWW.
+"""Enregistre des clips "Hey Carson" pour le training OWW.
 
 Usage :
-    python carlson/scripts/record_wakeword.py
-    python carlson/scripts/record_wakeword.py --count 50 --out assets/wakeword/my_recordings
+    python carson/scripts/record_wakeword.py
+    python carson/scripts/record_wakeword.py --count 50 --out assets/wakeword/my_recordings
 
 Chaque appui sur Entrée enregistre 2 secondes.
 Vise 30-50 clips : variations de vitesse, d'intonation, distance micro.
@@ -86,7 +86,7 @@ def main() -> None:
                 break
             print(f"  🎙  Parle maintenant ({args.duration}s)...", end="", flush=True)
             data = record_clip(pa, args.duration)
-            dest = args.out / f"hey_carlson_{idx:04d}.wav"
+            dest = args.out / f"hey_carson_{idx:04d}.wav"
             save_wav(dest, data)
             idx += 1
             recorded += 1

@@ -84,7 +84,7 @@ Conventions : préfixe `butlr.`, snake_case, attributs minuscules.
 
 #### Traces
 
-Une **déclaration d'intention** = un span racine `vdevice.create` (ou `update`/`renew`/`release`). Sous ce span, l'arbitrage produit un span enfant `arbitration`, qui peut produire un span enfant `driver.command`. Le `traceparent` est propagé dans les headers HTTP entrants — un client (Carlson, UI) qui passe un `traceparent` voit ses appels chaînés au backend dans Tempo.
+Une **déclaration d'intention** = un span racine `vdevice.create` (ou `update`/`renew`/`release`). Sous ce span, l'arbitrage produit un span enfant `arbitration`, qui peut produire un span enfant `driver.command`. Le `traceparent` est propagé dans les headers HTTP entrants — un client (Carson, UI) qui passe un `traceparent` voit ses appels chaînés au backend dans Tempo.
 
 #### Volume
 
@@ -125,7 +125,7 @@ Plus de `audit/`. Plus de `state.db`.
 - **Séparation des préoccupations** : config (rare, lisible, versionnée) en git ; state (éphémère) en mémoire + JSONL ; observabilité (haute fréquence) en OTel. Chaque donnée chez l'outil le plus adapté.
 - **Standardisation** : OpenTelemetry est le standard d'industrie. Un opérateur sait déjà comment l'exploiter ; on bénéficie de tous les outils existants (Grafana, Tempo, Loki, Jaeger…) sans rien câbler nous-mêmes.
 - **Pas de stockage long-terme à concevoir** : la rotation, la rétention, la compaction de l'audit sortent du scope mcp-home. On émet, point.
-- **Audit "natif" au sens OTel** : traces avec `traceparent` propagé, on peut suivre une intention de Carlson jusqu'au driver MQTT en un seul `trace_id`.
+- **Audit "natif" au sens OTel** : traces avec `traceparent` propagé, on peut suivre une intention de Carson jusqu'au driver MQTT en un seul `trace_id`.
 - **Boot rapide** : reconstruction in-memory depuis JSONL + reconstruction RealState depuis MQTT. Pas de migrations SQL, pas de lock DB.
 
 ### Négatif

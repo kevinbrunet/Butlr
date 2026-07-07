@@ -1,4 +1,4 @@
-# ADR 0001 — Monorepo polyglotte : Python (Carlson) + .NET (mcp-home)
+# ADR 0001 — Monorepo polyglotte : Python (Carson) + .NET (mcp-home)
 
 **Date** : 2026-04-23
 **Statut** : Accepté (révisé le 2026-04-23 après choix de .NET pour mcp-home, cf. ADR 0005)
@@ -7,8 +7,8 @@
 
 Le projet Butlr contient deux artefacts avec des contraintes et des idiomes différents :
 
-- `carlson/` — pipeline audio temps réel, lourd en deps GPU (Whisper, vLLM, Pipecat). Python est imposé : Pipecat n'a pas d'équivalent .NET mûr.
-- `mcp-home/` — serveur MCP stateless, deps légères, potentiellement déployable ailleurs que Carlson. Écrit en .NET 10 pour la productivité de Kevin et le packaging self-contained (cf. ADR 0005).
+- `carson/` — pipeline audio temps réel, lourd en deps GPU (Whisper, vLLM, Pipecat). Python est imposé : Pipecat n'a pas d'équivalent .NET mûr.
+- `mcp-home/` — serveur MCP stateless, deps légères, potentiellement déployable ailleurs que Carson. Écrit en .NET 10 pour la productivité de Kevin et le packaging self-contained (cf. ADR 0005).
 
 Il faut choisir l'organisation de repo qui laisse chaque projet dans son idiome natif tout en gardant un versionnement et une doc communs.
 
@@ -25,9 +25,9 @@ Option 3. Structure :
 ```
 Butlr/
 ├── docs/                          # architecture + ADRs (partagé)
-├── carlson/                       # Python
+├── carson/                       # Python
 │   ├── pyproject.toml
-│   └── src/carlson/...
+│   └── src/carson/...
 └── mcp-home/                      # .NET 10
     ├── mcp-home.sln
     ├── Directory.Build.props

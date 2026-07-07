@@ -64,7 +64,7 @@ public sealed class OrchestratorServiceTests : IDisposable
             "thermostat-salon", "user_agent", "user-override", 100,
             ClusterId.Thermostat, ThermostatCluster.Attributes.OccupiedHeatingSetpoint, 2300,
             new VDeviceDuration.Ttl(3_600_000),
-            actorUserId: "kevin", viaAgentId: "carlson");
+            actorUserId: "kevin", viaAgentId: "carson");
 
         var last = _driver.CommandLog.Last();
         Assert.Equal(2300, last.Command?.Value);

@@ -24,8 +24,8 @@ def _default_stt_model() -> str:
 
 
 def _default_wakeword_model() -> str:
-    carlson_root = Path(__file__).parent.parent.parent
-    return str(carlson_root / "assets" / "wakeword" / "hey_carlson.onnx")
+    carson_root = Path(__file__).parent.parent.parent
+    return str(carson_root / "assets" / "wakeword" / "hey_carson.onnx")
 
 
 @dataclass(frozen=True)
@@ -57,7 +57,7 @@ class Config:
     # Misc
     language_default: str  # "fr" | "en"
     use_vad: bool      # True = Silero VAD auto-detect; False = push-to-talk (Enter key)
-    use_wakeword: bool  # True = "Hey Carlson" requis avant tout tour; implique use_vad=True
+    use_wakeword: bool  # True = "Hey Carson" requis avant tout tour; implique use_vad=True
 
     @classmethod
     def from_env(cls) -> "Config":

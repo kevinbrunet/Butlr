@@ -1,7 +1,7 @@
 [project]
-name = "carlson"
+name = "carson"
 version = "0.0.1"
-description = "Carlson — voice butler for the Butlr smart home, built on Pipecat."
+description = "Carson — voice butler for the Butlr smart home, built on Pipecat."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "../LICENSE" }
@@ -40,14 +40,14 @@ all = [
 ]
 
 [project.scripts]
-carlson = "carlson.main:main"
+carson = "carson.main:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/carlson"]
+packages = ["src/carson"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

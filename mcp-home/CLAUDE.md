@@ -4,7 +4,7 @@ Contexte local quand tu travailles dans `mcp-home/`. Le `CLAUDE.md` racine est a
 
 ## Rôle
 
-Serveur MCP long-running. Expose à Carlson les outils de pilotage de la maison via **SSE/HTTP** sur `/mcp` (cf. ADR 0003). Authentification par bearer token partagé (`MCP_HOME_TOKEN`).
+Serveur MCP long-running. Expose à Carson les outils de pilotage de la maison via **SSE/HTTP** sur `/mcp` (cf. ADR 0003). Authentification par bearer token partagé (`MCP_HOME_TOKEN`).
 
 Au POC : un seul backend implémenté, `ConsoleMockBackend` — les actions sont loguées, l'état des lumières est tenu en mémoire. Aucun équipement physique touché.
 

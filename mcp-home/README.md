@@ -1,6 +1,6 @@
 # mcp-home
 
-Serveur MCP .NET 10 qui exposera les outils de pilotage de la maison à Carlson.
+Serveur MCP .NET 10 qui exposera les outils de pilotage de la maison à Carson.
 
 Au POC le seul backend implémenté est `ConsoleMockBackend` : les actions sont loguées dans la console et l'état des lumières est tenu en mémoire. Aucun équipement physique n'est touché.
 

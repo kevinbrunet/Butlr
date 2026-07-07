@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Butlr — télécharge le modèle faster-whisper large-v3 dans butlr-env.
 #
-# Utilise huggingface_hub (inclus avec faster-whisper) depuis le venv carlson.
+# Utilise huggingface_hub (inclus avec faster-whisper) depuis le venv carson.
 # ~ Taille attendue : ~3 GB pour Systran/faster-whisper-large-v3.
 # Le modèle est téléchargé une seule fois ; si le dossier cible existe déjà,
 # le script sort sans rien faire.
@@ -27,10 +27,10 @@ fi
 ensure_dir "$dest"
 
 script_dir="$(dirname "$(realpath "$0")")"
-venv_python="$script_dir/../carlson/.venv/bin/python"
+venv_python="$script_dir/../carson/.venv/bin/python"
 if [ ! -f "$venv_python" ]; then
-    log_err "Venv carlson introuvable : $venv_python"
-    log_gray "Lance d'abord depuis le dossier carlson/ :"
+    log_err "Venv carson introuvable : $venv_python"
+    log_gray "Lance d'abord depuis le dossier carson/ :"
     log_gray "  python3 -m venv .venv && . .venv/bin/activate && pip install -e '.[all]'"
     exit 1
 fi

@@ -58,7 +58,7 @@ public sealed class VDeviceTests
             registry: Registry,
             now: Now,
             actorUserId: "kevin",
-            viaAgentId: "carlson"));
+            viaAgentId: "carson"));
     }
 
     [Fact]
@@ -76,7 +76,7 @@ public sealed class VDeviceTests
             registry: Registry,
             now: Now,
             actorUserId: "kevin",
-            viaAgentId: "carlson");
+            viaAgentId: "carson");
 
         Assert.Equal("user-override", vd.TierId);
         Assert.Equal("kevin", vd.ActorUserId);

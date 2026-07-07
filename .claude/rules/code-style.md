@@ -19,7 +19,7 @@ Conventions à respecter dans tout le repo. Objectif : homogénéité et lisibil
 - **DI** : enregistrement dans `Program.cs`. Interfaces pour tout ce qui a un état externe ou peut être mocké (backends, clients HTTP).
 - **Tests** : xUnit, un fichier de tests par classe testée, nom `<Classe>Tests.cs`. Nom de test en anglais, format `Method_Condition_Expectation`.
 
-## Python (carlson)
+## Python (carson)
 
 - **Python 3.11+** minimum. Union types `X | Y`, `from __future__ import annotations` en tête de chaque module.
 - **Type hints** sur tout ce qui est public (fonctions, méthodes, attributs de dataclass).

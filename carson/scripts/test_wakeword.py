@@ -2,11 +2,11 @@
 """Test rapide du modèle wake word — affiche les scores en temps réel.
 
 Usage :
-    python carlson/scripts/test_wakeword.py
-    python carlson/scripts/test_wakeword.py --model assets/wakeword/hey_carlson.onnx
-    python carlson/scripts/test_wakeword.py --threshold 0.3
+    python carson/scripts/test_wakeword.py
+    python carson/scripts/test_wakeword.py --model assets/wakeword/hey_carson.onnx
+    python carson/scripts/test_wakeword.py --threshold 0.3
 
-Dis "Hey Carlson" et observe les scores monter. Ctrl+C pour quitter.
+Dis "Hey Carson" et observe les scores monter. Ctrl+C pour quitter.
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Test wake word en temps réel")
     parser.add_argument(
         "--model",
-        default=str(Path(__file__).parent.parent / "assets" / "wakeword" / "hey_carlson.onnx"),
+        default=str(Path(__file__).parent.parent / "assets" / "wakeword" / "hey_carson.onnx"),
         help="Chemin vers le modèle .tflite ou .onnx",
     )
     parser.add_argument("--threshold", type=float, default=0.5, help="Seuil de détection")
@@ -61,7 +61,7 @@ def main() -> None:
 
     import numpy as np
 
-    print(f"\nÉcoute... (seuil={args.threshold}) — dis 'Hey Carlson' — Ctrl+C pour quitter\n")
+    print(f"\nÉcoute... (seuil={args.threshold}) — dis 'Hey Carson' — Ctrl+C pour quitter\n")
     try:
         while True:
             raw = stream.read(CHUNK, exception_on_overflow=False)

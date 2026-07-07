@@ -1,8 +1,8 @@
-"""Carlson entry point.
+"""Carson entry point.
 
 Usage:
-    carlson                 # default run
-    python -m carlson       # equivalent
+    carson                 # default run
+    python -m carson       # equivalent
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from .config import Config
 from .mcp_client import McpHomeClient
 from .pipeline import build_pipeline
 
-log = logging.getLogger("carlson")
+log = logging.getLogger("carson")
 
 
 def _list_audio_devices() -> None:
@@ -83,7 +83,7 @@ async def _run() -> None:
             loop = asyncio.get_running_loop()
             _start_ptt_thread(gate, loop)
 
-        log.info("Carlson pipeline prêt — boucle principale démarrée.")
+        log.info("Carson pipeline prêt — boucle principale démarrée.")
         runner = PipelineRunner()
         task = PipelineTask(pipeline)
         await runner.run(task)

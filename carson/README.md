@@ -1,4 +1,4 @@
-# carlson
+# carson
 
 Majordome vocal local. Pipecat orchestre : wake word → VAD → STT → LLM (avec tools MCP) → TTS.
 
@@ -11,11 +11,11 @@ Majordome vocal local. Pipecat orchestre : wake word → VAD → STT → LLM (av
 ## Démarrage
 
 ```bash
-cd carlson
+cd carson
 python -m venv .venv && source .venv/bin/activate
 pip install -e .[all,dev]
 cp .env.example .env   # éditer les variables
-carlson
+carson
 ```
 
 ## Configuration
@@ -30,13 +30,13 @@ Variables d'environnement principales :
 | `TTS_ENGINE` | `piper` | `piper` ou `xtts` |
 | `TTS_VOICE_FR` | `fr_FR-siwis-medium` | voix Piper FR par défaut |
 | `TTS_VOICE_EN` | `en_US-amy-medium` | voix Piper EN par défaut |
-| `WAKEWORD_MODEL` | `assets/wakeword/hey_carlson.tflite` | chemin du modèle custom |
+| `WAKEWORD_MODEL` | `assets/wakeword/hey_carson.tflite` | chemin du modèle custom |
 | `WAKEWORD_THRESHOLD` | `0.5` | à ajuster après mesure |
 | `MCP_HOME_URL` | `http://localhost:5090/mcp` | endpoint SSE de mcp-home (cf. ADR 0003) |
 | `MCP_HOME_TOKEN` | *(vide)* | bearer token partagé ; vide = pas d'auth, OK uniquement sur LAN de dev |
 | `FILLER_DELAY_MS` | `500` | seuil du sidecar filler |
 | `LANGUAGE_DEFAULT` | `fr` | langue de fallback |
 
-## Entraîner le wake word "Hey Carlson"
+## Entraîner le wake word "Hey Carson"
 
 Voir `docs/wake-word-training.md` (à venir). openWakeWord génère des données synthétiques via Piper TTS, ~ 30 min à 2 h selon la machine.

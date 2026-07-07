@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Training script for 'Hey Carlson' wake word — nanowakeword edition.
+"""Training script for 'Hey Carson' wake word — nanowakeword edition.
 
 Flux :
   Phase 0 : charge training_config.yaml depuis /data/
   Phase 1 : construit le YAML nanowakeword dans /work/
   Phase 2 : lance nanowakeword CLI (-G -t -T -d = generate + transform + train + distill)
-  Phase 3 : copie hey_carlson.onnx dans /data/
+  Phase 3 : copie hey_carson.onnx dans /data/
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("train")
 
-DATA_DIR = Path("/data")   # volume host : carlson/assets/wakeword/
+DATA_DIR = Path("/data")   # volume host : carson/assets/wakeword/
 WORK_DIR = Path("/work")   # répertoire de travail nanowakeword
 NWW_CONFIG = WORK_DIR / "nww_config.yaml"
 
@@ -62,10 +62,10 @@ def build_nww_config(our: dict) -> Path:
 
     # ~ Format YAML nanowakeword>=2.0 — valider contre CONFIGURATION_GUIDE.md si la version change.
     cfg = {
-        "model_name": our.get("model_name", "hey_carlson"),
+        "model_name": our.get("model_name", "hey_carson"),
         "model_type": our.get("model_type", "lstm"),
         "output_dir": str(WORK_DIR / "trained_models"),
-        "target_phrase": our.get("target_phrase", "Hey Carlson"),
+        "target_phrase": our.get("target_phrase", "Hey Carson"),
         "positive_data_path": str(positive_dir),
         "negative_data_path": str(negative_dir),
         "n_epochs": our.get("n_epochs", 100),
@@ -110,7 +110,7 @@ def collect_output(model_name: str) -> None:
         sys.exit(1)
 
     # Préfère le modèle plein (pas le lite/distilled si plusieurs fichiers).
-    # ~ Convention de nommage nanowakeword : hey_carlson.onnx / hey_carlson_lite.onnx.
+    # ~ Convention de nommage nanowakeword : hey_carson.onnx / hey_carson_lite.onnx.
     main_model = next((p for p in candidates if "_lite" not in p.name), candidates[0])
     dst = DATA_DIR / f"{model_name}.onnx"
     shutil.copy2(main_model, dst)
@@ -125,11 +125,11 @@ def collect_output(model_name: str) -> None:
     log.info("")
     log.info("Active le wake word :")
     log.info("  export USE_WAKEWORD=1")
-    log.info("  carlson")
+    log.info("  carson")
 
 
 if __name__ == "__main__":
-    log.info("=== Entraînement wake word 'Hey Carlson' (nanowakeword) ===")
+    log.info("=== Entraînement wake word 'Hey Carson' (nanowakeword) ===")
 
     our_config = load_our_config()
     log.info("Config source : %s", our_config)
@@ -140,4 +140,4 @@ if __name__ == "__main__":
     run_training(nww_config)
 
     log.info("--- Collecte de la sortie ---")
-    collect_output(our_config.get("model_name", "hey_carlson"))
+    collect_output(our_config.get("model_name", "hey_carson"))

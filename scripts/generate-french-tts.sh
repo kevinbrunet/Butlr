@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Butlr — génère des clips synthétiques "Hey Carlson" pour chaque voix Piper.
+# Butlr — génère des clips synthétiques "Hey Carson" pour chaque voix Piper.
 #
 # Chaque voix produit NClipsPerVoice clips nommés synth_<voice_name>_XXXX.wav.
-# Sortie dans carlson/assets/wakeword/my_recordings/.
+# Sortie dans carson/assets/wakeword/my_recordings/.
 # Idempotent par voix : si synth_<voice_name>_0000.wav existe, la voix est sautée.
 #
 # Usage :
@@ -26,16 +26,16 @@ while [[ $# -gt 0 ]]; do
 done
 
 repo_root="$(realpath "$(dirname "$(realpath "$0")")/..")"
-venv_python="$repo_root/carlson/.venv/bin/python"
+venv_python="$repo_root/carson/.venv/bin/python"
 
 if [ ! -f "$venv_python" ]; then
     log_err "venv Python introuvable : $venv_python"
-    log_gray "Installe d'abord : cd carlson && python3 -m venv .venv && pip install -e '.[all]'"
+    log_gray "Installe d'abord : cd carson && python3 -m venv .venv && pip install -e '.[all]'"
     exit 1
 fi
 
 if [ -z "$output_dir" ]; then
-    output_dir="$repo_root/carlson/assets/wakeword/my_recordings"
+    output_dir="$repo_root/carson/assets/wakeword/my_recordings"
 fi
 ensure_dir "$output_dir"
 
@@ -96,7 +96,7 @@ except ImportError:
 
 voice       = PiperVoice.load("${onnx_file}")
 out_dir     = pathlib.Path("${output_dir}")
-phrase      = "Hey Carlson"
+phrase      = "Hey Carson"
 n           = ${n_clips}
 prefix      = "${prefix}"
 sample_rate = voice.config.sample_rate

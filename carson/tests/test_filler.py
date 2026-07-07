@@ -6,7 +6,7 @@ integration test once the pipeline is wired — for now, only the picker.
 
 from __future__ import annotations
 
-from carlson.filler import FILLERS, FillerPicker
+from carson.filler import FILLERS, FillerPicker
 
 
 def test_picker_returns_phrases_in_the_requested_language() -> None:

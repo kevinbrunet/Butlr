@@ -7,7 +7,7 @@ Ce fichier est chargé automatiquement par Claude Code au démarrage. Il donne l
 Butlr = majordome domotique local. Deux sous-projets :
 
 - **`mcp-home/`** — serveur MCP (.NET 10 / ASP.NET Core) qui expose les outils de pilotage de la maison. Au POC, seul backend = `ConsoleMockBackend` (lumières en mémoire, logs console).
-- **`carlson/`** — majordome vocal (Python / Pipecat). Pipeline : wake word → VAD → STT → LLM (+ tool calling MCP) → TTS. Client MCP qui parle à `mcp-home` via SSE/HTTP.
+- **`carson/`** — majordome vocal (Python / Pipecat). Pipeline : wake word → VAD → STT → LLM (+ tool calling MCP) → TTS. Client MCP qui parle à `mcp-home` via SSE/HTTP.
 
 **Stade actuel : POC.** Architecture documentée, scaffolds posés, LLM et wake word pas encore câblés.
 
@@ -30,7 +30,7 @@ Si une décision change, **mets à jour l'ADR** (ou crée-en un nouveau). Ne mod
 |---|---|---|
 | `mcp-home` | .NET 10 LTS, ASP.NET Core, Kestrel | Namespace `Butlr.McpHome`. Port 5090 par défaut. |
 | `mcp-home` tests | xUnit | `mcp-home/tests/Butlr.McpHome.Tests/` |
-| `carlson` | Python 3.11+, Pipecat, `mcp` SDK, faster-whisper, Piper, openWakeWord | venv + `pip install -e .[all,dev]` |
+| `carson` | Python 3.11+, Pipecat, `mcp` SDK, faster-whisper, Piper, openWakeWord | venv + `pip install -e .[all,dev]` |
 | LLM runtime | llama.cpp server (OpenAI-compat, CUDA) | Qwen 2.5 7B Instruct GGUF Q5_K_M ; flag `--jinja` pour tool calling |
 | Scripts setup | Bash (Fedora Workstation) | `scripts/` — requiert CUDA Toolkit, cmake, jq, curl |
 
@@ -50,12 +50,12 @@ dotnet build mcp-home/McpHome.sln
 dotnet test mcp-home/McpHome.sln
 dotnet run --project mcp-home/src/Butlr.McpHome  # http://localhost:5090
 
-# carlson
-cd carlson
+# carson
+cd carson
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e .[all,dev]
 pytest
-carlson
+carson
 
 # stack locale (Fedora Workstation) — LLM distant sur 192.168.1.85:8083
 cd scripts

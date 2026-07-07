@@ -1,7 +1,7 @@
 # Alveus — Architecture
 
 > Sous-projet Butlr : bac à sable d'orchestration d'agents LLM (.NET / Elsa / Microsoft.Agents.AI),
-> distinct du pipeline vocal (`carlson`) et du serveur domotique (`mcp-home`).
+> distinct du pipeline vocal (`carson`) et du serveur domotique (`mcp-home`).
 
 **Marqueurs de confiance** utilisés dans ce doc :
 - ✓ connaissance fiable
