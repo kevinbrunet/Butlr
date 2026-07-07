@@ -42,3 +42,30 @@ def first_output_latency_s(events: list[dict]) -> float | None:
     """
     tts_out_times = [e["t_out"] for e in events if e["stage"] == STAGE_TTS]
     return min(tts_out_times) if tts_out_times else None
+
+
+def format_evaluation(
+    corpus_key: str,
+    provenance: str,
+    ratio: float,
+    diff: str,
+    latency_s: float | None,
+    audio_dir: str,
+    transcript_path: str,
+    log_path: str,
+) -> str:
+    """Formatte un rapport pour une clé de corpus — pur (pas d'I/O), pour que l'appelant
+    (`harness_evaluate.py`) puisse à la fois l'afficher et l'écrire dans un fichier de
+    rapport cumulatif (cf. le scrollback perdu constaté par Kevin sur un run multi-clés)."""
+    latency_str = f"{latency_s:.2f}s" if latency_s is not None else "aucun audio produit"
+    return (
+        f"=== corpus {corpus_key} ===\n"
+        f"Référence : {provenance}\n"
+        f"Similarité (difflib.ratio, indicatif — pas un score BLEU/WER) : {ratio:.1%}\n"
+        f"Latence premier son de sortie (lecture wav entrée -> écriture wav sortie) : "
+        f"{latency_str}\n"
+        f"Diff mot à mot (-référence / +pipeline) :\n{diff}\n\n"
+        f"Audio à écouter : {audio_dir}\n"
+        f"Transcript : {transcript_path}\n"
+        f"Log latences : {log_path}\n"
+    )
