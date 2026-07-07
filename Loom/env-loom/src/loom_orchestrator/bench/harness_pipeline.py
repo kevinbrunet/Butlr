@@ -50,6 +50,7 @@ class PipelineBenchmarkResult:
     log_path: Path
     transcript_path: Path
     audio_dir: Path
+    final_fr_by_line: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -299,7 +300,10 @@ async def run_benchmark(
                 await force_final_commit(idx, line)
 
     return PipelineBenchmarkResult(
-        log_path=log_path, transcript_path=transcript_path, audio_dir=audio_dir
+        log_path=log_path,
+        transcript_path=transcript_path,
+        audio_dir=audio_dir,
+        final_fr_by_line={idx: s.committed_fr for idx, s in commit_state.items()},
     )
 
 
