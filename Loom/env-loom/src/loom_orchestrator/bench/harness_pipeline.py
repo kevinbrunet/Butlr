@@ -4,7 +4,7 @@ import argparse
 import asyncio
 import time
 import wave
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -54,17 +54,19 @@ class PipelineBenchmarkResult:
 
 @dataclass
 class LineCommitState:
-    """État de commit AlignAtt pour une ligne WLK — cf. ADR-0041."""
+    """État de commit AlignAtt + continuation TTS pour une ligne WLK — cf. ADR-0041."""
 
     committed_fr: str = ""
     last_alignatt_end_s: float = -MIN_NEW_AUDIO_S
     chunk_count: int = 0
+    voice_state: object | None = None
+    audio_chunks: list = field(default_factory=list)
 
 
 def _write_wav(path: Path, audio: "np.ndarray", sample_rate_hz: int) -> None:
-    # ⚠ Format de sortie de TTSModel.generate_audio() non confirmé par exécution réelle
-    # (cf. tts_pocket.PocketTtsSynthesizer) — on suppose du float dans [-1, 1] comme la
-    # plupart des TTS, et on clippe avant conversion PCM16. À corriger si le premier run
+    # ⚠ Format de sortie de TTSModel.generate_audio_stream() non confirmé par exécution
+    # réelle (cf. tts_pocket.PocketTtsSynthesizer) — on suppose du float dans [-1, 1] comme
+    # la plupart des TTS, et on clippe avant conversion PCM16. À corriger si le premier run
     # réel montre un tenseur déjà en int16 (le clip/scale serait alors silencieusement faux).
     import numpy as np
 
@@ -74,6 +76,25 @@ def _write_wav(path: Path, audio: "np.ndarray", sample_rate_hz: int) -> None:
         wav_file.setsampwidth(2)
         wav_file.setframerate(sample_rate_hz)
         wav_file.writeframes(pcm16.tobytes())
+
+
+def _consume_continuation(
+    synth: PocketTtsSynthesizer, state: object, text: str
+) -> tuple[list, float]:
+    """Épuise `synthesize_continuation` en thread (bloquant/CPU, cf. règle transverse) et
+    mesure le délai jusqu'au premier chunk (TTFC, la métrique de budget de ADR-0036) — pas
+    le temps total de synthèse de l'increment.
+    """
+    t0 = time.monotonic()
+    chunks = []
+    ttfc_s: float | None = None
+    for chunk in synth.synthesize_continuation(state, text):
+        if ttfc_s is None:
+            ttfc_s = time.monotonic() - t0
+        chunks.append(chunk)
+    if ttfc_s is None:
+        ttfc_s = time.monotonic() - t0
+    return chunks, ttfc_s
 
 
 async def run_benchmark(
@@ -107,6 +128,14 @@ async def run_benchmark(
     son traitement interne, cf. "TTS en retard = dégradation contrôlée, jamais de blocage
     amont"), et fait grandir la file interne de résultats déjà bufferisée par WLK. Pas de
     plafond explicite ici — c'est le travail de l'orchestrateur final (T2.3).
+
+    Le chunking côté Seamless (dicté par AlignAtt, cf. ci-dessus) et le chunking audio côté
+    TTS sont découplés (2026-07-15, suite à une question de Kevin) : chaque ligne a son
+    propre état vocal Pocket TTS (`PocketTtsSynthesizer.new_line_state`), réutilisé avec
+    `copy_state=False` (`synthesize_continuation`) à travers tous ses increments successifs
+    — l'audio s'enchaîne comme un seul énoncé continu, pas des extraits disjoints malgré des
+    increments de texte séparés. Un seul fichier `line{idx}.wav` par ligne (pas un par
+    increment), réécrit à chaque nouvel increment.
     """
     corpus.validate(corpus_key, corpus_dir=corpus_dir)
     wav_path = corpus.resolve(corpus_key, corpus_dir=corpus_dir)
@@ -145,19 +174,26 @@ async def run_benchmark(
         ) -> None:
             if not increment:
                 return
-            audio_fr = await asyncio.to_thread(synth.synthesize, increment)
-            t_tts_end = time.monotonic() - replay_start_monotonic
-            segment_id = f"{corpus_key}-line{idx}-chunk{commit_state[idx].chunk_count}"
-            logger.log(LatencyEvent.create(segment_id, STAGE_TTS, event_stage_t_in, t_tts_end))
+            state = commit_state[idx]
+            if state.voice_state is None:
+                state.voice_state = synth.new_line_state()
 
-            _write_wav(
-                audio_dir / f"line{idx}-chunk{commit_state[idx].chunk_count}.wav",
-                audio_fr,
-                synth.sample_rate_hz,
+            new_chunks, ttfc_s = await asyncio.to_thread(
+                _consume_continuation, synth, state.voice_state, increment
             )
+            t_first_chunk = event_stage_t_in + ttfc_s
+            segment_id = f"{corpus_key}-line{idx}-chunk{state.chunk_count}"
+            logger.log(LatencyEvent.create(segment_id, STAGE_TTS, event_stage_t_in, t_first_chunk))
+
+            state.audio_chunks.extend(new_chunks)
+            import numpy as np
+
+            full_audio = np.concatenate(state.audio_chunks)
+            _write_wav(audio_dir / f"line{idx}.wav", full_audio, synth.sample_rate_hz)
+
             with transcript_path.open("a", encoding="utf-8") as f:
                 f.write(f"[{speaker}] FR (increment) : {increment}\n")
-            commit_state[idx].chunk_count += 1
+            state.chunk_count += 1
 
         async def try_alignatt_commit(idx: int, line: dict) -> None:
             start, end = line.get("start"), line.get("end")
@@ -300,7 +336,7 @@ def main() -> None:
     print(format_report(reports))
     print(f"\nLog : {result.log_path}")
     print(f"Transcript : {result.transcript_path}")
-    print(f"Audio FR par ligne/chunk : {result.audio_dir}")
+    print(f"Audio FR par ligne (un seul fichier continu par ligne) : {result.audio_dir}")
 
 
 if __name__ == "__main__":

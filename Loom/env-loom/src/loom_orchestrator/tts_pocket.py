@@ -63,6 +63,39 @@ class PocketTtsSynthesizer:
         `sample_rate_hz`), pas un tenseur complet. Le délai avant le premier chunk produit
         (mesuré par l'appelant) est la métrique de budget réelle de ADR-0036 (p95 < 400ms),
         pas le temps total pour épuiser le générateur.
+
+        Chaque appel repart de l'état vocal initial (`copy_state` par défaut à `True` côté
+        Pocket TTS) : deux appels successifs ne s'enchaînent pas naturellement (silence/rupture
+        de prosodie entre les deux). Pour une ligne qui reçoit plusieurs increments successifs
+        (cf. ADR-0041, `bench/harness_pipeline.py`), utiliser `new_line_state()` +
+        `synthesize_continuation()` à la place.
         """
         for chunk in self._model.generate_audio_stream(self._voice_state, text):
+            yield chunk.numpy()
+
+    def new_line_state(self) -> object:
+        """Retourne une copie indépendante de l'état vocal initial, à réutiliser pour tous
+        les increments d'une même ligne (cf. `synthesize_continuation`) — jamais partagée
+        entre deux lignes/tours de parole différents.
+
+        ✓ Constaté par lecture du code source (`pocket_tts/models/tts_model.py`, lu le
+        2026-07-15, non exécuté sur cette machine — pas la cible) : `generate_audio_stream`
+        fait `model_state = copy.deepcopy(model_state)` seulement si `copy_state=True`
+        (le défaut). Avec `copy_state=False`, la génération mute l'état en place (compteur de
+        position interne) — des appels successifs sur le **même** objet `state` s'enchaînent
+        comme un seul énoncé continu (continuité acoustique/prosodique), au lieu de repartir
+        de zéro à chaque appel. D'où la nécessité d'une copie initiale dédiée par ligne : on
+        ne veut la continuité *qu'au sein* d'une ligne, jamais entre deux lignes.
+        """
+        import copy
+
+        return copy.deepcopy(self._voice_state)
+
+    def synthesize_continuation(self, state: object, text: str) -> "Iterator[np.ndarray]":
+        """Synthétise `text` (FR) en continuant l'état vocal `state` (muté en place,
+        `copy_state=False`) — l'audio s'enchaîne naturellement avec les increments
+        précédents générés sur ce même `state` (cf. `new_line_state`). `state` doit venir de
+        `new_line_state()`, jamais de l'état interne partagé de ce synthesizer.
+        """
+        for chunk in self._model.generate_audio_stream(state, text, copy_state=False):
             yield chunk.numpy()
