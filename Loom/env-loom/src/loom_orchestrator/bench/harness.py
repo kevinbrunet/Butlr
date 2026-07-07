@@ -35,6 +35,7 @@ async def run_benchmark(
     out_dir: Path,
     corpus_dir: Path = corpus.CORPUS_DIR,
     diarization: bool = True,
+    nllb_size: str = "600M",
 ) -> BenchmarkResult:
     """T0.4 — une commande = replay du corpus + latences + transcript FR (pour lecture qualité).
 
@@ -62,6 +63,13 @@ async def run_benchmark(
     pour le suivi correct (diff de texte par index, pas juste des nouveaux index), et `end`
     (qui avance à chaque mise à jour) plutôt que `start` (figé au début du segment) comme
     référence temporelle de la parole.
+
+    ⚠ Constaté empiriquement en T1.1 : avec `nllb_size` par défaut (`"600M"`, la plus petite
+    variante distillée de NLLB — cf. `whisperlivekit/config.py`), la traduction FR contient des
+    hallucinations récurrentes d'un même mot ("voiture"/"auto" à la place de mots sans rapport :
+    "bank", "book", "well", "White Rabbit"...). Avant de conclure au no-go NLLB prévu par T1.3,
+    `nllb_size` plus grand (`"1.3B"`/`"3.3B"` — ⚠ valeurs non confirmées côté WLK) est le premier
+    test à faire.
     """
     corpus.validate(corpus_key, corpus_dir=corpus_dir)
     wav_path = corpus.resolve(corpus_key, corpus_dir=corpus_dir)
@@ -83,6 +91,7 @@ async def run_benchmark(
         diarization_backend="sortformer",
         lan="auto",
         target_language="fr",
+        nllb_size=nllb_size,
     )
     processor = AudioProcessor(transcription_engine=engine, mode="full")
 
@@ -145,6 +154,12 @@ def main() -> None:
         help="Désactive la diarisation (isole STT+traduction, utile si Sortformer/NeMo "
         "n'est pas installé — cf. ADR-0034).",
     )
+    parser.add_argument(
+        "--nllb-size",
+        default="600M",
+        help="Taille du modèle NLLB (défaut whisperlivekit : '600M'). Essayer '1.3B' ou "
+        "'3.3B' si la traduction hallucine (⚠ valeurs non confirmées côté WLK).",
+    )
     args = parser.parse_args()
 
     result = asyncio.run(
@@ -153,6 +168,7 @@ def main() -> None:
             args.out_dir,
             args.corpus_dir,
             diarization=not args.no_diarization,
+            nllb_size=args.nllb_size,
         )
     )
 
