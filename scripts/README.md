@@ -39,8 +39,8 @@ python3 -m venv .venv && . .venv/bin/activate
 pip install -e '.[all]'
 # Télécharge le modèle faster-whisper large-v3 (~3 GB).
 cd ../scripts && ./get-whisper-model.sh
-# Lance sur un WAV de test (16 kHz mono idéalement).
-python3 Test-Whisper.py /chemin/vers/sample.wav
+# Lance sur le WAV de test fourni (LJSpeech, anglais, domaine public, 5 s, 16 kHz mono).
+python3 Test-Whisper.py testdata/sample.wav
 ```
 
 ### Piper (TTS)
