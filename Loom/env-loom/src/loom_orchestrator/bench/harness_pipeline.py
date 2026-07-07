@@ -75,11 +75,23 @@ async def run_benchmark(
     traitement strictement séquentiel d'un tour à la fois (cf. `main.py`, toujours
     `NotImplementedError` pour le vrai T2.3).
 
-    ⚠ Politique de scellement d'un tour de parole : dès qu'un nouvel index apparaît dans
-    `lines` (WLK, mode "full"), l'index précédent est considéré clos et part en traduction +
-    synthèse — cf. règle transverse "le passé est immuable, les révisions STT ne s'appliquent
-    qu'au futur". Le tout dernier tour (jamais suivi d'un nouvel index avant la fin du flux)
-    est traité une fois le replay terminé.
+    ⚠ Constaté empiriquement (premier run réel, corpus `a`, 2026-07-15) et corrigé depuis :
+    la première version scellait un tour dès qu'un nouvel index apparaissait dans `lines` —
+    faux sur ce corpus, où `lines` reste à 2 entrées pendant tout le fichier (un narrateur
+    continu + un second index qui clignote sans jamais devenir un 3e index) : le scellement
+    prématuré a coupé le premier tour à ~6s et perdu toute la croissance ultérieure de
+    `lines[0]` (jamais retraitée), ne laissant que 2 extraits de quelques mots. Politique
+    corrigée : chaque ligne de `lines` (un segment WLK = un tour, cf. schéma vérifié dans
+    `harness.py`) n'est traduite/synthétisée **qu'une fois le flux terminé**, avec son texte
+    final. Pas d'incrémental par tour dans ce harnais (contrairement à `STAGE_WLK`, mesuré en
+    continu) — cf. `main.py`/T2.3 pour une vraie politique de commit en flux.
+
+    ⚠ Conséquence attendue sur un narrateur continu (corpus `a`) : un seul tour couvrant
+    quasiment tout le fichier (~185s, ~2000 mots) part en une seule fois vers Seamless puis
+    Pocket TTS — pas encore de découpage des tours trop longs (hors scope de ce premier
+    câblage). Sur `b` (2 locuteurs qui alternent), `lines` contient plusieurs entrées de
+    taille raisonnable (cf. `bench-runs/b-*.transcript.txt` du run WLK seul), donc plus
+    représentatif pour juger la qualité FR.
 
     ⚠ Le traitement d'un tour de parole (Seamless + TTS, tous deux déportés en executor via
     `asyncio.to_thread`) est awaited séquentiellement dans la tâche qui consomme aussi les
@@ -113,7 +125,6 @@ async def run_benchmark(
     with EventLogger(log_path) as logger:
         replay_start_monotonic = time.monotonic()
         known_texts: list[str] = []
-        sealed_count = 0
         last_lines: list[dict] = []
 
         async def send(chunk_bytes: bytes) -> None:
@@ -143,7 +154,6 @@ async def run_benchmark(
                 f.write(f"[{speaker}] source : {text}\n[{speaker}] FR : {fr_text}\n\n")
 
         async def consume() -> None:
-            nonlocal sealed_count
             results_generator = await processor.create_tasks()
             async for response in results_generator:
                 data = response.to_dict()
@@ -159,18 +169,14 @@ async def run_benchmark(
                     t_out = time.monotonic() - replay_start_monotonic
                     logger.log(LatencyEvent.create(segment_id, STAGE_WLK, t_in, t_out))
 
-                while sealed_count + 1 < len(lines):
-                    await process_turn(sealed_count, lines[sealed_count])
-                    sealed_count += 1
-
         consumer_task = asyncio.create_task(consume())
         await replay_realtime(wav_path, send)
         await processor.process_audio(b"")  # signale la fin du flux (cf. API WLK)
         await asyncio.sleep(2.0)
         consumer_task.cancel()
 
-        for idx in range(sealed_count, len(last_lines)):
-            await process_turn(idx, last_lines[idx])
+        for idx, line in enumerate(last_lines):
+            await process_turn(idx, line)
 
     return PipelineBenchmarkResult(
         log_path=log_path, transcript_path=transcript_path, audio_dir=audio_dir
