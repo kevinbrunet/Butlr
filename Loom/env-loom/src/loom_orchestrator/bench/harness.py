@@ -33,6 +33,7 @@ async def run_benchmark(
     corpus_key: str,
     out_dir: Path,
     corpus_dir: Path = corpus.CORPUS_DIR,
+    diarization: bool = True,
 ) -> BenchmarkResult:
     """T0.4 — une commande = replay du corpus + latences + transcript FR (pour lecture qualité).
 
@@ -73,7 +74,7 @@ async def run_benchmark(
     # `TranscriptionEngine.reset()` d'abord, sinon la config précédente reste active.
     engine = TranscriptionEngine(
         pcm_input=True,
-        diarization=True,
+        diarization=diarization,
         diarization_backend="sortformer",
         lan="auto",
         target_language="fr",
@@ -130,9 +131,22 @@ def main() -> None:
     parser.add_argument("corpus_key", choices=[c.key for c in corpus.CORPUS_MANIFEST])
     parser.add_argument("--out-dir", type=Path, default=Path("bench-runs"))
     parser.add_argument("--corpus-dir", type=Path, default=corpus.CORPUS_DIR)
+    parser.add_argument(
+        "--no-diarization",
+        action="store_true",
+        help="Désactive la diarisation (isole STT+traduction, utile si Sortformer/NeMo "
+        "n'est pas installé — cf. ADR-0034).",
+    )
     args = parser.parse_args()
 
-    result = asyncio.run(run_benchmark(args.corpus_key, args.out_dir, args.corpus_dir))
+    result = asyncio.run(
+        run_benchmark(
+            args.corpus_key,
+            args.out_dir,
+            args.corpus_dir,
+            diarization=not args.no_diarization,
+        )
+    )
 
     events = load_events(result.log_path)
     reports = aggregate_by_stage(events)
