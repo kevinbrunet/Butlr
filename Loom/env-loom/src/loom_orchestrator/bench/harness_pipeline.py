@@ -322,10 +322,26 @@ async def run_benchmark(
             state.last_alignatt_end_s = end_s
 
             source_audio = read_segment(wav_path, start_s, end_s)
+            audio_len_s = len(source_audio) / SAMPLE_RATE_HZ
+
+            t0 = time.monotonic()
             source_audio = await clean_audio_for_line(idx, source_audio)
+            t_clean_s = time.monotonic() - t0
+
+            t0 = time.monotonic()
             safe_text = await asyncio.to_thread(
                 alignatt_translator.translate_partial, source_audio, target_lang
             )
+            t_translate_s = time.monotonic() - t0
+            # ⚠ Instrumentation temporaire (2026-07-15, cf. Révisions ADR-0042) : durée brute
+            # par appel, pas le "retard cumulé" mesuré par STAGE_SEAMLESS (t_out - t_in) —
+            # pour savoir si translate_partial grandit avec la longueur de la ligne (jamais
+            # bornée, contrairement à la fenêtre de séparation).
+            print(
+                f"DEBUG line{idx} chunk{state.chunk_count}: audio={audio_len_s:.1f}s "
+                f"clean={t_clean_s * 1000:.0f}ms translate={t_translate_s * 1000:.0f}ms"
+            )
+
             t_translate_end = time.monotonic() - replay_start_monotonic
             segment_id = f"{corpus_key}-line{idx}-chunk{state.chunk_count}"
             logger.log(LatencyEvent.create(segment_id, STAGE_SEAMLESS, end_s, t_translate_end))
