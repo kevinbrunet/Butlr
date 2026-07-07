@@ -7,11 +7,16 @@ license = { file = "../../LICENSE" }
 authors = [{ name = "Kevin Brunet" }]
 # ⚠ Noms de package PyPI et extras repris tels quels de la spec/recherche externe,
 #   non vérifiés par une install réelle à ce stade (cf. T0.1/T1.1).
+# ⚠ extra "translation" de whisperlivekit retiré : on n'utilise plus NLLB/nllw du tout
+# depuis ADR-0040 (hallucinations récurrentes en streaming) — SeamlessM4T v2 (transformers/
+# sentencepiece ci-dessous) le remplace entièrement, en dehors de WLK.
 dependencies = [
-    "whisperlivekit[diarization-sortformer,translation]",
+    "whisperlivekit[diarization-sortformer]",
     "pocket-tts",
     "pydantic>=2.6",
     "numpy>=2.0",
+    "transformers>=4.37",
+    "sentencepiece>=0.2",
 ]
 
 [project.optional-dependencies]
