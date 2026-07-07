@@ -10,6 +10,8 @@ authors = [{ name = "Kevin Brunet" }]
 # ⚠ extra "translation" de whisperlivekit retiré : on n'utilise plus NLLB/nllw du tout
 # depuis ADR-0040 (hallucinations récurrentes en streaming) — SeamlessM4T v2 (transformers/
 # sentencepiece ci-dessous) le remplace entièrement, en dehors de WLK.
+# ⚠ speechbrain (ADR-0042) : SepFormer-WHAMR (séparation) + ECAPA-TDNN (embedding de
+# locuteur) — version non pinnée, pas encore installée/vérifiée sur la machine cible.
 dependencies = [
     "whisperlivekit[diarization-sortformer]",
     "pocket-tts",
@@ -17,6 +19,7 @@ dependencies = [
     "numpy>=2.0",
     "transformers>=4.37",
     "sentencepiece>=0.2",
+    "speechbrain>=1.0",
 ]
 
 [project.optional-dependencies]

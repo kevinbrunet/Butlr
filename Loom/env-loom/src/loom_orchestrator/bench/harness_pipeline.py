@@ -35,6 +35,13 @@ from loom_orchestrator.bench.instrumentation import (
 from loom_orchestrator.bench.line_tracking import extract_updates
 from loom_orchestrator.bench.replay import replay_realtime
 from loom_orchestrator.bench.timestamps import hms_to_seconds
+from loom_orchestrator.speaker_separation import SAMPLE_RATE_HZ, SpeakerEmbedder, VoiceSeparator
+from loom_orchestrator.speaker_tracking import (
+    MATCH_CONFIDENCE_THRESHOLD,
+    pick_matching_stream,
+    streams_are_distinct,
+    update_running_embedding,
+)
 from loom_orchestrator.translation_seamless import AlignAttSeamlessTranslator, SeamlessTranslator
 from loom_orchestrator.tts_pocket import PocketTtsSynthesizer
 
@@ -43,6 +50,15 @@ from loom_orchestrator.tts_pocket import PocketTtsSynthesizer
 # n'appelle AlignAtt à nouveau pour une ligne que si son audio a grandi d'au moins cette durée
 # depuis le dernier appel pour cette même ligne.
 MIN_NEW_AUDIO_S = 1.0
+
+# ⚠ Pas calibrées empiriquement (ADR-0042). SEPARATION_WINDOW_S ~ zone de confort mesurée de
+# SepFormer-WHAMR (moyenne d'entraînement WHAMR ~5,6s, saturation des performances ~5,8s) —
+# jamais toute la ligne d'un coup (coût quadratique de l'attention sur de l'audio long, cf.
+# le problème déjà rencontré avec AlignAtt sur un monologue continu, corpus `a`).
+# MIN_SEPARATION_AUDIO_S : en dessous, pas assez de contexte pour que la passe inter-segments
+# de SepFormer serve à quelque chose (cf. discussion en chat sur le découpage dual-path).
+SEPARATION_WINDOW_S = 6.0
+MIN_SEPARATION_AUDIO_S = 2.0
 
 
 @dataclass
@@ -55,13 +71,16 @@ class PipelineBenchmarkResult:
 
 @dataclass
 class LineCommitState:
-    """État de commit AlignAtt + continuation TTS pour une ligne WLK — cf. ADR-0041."""
+    """État de commit AlignAtt + continuation TTS + suivi d'identité par embedding pour une
+    ligne WLK — cf. ADR-0041 (commit) et ADR-0042 (embedding)."""
 
     committed_fr: str = ""
     last_alignatt_end_s: float = -MIN_NEW_AUDIO_S
     chunk_count: int = 0
     voice_state: object | None = None
     audio_chunks: list = field(default_factory=list)
+    embedding: list | None = None
+    embedding_count: int = 0
 
 
 def _write_wav(path: Path, audio: "np.ndarray", sample_rate_hz: int) -> None:
@@ -77,6 +96,35 @@ def _write_wav(path: Path, audio: "np.ndarray", sample_rate_hz: int) -> None:
         wav_file.setsampwidth(2)
         wav_file.setframerate(sample_rate_hz)
         wav_file.writeframes(pcm16.tobytes())
+
+
+def _separate_and_track(
+    separator: VoiceSeparator,
+    embedder: SpeakerEmbedder,
+    window: "np.ndarray",
+    known_embedding: list | None,
+) -> tuple["np.ndarray | None", list]:
+    """Sépare `window` en 2 flux et choisit celui qui correspond le mieux à
+    `known_embedding` (ADR-0042) — ou, à défaut d'embedding déjà sauvegardé, au mélange brut
+    lui-même (WLK a déjà attribué ce segment à ce locuteur, donc le flux séparé le plus
+    proche du mélange global est le candidat le plus probable pour être ce locuteur).
+
+    Retourne `(flux_choisi_ou_None, embedding_à_sauvegarder)`. `None` si les deux flux
+    séparés ne semblent pas correspondre à des voix distinctes (rien de réel à séparer, cas
+    courant d'un seul locuteur actif) ou si la correspondance est trop incertaine — dans ces
+    deux cas l'appelant doit garder l'audio brut inchangé.
+    """
+    streams = separator.separate(window)
+    stream_embeddings = [embedder.embed(s) for s in streams]
+
+    if not streams_are_distinct(stream_embeddings):
+        return None, embedder.embed(window)
+
+    reference = known_embedding if known_embedding is not None else embedder.embed(window)
+    matched_idx, similarity = pick_matching_stream(reference, stream_embeddings)
+    if similarity < MATCH_CONFIDENCE_THRESHOLD:
+        return None, reference
+    return streams[matched_idx], stream_embeddings[matched_idx]
 
 
 def _consume_continuation(
@@ -105,6 +153,7 @@ async def run_benchmark(
     diarization: bool = True,
     lan: str = "auto",
     target_lang: str = "fr",
+    separation: bool = True,
 ) -> PipelineBenchmarkResult:
     """Câblage bout-en-bout (préliminaire à T2.3) : WLK (STT+diarisation) → politique de
     commit AlignAtt (ADR-0041) → SeamlessM4T v2 (traduction incrémentale) → Pocket TTS
@@ -137,6 +186,17 @@ async def run_benchmark(
     — l'audio s'enchaîne comme un seul énoncé continu, pas des extraits disjoints malgré des
     increments de texte séparés. Un seul fichier `line{idx}.wav` par ligne (pas un par
     increment), réécrit à chaque nouvel increment.
+
+    Séparation de voix + suivi d'identité par embedding (ADR-0042, `separation=True` par
+    défaut, désactivable via `--no-separation`) : avant chaque traduction (partielle ou
+    finale), les `SEPARATION_WINDOW_S` dernières secondes de l'audio de la ligne sont
+    passées à `VoiceSeparator` (SepFormer-WHAMR) ; le flux de sortie le plus proche de
+    l'embedding déjà connu pour cette ligne (ou, à défaut, du mélange brut lui-même)
+    remplace la fenêtre brute avant traduction — approxime l'extraction ciblée avec des
+    briques matures (séparation aveugle + suivi par embedding), faute de modèle d'extraction
+    ciblée disponible prêt à l'emploi (cf. ADR-0042). N'agit jamais que sur la fenêtre finale
+    (jamais la ligne entière — coût quadratique de l'attention sur de l'audio long) ; le
+    préfixe plus ancien de la ligne reste brut.
     """
     corpus.validate(corpus_key, corpus_dir=corpus_dir)
     wav_path = corpus.resolve(corpus_key, corpus_dir=corpus_dir)
@@ -159,6 +219,8 @@ async def run_benchmark(
     alignatt_translator = AlignAttSeamlessTranslator()
     final_translator = SeamlessTranslator()
     synth = PocketTtsSynthesizer()
+    separator = VoiceSeparator() if separation else None
+    embedder = SpeakerEmbedder() if separation else None
 
     with EventLogger(log_path) as logger:
         replay_start_monotonic = time.monotonic()
@@ -169,6 +231,37 @@ async def run_benchmark(
 
         async def send(chunk_bytes: bytes) -> None:
             await processor.process_audio(chunk_bytes)
+
+        async def clean_audio_for_line(idx: int, source_audio: "np.ndarray") -> "np.ndarray":
+            import numpy as np
+
+            if separator is None or embedder is None:
+                return source_audio
+
+            window_samples = int(SEPARATION_WINDOW_S * SAMPLE_RATE_HZ)
+            min_samples = int(MIN_SEPARATION_AUDIO_S * SAMPLE_RATE_HZ)
+            if len(source_audio) < min_samples:
+                return source_audio
+
+            if len(source_audio) > window_samples:
+                prefix = source_audio[:-window_samples]
+                window = source_audio[-window_samples:]
+            else:
+                prefix = np.array([], dtype=source_audio.dtype)
+                window = source_audio
+
+            state = commit_state.setdefault(idx, LineCommitState())
+            cleaned_window, embedding = await asyncio.to_thread(
+                _separate_and_track, separator, embedder, window, state.embedding
+            )
+            state.embedding = update_running_embedding(
+                state.embedding, embedding, state.embedding_count
+            )
+            state.embedding_count += 1
+
+            if cleaned_window is None:
+                return source_audio
+            return np.concatenate([prefix, cleaned_window])
 
         async def emit_increment(
             idx: int, speaker: str, increment: str, event_stage_t_in: float
@@ -208,6 +301,7 @@ async def run_benchmark(
             state.last_alignatt_end_s = end_s
 
             source_audio = read_segment(wav_path, start_s, end_s)
+            source_audio = await clean_audio_for_line(idx, source_audio)
             safe_text = await asyncio.to_thread(
                 alignatt_translator.translate_partial, source_audio, target_lang
             )
@@ -237,6 +331,7 @@ async def run_benchmark(
             speaker = line.get("speaker", "?")
 
             source_audio = read_segment(wav_path, start_s, end_s)
+            source_audio = await clean_audio_for_line(idx, source_audio)
             final_fr = await asyncio.to_thread(
                 final_translator.translate, source_audio, target_lang
             )
@@ -316,6 +411,12 @@ def main() -> None:
     parser.add_argument("--out-dir", type=Path, default=Path("bench-runs"))
     parser.add_argument("--corpus-dir", type=Path, default=corpus.CORPUS_DIR)
     parser.add_argument("--no-diarization", action="store_true")
+    parser.add_argument(
+        "--no-separation",
+        action="store_true",
+        help="Désactive la séparation de voix + suivi par embedding (ADR-0042) — pour "
+        "comparer avec/sans (cf. convention 'mesurer avant d'optimiser').",
+    )
     parser.add_argument("--lan", default="auto")
     parser.add_argument("--target-lang", default="fr")
     args = parser.parse_args()
@@ -328,6 +429,7 @@ def main() -> None:
             diarization=not args.no_diarization,
             lan=args.lan,
             target_lang=args.target_lang,
+            separation=not args.no_separation,
         )
     )
 
