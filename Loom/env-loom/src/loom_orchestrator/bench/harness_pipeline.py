@@ -243,6 +243,20 @@ async def run_benchmark(
     separator = VoiceSeparator() if separation else None
     embedder = SpeakerEmbedder() if separation else None
 
+    # ⚠ Instrumentation temporaire (2026-07-15, cf. Révisions ADR-0042) : isole la VRAM déjà
+    # occupée par les modèles résidents (WLK/Sortformer/Seamless×2/Pocket TTS/SepFormer/ECAPA
+    # si séparation active) avant tout traitement — sert à distinguer une pression de base
+    # (trop de modèles chargés simultanément) d'une croissance liée à translate_partial.
+    import torch
+
+    if torch.cuda.is_available():
+        baseline_allocated_gb = torch.cuda.memory_allocated() / 1e9
+        baseline_reserved_gb = torch.cuda.memory_reserved() / 1e9
+        print(
+            f"DEBUG VRAM baseline (tous modèles chargés, avant traitement) : "
+            f"allocated={baseline_allocated_gb:.2f}GB reserved={baseline_reserved_gb:.2f}GB"
+        )
+
     with EventLogger(log_path) as logger:
         replay_start_monotonic = time.monotonic()
         known_texts: list[str] = []
@@ -328,18 +342,26 @@ async def run_benchmark(
             source_audio = await clean_audio_for_line(idx, source_audio)
             t_clean_s = time.monotonic() - t0
 
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.reset_peak_memory_stats()
+
             t0 = time.monotonic()
             safe_text = await asyncio.to_thread(
                 alignatt_translator.translate_partial, source_audio, target_lang
             )
             t_translate_s = time.monotonic() - t0
+
             # ⚠ Instrumentation temporaire (2026-07-15, cf. Révisions ADR-0042) : durée brute
-            # par appel, pas le "retard cumulé" mesuré par STAGE_SEAMLESS (t_out - t_in) —
-            # pour savoir si translate_partial grandit avec la longueur de la ligne (jamais
-            # bornée, contrairement à la fenêtre de séparation).
+            # par appel (pas le "retard cumulé" de STAGE_SEAMLESS) + pic mémoire alloué durant
+            # ce seul appel — sert à confirmer si le pic mémoire de translate_partial grandit
+            # avec l'audio (cause probable des OOM constatés en plus de la dérive de latence).
+            peak_gb = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
             print(
                 f"DEBUG line{idx} chunk{state.chunk_count}: audio={audio_len_s:.1f}s "
-                f"clean={t_clean_s * 1000:.0f}ms translate={t_translate_s * 1000:.0f}ms"
+                f"clean={t_clean_s * 1000:.0f}ms translate={t_translate_s * 1000:.0f}ms "
+                f"peak_translate={peak_gb:.2f}GB"
             )
 
             t_translate_end = time.monotonic() - replay_start_monotonic
