@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import numpy as np
 
-MODEL_LANGUAGE = "french"
+MODEL_LANGUAGE = "french_24l"
 FALLBACK_VOICE = "estelle"
 
 
@@ -15,14 +15,15 @@ class PocketTtsSynthesizer:
     exporté à ce jour). Le vrai registre de voix par `speaker_id` est un travail
     d'orchestrateur (T2.3/T3.x), pas de ce composant.
 
-    ~ API vérifiée par documentation officielle (kyutai-labs.github.io/pocket-tts,
-    github.com/kyutai-labs/pocket-tts, lue le 2026-07-15) — pas par lecture de code source
-    ni par exécution locale (Pocket TTS non installé/testé sur cette machine, qui n'est de
-    toute façon pas la cible). `TTSModel.load_model(language="french")` est documenté
-    12 couches par défaut (24 couches via `"french_24l"`) — corrige l'hypothèse initiale
-    de ADR-0036 ("6 couches"), à vérifier par un run réel. Le nom court `"estelle"` passé à
-    `get_state_for_audio_prompt()` (par opposition à un chemin `hf://` complet) n'a pas non
-    plus été confirmé par exécution — premier point à corriger si le run échoue.
+    ✓ Constaté par exécution réelle (premier run T2.3-préliminaire, 2026-07-15) : il n'existe
+    pas de variante FR plus petite que 24 couches — `TTSModel.load_model(language="french")`
+    échoue avec `ValueError: For technical reasons, only a larger 24-layer model is available
+    for French. Please use the 'french_24l' language instead.` Corrige à la fois l'hypothèse
+    initiale de ADR-0036 ("6 couches") et sa révision du 2026-07-15 ("12 couches par défaut",
+    déduite de la doc officielle sans exécution réelle — la doc ne précisait pas que le FR
+    n'a pas de variante par défaut plus légère). Le nom court `"estelle"` passé à
+    `get_state_for_audio_prompt()` n'a pas encore été confirmé par exécution — prochain point
+    à vérifier si le run échoue après ce correctif.
 
     ⚠ `TTSModel.generate_audio()` est bloquant/CPU — ne jamais l'appeler directement depuis
     la boucle asyncio (cf. `Loom/CLAUDE.md`, "ne pas laisser l'inférence Pocket TTS tourner
