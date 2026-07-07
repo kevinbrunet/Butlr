@@ -35,10 +35,10 @@ async def run_benchmark(
     out_dir: Path,
     corpus_dir: Path = corpus.CORPUS_DIR,
     diarization: bool = True,
-    nllb_size: str = "600M",
     lan: str = "auto",
 ) -> BenchmarkResult:
-    """T0.4 — une commande = replay du corpus + latences + transcript FR (pour lecture qualité).
+    """T0.4 — une commande = replay du corpus + latences + transcript source (STT+diarisation
+    WLK uniquement — la traduction est retirée de WLK depuis ADR-0040, cf. `harness_seamless.py`).
 
     ⚠ Ne mesure aujourd'hui que l'étage WLK (audio → mise à jour de ligne) : les étages
     orchestrateur/TTS n'existent pas encore (Phase 2 du backlog).
@@ -65,15 +65,12 @@ async def run_benchmark(
     (qui avance à chaque mise à jour) plutôt que `start` (figé au début du segment) comme
     référence temporelle de la parole.
 
-    ⚠ Constaté empiriquement en T1.1 : hallucination récurrente du mot "auto"/"voiture" dans la
-    traduction FR (à la place de mots sans rapport : "bank", "book", "well", "White Rabbit"...),
-    **identique avec `nllb_size="600M"` et `"1.3B"`** — donc pas un problème de taille/qualité du
-    modèle NLLB. Hypothèse la plus probable : la chaîne littérale `lan="auto"` (config de
-    détection automatique de langue) fuite dans le pipeline de traduction — "auto" est un vrai
-    mot français (synonyme de "voiture"), ce qui expliquerait les deux formes observées.
-    Détection auto confirmée fiable sur ce corpus (`Detected language: en with p=0.9912` dans les
-    logs WLK) : forcer `lan="en"` ne coûte rien et isole cette hypothèse. Premier test à faire
-    avant d'incriminer NLLB lui-même ou de suivre la piste `nllb_size`.
+    ⚠ Historique (T1.1, résolu depuis) : ce harnais traduisait autrefois via NLLB
+    (`target_language="fr"`) et une hallucination récurrente du mot "auto"/"voiture" avait été
+    observée. La cause exacte n'a jamais été confirmée (l'hypothèse d'une fuite de `lan="auto"`
+    a été infirmée par lecture de code) — le sujet est devenu sans objet : NLLB/`nllw` sont
+    retirés de WLK depuis ADR-0040, remplacés par SeamlessM4T v2 (`harness_seamless.py`,
+    `translation_seamless.py`). Ce harnais ne mesure plus que le STT+diarisation de WLK.
     """
     corpus.validate(corpus_key, corpus_dir=corpus_dir)
     wav_path = corpus.resolve(corpus_key, corpus_dir=corpus_dir)
@@ -85,7 +82,7 @@ async def run_benchmark(
     transcript_path.write_text("", encoding="utf-8")
 
     # ✓ Champs vérifiés contre whisperlivekit/config.py (WhisperLiveKitConfig) : pcm_input,
-    # diarization, lan, target_language, diarization_backend existent bien avec ces noms.
+    # diarization, lan, diarization_backend existent bien avec ces noms.
     # ⚠ `TranscriptionEngine` est un singleton process-wide (whisperlivekit/core.py) : rejouer
     # ce benchmark avec une config différente (ex. grille T1.2) sans redémarrer le process exige
     # `TranscriptionEngine.reset()` d'abord, sinon la config précédente reste active.
@@ -94,8 +91,6 @@ async def run_benchmark(
         diarization=diarization,
         diarization_backend="sortformer",
         lan=lan,
-        target_language="fr",
-        nllb_size=nllb_size,
     )
     processor = AudioProcessor(transcription_engine=engine, mode="full")
 
@@ -126,7 +121,7 @@ async def run_benchmark(
                 if updates:
                     transcript_lines = []
                     for line in lines:
-                        text = line.get("translation") or line.get("text")
+                        text = line.get("text")
                         if not text:
                             continue
                         speaker = line.get("speaker", "?")
@@ -147,7 +142,8 @@ async def run_benchmark(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Benchmark Loom (T0.4) : replay corpus + latences + transcript FR."
+        description="Benchmark Loom (T0.4) : replay corpus + latences + transcript source "
+        "(STT+diarisation WLK, sans traduction — cf. harness_seamless.py)."
     )
     parser.add_argument("corpus_key", choices=[c.key for c in corpus.CORPUS_MANIFEST])
     parser.add_argument("--out-dir", type=Path, default=Path("bench-runs"))
@@ -155,21 +151,14 @@ def main() -> None:
     parser.add_argument(
         "--no-diarization",
         action="store_true",
-        help="Désactive la diarisation (isole STT+traduction, utile si Sortformer/NeMo "
+        help="Désactive la diarisation (isole STT, utile si Sortformer/NeMo "
         "n'est pas installé — cf. ADR-0034).",
-    )
-    parser.add_argument(
-        "--nllb-size",
-        default="600M",
-        help="Taille du modèle NLLB (défaut whisperlivekit : '600M'). Essayer '1.3B' ou "
-        "'3.3B' si la traduction hallucine (⚠ valeurs non confirmées côté WLK).",
     )
     parser.add_argument(
         "--lan",
         default="auto",
-        help="Langue source ('auto', 'en', 'zh'...). Défaut 'auto' suspecté de fuiter dans la "
-        "traduction FR (cf. docstring de run_benchmark) — essayer la langue explicite du "
-        "corpus si la traduction hallucine autour du mot 'auto'.",
+        help="Langue source passée à WLK ('auto', 'en', 'zh'...). Défaut 'auto' (détection "
+        "automatique par WLK).",
     )
     args = parser.parse_args()
 
@@ -179,7 +168,6 @@ def main() -> None:
             args.out_dir,
             args.corpus_dir,
             diarization=not args.no_diarization,
-            nllb_size=args.nllb_size,
             lan=args.lan,
         )
     )
