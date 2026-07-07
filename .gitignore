@@ -2,9 +2,10 @@
 # Les sous-projets ont leurs propres .gitignore plus spécifiques.
 
 # --- Claude Code ---
-# Overrides locaux, non partagés.
+# Overrides locaux, non partagés. Motif non ancré : s'applique aussi aux sous-projets
+# (Loom/.claude/, Alveus/.claude/...), pas seulement à la racine.
 CLAUDE.local.md
-.claude/settings.local.json
+**/.claude/settings.local.json
 .claude/worktrees/
 
 # --- Éditeurs / IDE ---

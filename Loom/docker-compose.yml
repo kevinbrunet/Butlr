@@ -1,0 +1,19 @@
+# ⚠ Squelette non testé (T0.1) — variables d'env à valider à T1.1. Un seul service : WLK et
+# Pocket TTS sont embarqués en bibliothèque dans le même process (cf. ADR-0039), pas de
+# serveur réseau, donc pas de port à exposer entre eux.
+services:
+  loom:
+    build:
+      context: ./env-loom
+    environment:
+      - LOOM_LANGUAGE=auto  # cf. ADR-0033/0039 — repli manuel EN/ZH si l'auto-détection échoue sur le ZH
+    volumes:
+      - ./voices:/voices
+      - ./corpus:/app/corpus:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

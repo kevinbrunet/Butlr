@@ -1,7 +1,7 @@
 # ADR 0006 — LLM serving via llama.cpp server sur GPU 10 GB
 
 **Date** : 2026-04-23
-**Statut** : Superseded by ADR 0024
+**Statut** : Superseded by ADR 0038
 
 ## Contexte
 
@@ -47,4 +47,4 @@ Fallback Q4_K_M si tension (~4,7 GB poids), perte de qualité mesurable mais acc
 
 ## Révisions
 - **2026-04-23** : création. Choix motivé par la contrainte 10 GB VRAM.
-- **2026-07-04** : superseded par ADR 0024 — découplage LLM via contrat API OpenAI-compatible.
+- **2026-07-04** : superseded par ADR 0038 — découplage LLM via contrat API OpenAI-compatible.

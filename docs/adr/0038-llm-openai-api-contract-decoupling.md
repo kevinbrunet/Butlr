@@ -1,4 +1,4 @@
-# ADR 0024 — Découplage du LLM via contrat API OpenAI-compatible
+# ADR 0038 — Découplage du LLM via contrat API OpenAI-compatible
 
 ## Status
 

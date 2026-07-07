@@ -1,0 +1,107 @@
+from __future__ import annotations
+
+import wave
+from dataclasses import dataclass
+from pathlib import Path
+
+# Les scripts de bench sont prévus pour être lancés depuis la racine Loom/ — cf. Loom/CLAUDE.md.
+CORPUS_DIR = Path("corpus")
+
+EXPECTED_SAMPLE_RATE_HZ = 16_000
+# ✓ whisperlivekit/audio_processor.py hardcode bytes_per_sample=2 (PCM 16 bits) pour le mode
+# pcm_input — vérifié par lecture du code source (repo QuentinFuxa/WhisperLiveKit, 2026-07-07).
+EXPECTED_SAMPLE_WIDTH_BYTES = 2
+
+
+@dataclass(frozen=True)
+class CorpusFile:
+    key: str
+    filename: str
+    language: str
+    speakers: int
+    min_duration_s: float
+    description: str
+    provenance: str
+
+
+# T0.2 du backlog : 4 fichiers wav 16kHz, versionnés dans corpus/ (choix délibéré malgré le
+# binaire, pour que le corpus voyage avec le repo entre postes/machine d'exécution).
+#
+# Provenance (2026-07-07) — audio public domain / recherche, converti en 16kHz mono PCM16 via
+# ffmpeg, validé par `validate()` contre chaque fichier réel :
+# - a, b : LibriVox (archive.org), lecture publique du domaine public.
+# - c : LibriVox (archive.org), collection en mandarin (langue "zho").
+# - d : George Mason University Speech Accent Archive (accent.gmu.edu), corpus académique de
+#   locuteurs non-natifs lisant un paragraphe standardisé en anglais — usage recherche/éducatif.
+#   Fichier source (~32s) bouclé pour atteindre min_duration_s (mêmes propos, même locuteur).
+CORPUS_MANIFEST: tuple[CorpusFile, ...] = (
+    CorpusFile(
+        "a", "a_en_mono.wav", "en", 1, 180.0, "EN mono-locuteur, ~3 min",
+        provenance="archive.org/details/alice_in_wonderland_librivox, ch.1 (Lewis Carroll, "
+        "Alice's Adventures in Wonderland), domaine public.",
+    ),
+    CorpusFile(
+        "b", "b_en_overlap.wav", "en", 2, 60.0, "EN 2 locuteurs avec chevauchements",
+        provenance="Mix synthétique (ffmpeg amix+adelay, chevauchement 20-65s) de "
+        "archive.org/details/tom_sawyer_librivox ch.1-2 (Mark Twain) et "
+        "archive.org/details/moby_dick_librivox ch.1-2 (Herman Melville), domaine public.",
+    ),
+    CorpusFile(
+        "c", "c_zh_mono.wav", "zh", 1, 60.0, "ZH mono-locuteur",
+        provenance="archive.org/details/call_to_arms_jl_librivox, ch.7 (Lu Xun, 呐喊), "
+        "domaine public.",
+    ),
+    CorpusFile(
+        "d", "d_en_accented.wav", "en", 1, 60.0, "EN, accents non-natifs",
+        provenance="accent.gmu.edu/soundtracks/mandarin1.mp3 (Speech Accent Archive, GMU) — "
+        "locuteur natif mandarin lisant le paragraphe standard en anglais, bouclé pour la durée.",
+    ),
+)
+
+
+class CorpusValidationError(Exception):
+    pass
+
+
+def _entry(key: str) -> CorpusFile:
+    entry = next((c for c in CORPUS_MANIFEST if c.key == key), None)
+    if entry is None:
+        known = [c.key for c in CORPUS_MANIFEST]
+        raise KeyError(f"clé de corpus inconnue : {key!r} — attendu un de {known}")
+    return entry
+
+
+def resolve(key: str, corpus_dir: Path = CORPUS_DIR) -> Path:
+    return corpus_dir / _entry(key).filename
+
+
+def validate(key: str, corpus_dir: Path = CORPUS_DIR) -> None:
+    """Vérifie qu'un fichier du corpus existe et respecte le format attendu (16kHz mono, PCM 16 bits).
+
+    Ne vérifie ni la langue ni le contenu réel (pas de détection auto ici) — seulement le
+    format audio, condition nécessaire pour un replay temps réel fidèle (T0.2).
+    """
+    entry = _entry(key)
+    path = corpus_dir / entry.filename
+    if not path.exists():
+        raise CorpusValidationError(f"fichier corpus manquant : {path}")
+
+    with wave.open(str(path), "rb") as wav_file:
+        if wav_file.getframerate() != EXPECTED_SAMPLE_RATE_HZ:
+            raise CorpusValidationError(
+                f"{path} : {wav_file.getframerate()}Hz, attendu {EXPECTED_SAMPLE_RATE_HZ}Hz"
+            )
+        if wav_file.getnchannels() != 1:
+            raise CorpusValidationError(
+                f"{path} : {wav_file.getnchannels()} canaux, attendu mono (1)"
+            )
+        if wav_file.getsampwidth() != EXPECTED_SAMPLE_WIDTH_BYTES:
+            raise CorpusValidationError(
+                f"{path} : PCM {wav_file.getsampwidth() * 8} bits, "
+                f"attendu {EXPECTED_SAMPLE_WIDTH_BYTES * 8} bits (WLK en mode pcm_input)"
+            )
+        duration_s = wav_file.getnframes() / wav_file.getframerate()
+        if duration_s < entry.min_duration_s:
+            raise CorpusValidationError(
+                f"{path} : {duration_s:.1f}s, attendu au moins {entry.min_duration_s:.0f}s"
+            )

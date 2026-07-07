@@ -4,12 +4,14 @@ Ce fichier est chargé automatiquement par Claude Code au démarrage. Il donne l
 
 ## Projet
 
-Butlr = majordome domotique local. Deux sous-projets :
+Butlr = majordome domotique local. Sous-projets :
 
 - **`mcp-home/`** — serveur MCP (.NET 10 / ASP.NET Core) qui expose les outils de pilotage de la maison. Au POC, seul backend = `ConsoleMockBackend` (lumières en mémoire, logs console).
 - **`carson/`** — majordome vocal (Python / Pipecat). Pipeline : wake word → VAD → STT → LLM (+ tool calling MCP) → TTS. Client MCP qui parle à `mcp-home` via SSE/HTTP.
+- **`Alveus/`** — agent de développement multi-agents (.NET / ASP.NET Core, Alveus-Worker). Voir `Alveus/docs/architecture.md` et `Alveus/docs/adr/`.
+- **`Loom/`** — POC d'interprétariat simultané EN/ZH → FR (audio→audio, voix clonée par intervenant). Voir `Loom/CLAUDE.md` et `Loom/docs/adr/`.
 
-**Stade actuel : POC.** Architecture documentée, scaffolds posés, LLM et wake word pas encore câblés.
+**Stade actuel : POC.** Architecture documentée, scaffolds posés. `mcp-home`/`carson` : LLM et wake word pas encore câblés. `Loom` : ADR actées, scaffold T0.1 posé, implémentation pas commencée.
 
 ## Documentation de référence (à lire avant de toucher à l'archi)
 
@@ -24,6 +26,8 @@ Butlr = majordome domotique local. Deux sous-projets :
 
 Si une décision change, **mets à jour l'ADR** (ou crée-en un nouveau). Ne modifie pas les faits d'architecture sans tracer la décision.
 
+⚠ La numérotation des ADR est **globale à tout le dépôt**, même si chaque sous-projet garde ses ADR dans son propre `docs/adr/` (`Alveus/docs/adr/`, `Loom/docs/adr/`, racine `docs/adr/`). Avant de créer un nouvel ADR, vérifie le numéro max sur les **trois** emplacements — une collision de numéro s'est déjà produite (root `0024` vs `Alveus/0024`, corrigé en root `0038`) faute de cette vérification.
+
 ## Stack
 
 | Zone | Tech | Notes |
@@ -33,6 +37,8 @@ Si une décision change, **mets à jour l'ADR** (ou crée-en un nouveau). Ne mod
 | `carson` | Python 3.11+, Pipecat, `mcp` SDK, faster-whisper, Piper, openWakeWord | venv + `pip install -e .[all,dev]` |
 | LLM runtime | llama.cpp server (OpenAI-compat, CUDA) | Qwen 2.5 7B Instruct GGUF Q5_K_M ; flag `--jinja` pour tool calling |
 | Scripts setup | Bash (Fedora Workstation) | `scripts/` — requiert CUDA Toolkit, cmake, jq, curl |
+| `Alveus` | .NET, ASP.NET Core | Voir `Alveus/docs/architecture.md`. |
+| `Loom` | Python 3.12, `uv`, WhisperLiveKit, Pocket TTS | Un seul process/venv (`env-loom/`) — bibliothèques embarquées, pas de serveur (cf. ADR-0039). Voir `Loom/CLAUDE.md`. |
 
 ## Conventions importantes
 
