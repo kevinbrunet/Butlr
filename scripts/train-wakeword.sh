@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Butlr / Phase 4 — Entraîne le wake word "Hey Carlson" via Docker.
+# Butlr / Phase 4 — Entraîne le wake word "Hey Carlson" via Docker (nanowakeword).
 #
-# Lance un container Linux (openWakeWord + Piper TTS) qui :
-#   1. Génère ~5 000 clips audio "Hey Carlson" via Piper TTS
-#   2. Télécharge les données négatives depuis Hugging Face
-#   3. Entraîne le modèle et produit hey_carlson.tflite
+# Lance un container Linux (nanowakeword[train] + Python 3.13) qui :
+#   1. Génère les clips audio "Hey Carlson" via TTS interne nanowakeword
+#   2. Extrait les features audio
+#   3. Entraîne le modèle et produit hey_carlson.onnx + hey_carlson_lite.onnx
 #
 # Prérequis : Docker installé et en cours d'exécution.
 # GPU       : si NVIDIA Container Toolkit configuré,
-#             passer --gpu pour accélérer l'entraînement (~45 min vs ~4 h CPU).
+#             passer --gpu pour accélérer l'entraînement (~20-40 min vs ~1-3 h CPU).
 #
 # Usage :
 #   ./train-wakeword.sh                    # entraînement CPU
@@ -129,26 +129,26 @@ echo ""
 log_info "Lancement de l'entraînement..."
 log_gray "Config    : $config_path"
 log_gray "Features  : $features_dir (cache persistant, ~4-6 GB au 1er run)"
-log_gray "Sortie    : $assets_dir/hey_carlson.tflite"
+log_gray "Sortie    : $assets_dir/hey_carlson.onnx"
 if $gpu; then
-    log_gray "Durée     : ~45 min (GPU)"
+    log_gray "Durée     : ~20-40 min (GPU)"
 else
-    log_gray "Durée     : ~2-4 h (CPU) — ajoute --gpu si tu as NVIDIA Container Toolkit"
+    log_gray "Durée     : ~1-3 h (CPU) — ajoute --gpu si tu as NVIDIA Container Toolkit"
 fi
 echo ""
 
 docker "${docker_args[@]}"
 
 # -- Résultat ------------------------------------------------------------------
-tflite="$assets_dir/hey_carlson.tflite"
-if [ -f "$tflite" ]; then
-    size_kb=$(( $(stat -c%s "$tflite") / 1024 ))
+onnx="$assets_dir/hey_carlson.onnx"
+if [ -f "$onnx" ]; then
+    size_kb=$(( $(stat -c%s "$onnx") / 1024 ))
     echo ""
-    log_ok "Modèle prêt : $tflite ($size_kb KB)"
+    log_ok "Modèle prêt : $onnx ($size_kb KB)"
     echo ""
     echo "Active le wake word :"
     echo "  export USE_WAKEWORD=1"
     echo "  carlson"
 else
-    log_warn "hey_carlson.tflite introuvable après l'entraînement. Vérifie les logs."
+    log_warn "hey_carlson.onnx introuvable après l'entraînement. Vérifie les logs."
 fi

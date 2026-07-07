@@ -24,16 +24,8 @@ def _default_stt_model() -> str:
 
 
 def _default_wakeword_model() -> str:
-    # hey_carlson.onnx si présent (modèle entraîné localement).
-    # Sinon, repli sur hey_jarvis pré-entraîné OWW (validé, fonctionne out-of-the-box).
-    import openwakeword.utils
     carlson_root = Path(__file__).parent.parent.parent
-    custom = carlson_root / "assets" / "wakeword" / "hey_carlson.onnx"
-    if custom.exists():
-        return str(custom)
-    oww_resources = Path(openwakeword.utils.__file__).parent / "resources" / "models"
-    jarvis = oww_resources / "hey_jarvis_v0.1.onnx"
-    return str(jarvis) if jarvis.exists() else str(oww_resources / "hey_jarvis_v0.1.tflite")
+    return str(carlson_root / "assets" / "wakeword" / "hey_carlson.onnx")
 
 
 @dataclass(frozen=True)

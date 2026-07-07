@@ -13,7 +13,7 @@ dependencies = [
     "mcp>=1.0",
     "pydantic>=2.6",
     "pyyaml>=6.0",
-    "numpy>=1.26",
+    "numpy>=2.0",
     "sounddevice>=0.4",
     # STT / VAD / wake word / TTS installed via extras below to keep base lean.
 ]
@@ -21,7 +21,8 @@ dependencies = [
 [project.optional-dependencies]
 stt = ["faster-whisper>=1.0"]
 vad = ["silero-vad>=5.0"]
-wake = ["openwakeword>=0.6"]
+wake = ["nanowakeword>=2.0"]
+wake-train = ["nanowakeword[train]>=2.0"]
 tts-piper = ["piper-tts>=1.2"]
 tts-xtts = ["TTS>=0.22"]  # ⚠ licence à vérifier avant usage non-personnel
 llm = ["openai>=1.30"]   # OpenAI-compatible client parlant à llama.cpp server (cf. ADR 0006)
@@ -32,7 +33,7 @@ dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.4"]
 all = [
     "faster-whisper>=1.0",
     "silero-vad>=5.0",
-    "openwakeword>=0.6",
+    "nanowakeword>=2.0",
     "piper-tts>=1.2",
     "openai>=1.30",
     "onnxruntime-gpu>=1.18",
@@ -53,4 +54,4 @@ asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py313"

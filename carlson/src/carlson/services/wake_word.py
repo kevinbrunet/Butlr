@@ -1,9 +1,9 @@
-"""Wake word service — openWakeWord wrapped as a Pipecat FrameProcessor.
+"""Wake word service — nanowakeword wrapped as a Pipecat FrameProcessor.
 
 Pipeline position : entre transport.input() et STT.
 
 Machine d'états :
-    sleeping   — openWakeWord tourne sur l'audio mic ; rien ne passe en aval.
+    sleeping   — nanowakeword tourne sur l'audio mic ; rien ne passe en aval.
     confirming — N chunks consécutifs au-dessus du seuil requis (étape 4.3).
     active     — session ouverte ; tout passe jusqu'au VADUserStoppedSpeakingFrame.
 """
@@ -11,7 +11,7 @@ Machine d'états :
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 from pipecat.frames.frames import (
@@ -24,9 +24,12 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from ..config import Config
 
+if TYPE_CHECKING:
+    from nanowakeword import NanoInterpreter
+
 log = logging.getLogger("carlson.wake_word")
 
-# ~ openWakeWord traite l'audio en chunks de 80 ms à 16 kHz → 1280 samples int16.
+# ~ nanowakeword traite l'audio en chunks de 80 ms à 16 kHz → 1280 samples int16.
 _CHUNK_SAMPLES = 1280
 
 # Étape 4.3 — confirmation douce : N chunks consécutifs ≥ threshold pour valider.
@@ -37,7 +40,7 @@ _CONFIRMATION_CHUNKS = 2
 class WakeWordProcessor(FrameProcessor):
     """Gate les frames audio/VAD jusqu'à détection du wake word.
 
-    En état sleeping : l'audio est consommé par openWakeWord mais bloqué en aval.
+    En état sleeping : l'audio est consommé par nanowakeword mais bloqué en aval.
     Les VADUser*SpeakingFrame de Silero sont aussi supprimés (évite des tours STT
     intempestifs avant la phrase magique).
 
@@ -46,7 +49,7 @@ class WakeWordProcessor(FrameProcessor):
     Sur VADUserStoppedSpeakingFrame : on repasse en sleeping.
     """
 
-    def __init__(self, model: Any, threshold: float) -> None:
+    def __init__(self, model: "NanoInterpreter", threshold: float) -> None:
         super().__init__()
         self._model = model
         self._threshold = threshold
@@ -68,6 +71,7 @@ class WakeWordProcessor(FrameProcessor):
                 self._active = False
                 self._audio_buf = b""
                 self._confirm_count = 0
+                self._model.reset()
                 await self.push_frame(frame, direction)
             elif isinstance(frame, VADUserStartedSpeakingFrame):
                 # Silero peut émettre un Started alors qu'on vient d'en envoyer un ;
@@ -77,7 +81,7 @@ class WakeWordProcessor(FrameProcessor):
                 await self.push_frame(frame, direction)
             return
 
-        # État sleeping : alimenter openWakeWord, tout bloquer en aval.
+        # État sleeping : alimenter nanowakeword, tout bloquer en aval.
         if isinstance(frame, AudioRawFrame):
             self._audio_buf += frame.audio
             await self._process_chunks()
@@ -89,12 +93,10 @@ class WakeWordProcessor(FrameProcessor):
             chunk = self._audio_buf[:bytes_per_chunk]
             self._audio_buf = self._audio_buf[bytes_per_chunk:]
 
-            # OWW exige du int16 brut — _get_melspectrogram() cast les valeurs en int16,
-            # donc float32 normalisé [-1,1] serait tronqué à zéro → scores ~0.001.
             samples = np.frombuffer(chunk, dtype=np.int16)
-            # ~ Model.predict retourne un dict {model_name: float} — API openWakeWord>=0.6.
-            scores: dict[str, float] = self._model.predict(samples)
-            score = max(scores.values()) if scores else 0.0
+            # ~ NanoInterpreter.predict retourne un objet avec .score (float) — API nanowakeword>=2.0.
+            result = self._model.predict(samples)
+            score: float = result.score
 
             if score >= self._threshold:
                 self._confirm_count += 1
@@ -116,33 +118,10 @@ class WakeWordProcessor(FrameProcessor):
                 self._confirm_count = 0
 
 
-def _ensure_oww_models() -> None:
-    """Télécharge les modèles utilitaires OWW si absents (melspectrogram.onnx, etc.).
-
-    Nécessaire après un pip install fresh — ces fichiers ne sont pas dans le wheel,
-    ils se téléchargent depuis GitHub releases au premier usage.
-    """
-    import pathlib
-    import openwakeword.utils  # type: ignore[import-untyped]
-
-    resources_dir = pathlib.Path(openwakeword.utils.__file__).parent / "resources" / "models"
-    melspec = resources_dir / "melspectrogram.onnx"
-    if not melspec.exists():
-        log.info("Modèles utilitaires OWW absents — téléchargement...")
-        openwakeword.utils.download_models()
-        log.info("Modèles OWW téléchargés.")
-
-
 def build_wake_word_service(config: Config) -> WakeWordProcessor:
-    # ~ Import conditionnel : openwakeword n'est requis que si USE_WAKEWORD=1.
-    from openwakeword.model import Model  # type: ignore[import-untyped]
+    from nanowakeword import NanoInterpreter  # type: ignore[import-untyped]
 
-    _ensure_oww_models()
-
-    model = Model(
-        wakeword_models=[config.wakeword_model],
-        inference_framework="onnx",
-    )
+    model = NanoInterpreter.load_model(config.wakeword_model)
     log.info(
         "Wake word model chargé : %s (seuil=%.2f, confirmation=%d chunks)",
         config.wakeword_model,

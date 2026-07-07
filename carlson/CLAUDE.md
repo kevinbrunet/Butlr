@@ -24,7 +24,7 @@ carlson/
 │       ├── llm_local.py       # OpenAILLMService vers llama.cpp server
 │       ├── stt_whisper.py     # faster-whisper
 │       ├── tts_piper.py       # Piper (TTS par défaut)
-│       └── wake_word.py       # openWakeWord
+│       └── wake_word.py       # nanowakeword
 ├── tests/test_filler.py
 └── assets/wakeword/           # modèle "Hey Carlson" (à entraîner)
 ```
@@ -33,7 +33,7 @@ carlson/
 
 - Python 3.11+ (union types `X | Y`, `from __future__ import annotations` partout).
 - Type hints sur tout ce qui est public.
-- `ruff` pour lint/format (`line-length = 100`, `target-version = "py311"`).
+- `ruff` pour lint/format (`line-length = 100`, `target-version = "py313"`).
 - Classes `Config` / DTOs = `pydantic` v2 ou `dataclass(frozen=True)` — cohérence dans un même module.
 - **Pas d'async partout sans raison** — Pipecat est async, donc le pipeline l'est ; les helpers purs restent sync.
 - Imports triés par ruff (isort-compat). Pas de `from x import *`.
@@ -47,7 +47,7 @@ Cf. `README.md` pour la liste complète. Les 4 critiques :
 | `LLM_BASE_URL` | `http://localhost:8080/v1` | llama.cpp server local |
 | `MCP_HOME_URL` | `http://localhost:5090/mcp` | endpoint SSE mcp-home |
 | `MCP_HOME_TOKEN` | *(vide)* | bearer token ; vide = LAN dev seulement |
-| `WAKEWORD_MODEL` | `assets/wakeword/hey_carlson.tflite` | modèle openWakeWord custom |
+| `WAKEWORD_MODEL` | `assets/wakeword/hey_carlson.onnx` | modèle nanowakeword custom |
 
 ## Tests
 

@@ -1,103 +1,28 @@
-# Image d'entraînement du wake word "Hey Carlson" via openWakeWord.
-#
-# Basé exactement sur automatic_model_training.ipynb :
-# https://github.com/dscripka/openWakeWord/blob/main/notebooks/automatic_model_training.ipynb
+# Image d'entraînement du wake word "Hey Carlson" via nanowakeword.
 #
 # Build  : docker build -f carlson/docker/Dockerfile.wakeword-train -t butlr-wakeword-train .
-# Run    : voir scripts/Train-WakeWord.ps1
+# Run    : voir scripts/train-wakeword.sh
 #
-# Taille image : ~ 8-10 GB (PyTorch + TensorFlow + dépendances training).
-# GPU          : passer --gpus all au docker run si NVIDIA Container Toolkit installé.
+# ~ Taille image : ~4-6 GB (PyTorch + audio deps).
+# GPU   : passer --gpus all au docker run si NVIDIA Container Toolkit installé.
 
-# python:3.10 requis : tensorflow-cpu==2.8.1 supporte Python 3.7-3.10 uniquement.
-FROM python:3.10-slim
+FROM python:3.13-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git wget ffmpeg libsndfile1 \
-    build-essential \
-    espeak-ng \
+    git wget ffmpeg libsndfile1 espeak-ng \
     && rm -rf /var/lib/apt/lists/*
 
-# openWakeWord depuis git — nécessaire pour accéder à openwakeword/train.py
-# (le package PyPI n'expose pas ce script comme module runnable).
-RUN git clone --depth=1 https://github.com/dscripka/openWakeWord /oww
-
-# Installe depuis PyPI en version fixe = même version que le host carlson (openwakeword==0.6.0).
-# CRITIQUE : training et inference doivent utiliser le MÊME embedding_model.onnx.
-# Si les versions divergent, le modèle entraîné produit 0.001 au runtime car les
-# embeddings de la version git HEAD != embeddings 0.6.0.
-RUN pip install --no-cache-dir "openwakeword==0.6.0"
-
-# Télécharge les modèles utilitaires OWW 0.6.0 (melspectrogram.onnx, embedding_model.onnx…)
-RUN python -c "import openwakeword.utils; openwakeword.utils.download_models()"
-
-# Fork dscripka de piper-sample-generator — c'est celui référencé par OWW.
-# (github.com/rhasspy/piper-sample-generator a été restructuré et n'a plus generate_samples.py)
-RUN git clone --depth=1 https://github.com/dscripka/piper-sample-generator /piper-gen
-
-# Modèle libritts attendu par le fork dscripka (904 speakers, ~500 MB)
-RUN mkdir -p /piper-gen/models && \
-    wget -q -O /piper-gen/models/en-us-libritts-high.pt \
-    "https://github.com/rhasspy/piper-sample-generator/releases/download/v1.0.0/en-us-libritts-high.pt"
-
-# Dépendances de training — versions exactes du notebook.
-# Séparées en couches pour faciliter le debug et profiter du cache Docker.
-#
-# Couche 1 : NumPy 1.x — doit être installé avant torch/tf car les binaires
-# (torch 2.0.1, torchaudio 2.0.2, torchmetrics 1.2.0) ont été compilés contre NumPy 1.x.
-# NumPy 2.x lève RuntimeError: Numpy is not available au runtime.
-RUN pip install --no-cache-dir "numpy<2"
-
-# Couche 2 : PyTorch ecosystem
-# torch-audiomentations==0.11.0 appelle torchaudio.set_audio_backend() qui a été
-# supprimé dans torchaudio>=2.1 — on reste sur 2.0.x où la fonction est encore là.
-RUN pip install --no-cache-dir \
-    "torch==2.0.1" "torchaudio==2.0.2" \
-    torchinfo==1.8.0 \
-    torchmetrics==1.2.0
-
-# Couche 2 : TensorFlow + ONNX (triplet compatible : tf 2.8.1 + tf_probability 0.16.0 + onnx_tf 1.10.0)
-# protobuf<3.21 requis : tensorflow 2.8.1 utilise l'ancienne API protobuf C++
-# (Descriptors cannot be created directly avec protobuf>=4.x)
-RUN pip install --no-cache-dir \
-    "tensorflow-cpu==2.8.1" \
-    "tensorflow_probability==0.16.0" \
-    "onnx_tf==1.10.0" \
-    onnx \
-    "protobuf<3.21"
-
-# Couche 3 : audio processing
-RUN pip install --no-cache-dir \
-    speechbrain==0.5.14 \
-    audiomentations==0.33.0 \
-    torch-audiomentations==0.11.0 \
-    piper-phonemize \
-    espeak-phonemizer \
-    webrtcvad \
-    acoustics==0.2.6 \
-    scipy \
-    soundfile
-
-# Couche 4 : utilitaires restants
-RUN pip install --no-cache-dir \
-    mutagen==1.47.0 \
-    pronouncing==0.2.0 \
-    "datasets==2.14.6" \
-    deep-phonemizer==0.0.19 \
-    tqdm \
-    pyyaml
+# ~ nanowakeword[train] tire torch 2.8.x, torchaudio, scipy, sklearn, onnx,
+#   acoustics, librosa, pydub, audiomentations, soundfile, etc.
+RUN pip install --no-cache-dir "nanowakeword[train]>=2.0"
 
 COPY carlson/docker/train.py /train.py
 
-# generate_samples.py est dans /piper-gen — OWW l'importe via sys.path depuis le config,
-# mais le PYTHONPATH garantit que ça marche quel que soit le chemin dans le YAML.
-ENV PYTHONPATH=/piper-gen
+# /data monté depuis carlson/assets/wakeword/ :
+#   - lecture  : training_config.yaml, clips réels si présents
+#   - écriture : hey_carlson.onnx (sortie)
+VOLUME ["/data"]
 
 WORKDIR /work
-
-# /data monté depuis carlson/assets/wakeword/ :
-#   - lecture  : training_config.yaml
-#   - écriture : hey_carlson.tflite, hey_carlson.onnx (sortie)
-VOLUME ["/data"]
 
 ENTRYPOINT ["python", "/train.py"]
