@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 # est l'import public exact.
 from whisperlivekit import AudioProcessor, TranscriptionEngine
 
+from loom_orchestrator.alignatt import compute_increment
 from loom_orchestrator.bench import corpus
 from loom_orchestrator.bench.aggregate import (
     aggregate_by_stage,
@@ -34,8 +35,14 @@ from loom_orchestrator.bench.instrumentation import (
 from loom_orchestrator.bench.line_tracking import extract_updates
 from loom_orchestrator.bench.replay import replay_realtime
 from loom_orchestrator.bench.timestamps import hms_to_seconds
-from loom_orchestrator.translation_seamless import SeamlessTranslator
+from loom_orchestrator.translation_seamless import AlignAttSeamlessTranslator, SeamlessTranslator
 from loom_orchestrator.tts_pocket import PocketTtsSynthesizer
+
+# ⚠ Pas encore benchmarké (ADR-0041) : évite de ré-encoder l'intégralité de l'audio d'une
+# ligne à chaque mise à jour WLK (plusieurs fois par seconde, cf. logs des runs précédents) —
+# n'appelle AlignAtt à nouveau pour une ligne que si son audio a grandi d'au moins cette durée
+# depuis le dernier appel pour cette même ligne.
+MIN_NEW_AUDIO_S = 1.0
 
 
 @dataclass
@@ -43,6 +50,15 @@ class PipelineBenchmarkResult:
     log_path: Path
     transcript_path: Path
     audio_dir: Path
+
+
+@dataclass
+class LineCommitState:
+    """État de commit AlignAtt pour une ligne WLK — cf. ADR-0041."""
+
+    committed_fr: str = ""
+    last_alignatt_end_s: float = -MIN_NEW_AUDIO_S
+    chunk_count: int = 0
 
 
 def _write_wav(path: Path, audio: "np.ndarray", sample_rate_hz: int) -> None:
@@ -68,38 +84,29 @@ async def run_benchmark(
     lan: str = "auto",
     target_lang: str = "fr",
 ) -> PipelineBenchmarkResult:
-    """Premier câblage bout-en-bout (préliminaire à T2.3) : WLK (STT+diarisation) → segment
-    audio source par tour de parole → SeamlessM4T v2 (traduction) → Pocket TTS (synthèse
-    FR, voix de repli unique, pas de clonage par locuteur — cf. `tts_pocket.py`). Pas encore
-    l'orchestrateur final : pas de file bornée, pas de registre de voix par locuteur,
-    traitement strictement séquentiel d'un tour à la fois (cf. `main.py`, toujours
-    `NotImplementedError` pour le vrai T2.3).
+    """Câblage bout-en-bout (préliminaire à T2.3) : WLK (STT+diarisation) → politique de
+    commit AlignAtt (ADR-0041) → SeamlessM4T v2 (traduction incrémentale) → Pocket TTS
+    (synthèse FR, voix de repli unique, pas de clonage par locuteur — cf. `tts_pocket.py`).
+    Pas encore l'orchestrateur final : pas de file bornée, pas de registre de voix par
+    locuteur (cf. `main.py`, toujours `NotImplementedError` pour le vrai T2.3).
 
-    ⚠ Constaté empiriquement (premier run réel, corpus `a`, 2026-07-15) et corrigé depuis :
-    la première version scellait un tour dès qu'un nouvel index apparaissait dans `lines` —
-    faux sur ce corpus, où `lines` reste à 2 entrées pendant tout le fichier (un narrateur
-    continu + un second index qui clignote sans jamais devenir un 3e index) : le scellement
-    prématuré a coupé le premier tour à ~6s et perdu toute la croissance ultérieure de
-    `lines[0]` (jamais retraitée), ne laissant que 2 extraits de quelques mots. Politique
-    corrigée : chaque ligne de `lines` (un segment WLK = un tour, cf. schéma vérifié dans
-    `harness.py`) n'est traduite/synthétisée **qu'une fois le flux terminé**, avec son texte
-    final. Pas d'incrémental par tour dans ce harnais (contrairement à `STAGE_WLK`, mesuré en
-    continu) — cf. `main.py`/T2.3 pour une vraie politique de commit en flux.
+    Politique de commit (ADR-0041, révisée le 2026-07-15 — remplace une première version
+    "attend la fin du flux", elle-même remplaçant une version encore antérieure "scelle sur
+    nouvel index WLK", jamais implémentée) : pendant qu'une ligne WLK grandit, l'audio
+    disponible pour cette ligne est retraduit par `AlignAttSeamlessTranslator.
+    translate_partial` (throttlé par `MIN_NEW_AUDIO_S`), qui ne retourne que le préfixe
+    "sûr" au sens AlignAtt. Le nouveau préfixe est diffé contre le texte déjà commité
+    (`alignatt.compute_increment`) — seul l'increment part vers Pocket TTS. Quand une ligne
+    se termine (nouvel index WLK = changement de locuteur, ou fin du flux), le texte restant
+    est commité de force via `SeamlessTranslator.translate` (traduction complète, l'audio ne
+    grandira plus) — filet de sécurité, cf. "le passé est immuable" (`Loom/CLAUDE.md`).
 
-    ⚠ Conséquence attendue sur un narrateur continu (corpus `a`) : un seul tour couvrant
-    quasiment tout le fichier (~185s, ~2000 mots) part en une seule fois vers Seamless puis
-    Pocket TTS — pas encore de découpage des tours trop longs (hors scope de ce premier
-    câblage). Sur `b` (2 locuteurs qui alternent), `lines` contient plusieurs entrées de
-    taille raisonnable (cf. `bench-runs/b-*.transcript.txt` du run WLK seul), donc plus
-    représentatif pour juger la qualité FR.
-
-    ⚠ Le traitement d'un tour de parole (Seamless + TTS, tous deux déportés en executor via
+    ⚠ Le traitement d'un increment (Seamless + TTS, déportés en executor via
     `asyncio.to_thread`) est awaited séquentiellement dans la tâche qui consomme aussi les
-    résultats WLK : un tour lent ralentit la lecture du flux de résultats WLK (jamais son
-    traitement interne, cf. "TTS en retard = dégradation contrôlée, jamais de blocage amont"),
-    et fait grandir la file interne de résultats déjà bufferisée par WLK. Pas de plafond
-    explicite ici — c'est le travail de l'orchestrateur final (T2.3), pas de ce harnais de
-    validation.
+    résultats WLK : un increment lent ralentit la lecture du flux de résultats WLK (jamais
+    son traitement interne, cf. "TTS en retard = dégradation contrôlée, jamais de blocage
+    amont"), et fait grandir la file interne de résultats déjà bufferisée par WLK. Pas de
+    plafond explicite ici — c'est le travail de l'orchestrateur final (T2.3).
     """
     corpus.validate(corpus_key, corpus_dir=corpus_dir)
     wav_path = corpus.resolve(corpus_key, corpus_dir=corpus_dir)
@@ -119,39 +126,99 @@ async def run_benchmark(
         lan=lan,
     )
     processor = AudioProcessor(transcription_engine=engine, mode="full")
-    translator = SeamlessTranslator()
+    alignatt_translator = AlignAttSeamlessTranslator()
+    final_translator = SeamlessTranslator()
     synth = PocketTtsSynthesizer()
 
     with EventLogger(log_path) as logger:
         replay_start_monotonic = time.monotonic()
         known_texts: list[str] = []
         last_lines: list[dict] = []
+        commit_state: dict[int, LineCommitState] = {}
+        sealed_committed: set[int] = set()
 
         async def send(chunk_bytes: bytes) -> None:
             await processor.process_audio(chunk_bytes)
 
-        async def process_turn(idx: int, line: dict) -> None:
+        async def emit_increment(
+            idx: int, speaker: str, increment: str, event_stage_t_in: float
+        ) -> None:
+            if not increment:
+                return
+            audio_fr = await asyncio.to_thread(synth.synthesize, increment)
+            t_tts_end = time.monotonic() - replay_start_monotonic
+            segment_id = f"{corpus_key}-line{idx}-chunk{commit_state[idx].chunk_count}"
+            logger.log(LatencyEvent.create(segment_id, STAGE_TTS, event_stage_t_in, t_tts_end))
+
+            _write_wav(
+                audio_dir / f"line{idx}-chunk{commit_state[idx].chunk_count}.wav",
+                audio_fr,
+                synth.sample_rate_hz,
+            )
+            with transcript_path.open("a", encoding="utf-8") as f:
+                f.write(f"[{speaker}] FR (increment) : {increment}\n")
+            commit_state[idx].chunk_count += 1
+
+        async def try_alignatt_commit(idx: int, line: dict) -> None:
+            start, end = line.get("start"), line.get("end")
+            if start is None or end is None:
+                return
+            start_s, end_s = hms_to_seconds(start), hms_to_seconds(end)
+
+            state = commit_state.setdefault(idx, LineCommitState())
+            if end_s - state.last_alignatt_end_s < MIN_NEW_AUDIO_S:
+                return
+            state.last_alignatt_end_s = end_s
+
+            source_audio = read_segment(wav_path, start_s, end_s)
+            safe_text = await asyncio.to_thread(
+                alignatt_translator.translate_partial, source_audio, target_lang
+            )
+            t_translate_end = time.monotonic() - replay_start_monotonic
+            segment_id = f"{corpus_key}-line{idx}-chunk{state.chunk_count}"
+            logger.log(LatencyEvent.create(segment_id, STAGE_SEAMLESS, end_s, t_translate_end))
+
+            increment, is_consistent = compute_increment(state.committed_fr, safe_text)
+            if not is_consistent:
+                print(
+                    f"WARNING: AlignAtt incohérent sur line{idx} — texte sûr précédent non "
+                    f"préfixé par le nouveau (committed={state.committed_fr!r}, "
+                    f"new_safe={safe_text!r}). Increment ignoré, texte déjà commité conservé."
+                )
+                return
+
+            state.committed_fr = safe_text
+            speaker = line.get("speaker", "?")
+            await emit_increment(idx, speaker, increment, t_translate_end)
+
+        async def force_final_commit(idx: int, line: dict) -> None:
             text = line.get("text")
             start, end = line.get("start"), line.get("end")
             if not text or start is None or end is None:
                 return
-
             start_s, end_s = hms_to_seconds(start), hms_to_seconds(end)
             speaker = line.get("speaker", "?")
-            segment_id = f"{corpus_key}-turn{idx}"
-            source_audio = read_segment(wav_path, start_s, end_s)
 
-            fr_text = await asyncio.to_thread(translator.translate, source_audio, target_lang)
+            source_audio = read_segment(wav_path, start_s, end_s)
+            final_fr = await asyncio.to_thread(
+                final_translator.translate, source_audio, target_lang
+            )
             t_translate_end = time.monotonic() - replay_start_monotonic
+            state = commit_state.setdefault(idx, LineCommitState())
+            segment_id = f"{corpus_key}-line{idx}-final"
             logger.log(LatencyEvent.create(segment_id, STAGE_SEAMLESS, end_s, t_translate_end))
 
-            audio_fr = await asyncio.to_thread(synth.synthesize, fr_text)
-            t_tts_end = time.monotonic() - replay_start_monotonic
-            logger.log(LatencyEvent.create(segment_id, STAGE_TTS, t_translate_end, t_tts_end))
+            increment, is_consistent = compute_increment(state.committed_fr, final_fr)
+            if not is_consistent:
+                print(
+                    f"WARNING: traduction finale de line{idx} incohérente avec le texte déjà "
+                    f"commité (committed={state.committed_fr!r}, final={final_fr!r}). "
+                    "Texte déjà commité conservé, tail final ignoré."
+                )
+                return
 
-            _write_wav(audio_dir / f"turn{idx}.wav", audio_fr, synth.sample_rate_hz)
-            with transcript_path.open("a", encoding="utf-8") as f:
-                f.write(f"[{speaker}] source : {text}\n[{speaker}] FR : {fr_text}\n\n")
+            state.committed_fr = final_fr
+            await emit_increment(idx, speaker, increment, t_translate_end)
 
         async def consume() -> None:
             results_generator = await processor.create_tasks()
@@ -160,14 +227,30 @@ async def run_benchmark(
                 lines = data.get("lines", [])
                 last_lines[:] = lines
 
-                for idx, line, text in extract_updates(lines, known_texts):
+                for idx, line, _text in extract_updates(lines, known_texts):
                     end = line.get("end")
                     if end is None:
                         continue
-                    segment_id = f"{corpus_key}-line{idx}-{len(text)}"
+                    segment_id = f"{corpus_key}-wlk-line{idx}-{len(_text)}"
                     t_in = hms_to_seconds(end)
                     t_out = time.monotonic() - replay_start_monotonic
                     logger.log(LatencyEvent.create(segment_id, STAGE_WLK, t_in, t_out))
+
+                if not lines:
+                    continue
+
+                # Scelle définitivement toute ligne qui n'est plus la dernière (changement
+                # de locuteur détecté) et pas encore scellée — traduction complète, pas
+                # partielle, l'audio de cette ligne ne grandira plus.
+                for idx in range(len(lines) - 1):
+                    if idx not in sealed_committed:
+                        await force_final_commit(idx, lines[idx])
+                        sealed_committed.add(idx)
+
+                # Commit incrémental AlignAtt sur la ligne active (la dernière, encore en
+                # croissance) — throttlé par MIN_NEW_AUDIO_S à l'intérieur de la fonction.
+                active_idx = len(lines) - 1
+                await try_alignatt_commit(active_idx, lines[active_idx])
 
         consumer_task = asyncio.create_task(consume())
         await replay_realtime(wav_path, send)
@@ -176,7 +259,8 @@ async def run_benchmark(
         consumer_task.cancel()
 
         for idx, line in enumerate(last_lines):
-            await process_turn(idx, line)
+            if idx not in sealed_committed:
+                await force_final_commit(idx, line)
 
     return PipelineBenchmarkResult(
         log_path=log_path, transcript_path=transcript_path, audio_dir=audio_dir
@@ -185,8 +269,8 @@ async def run_benchmark(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Premier câblage bout-en-bout Loom : WLK (STT+diarisation) → "
-        "SeamlessM4T v2 (traduction) → Pocket TTS (synthèse FR), par tour de parole."
+        description="Câblage bout-en-bout Loom : WLK (STT+diarisation) → commit AlignAtt "
+        "(ADR-0041) → SeamlessM4T v2 → Pocket TTS (synthèse FR), incrémental par ligne."
     )
     parser.add_argument("corpus_key", choices=[c.key for c in corpus.CORPUS_MANIFEST])
     parser.add_argument("--out-dir", type=Path, default=Path("bench-runs"))
@@ -216,7 +300,7 @@ def main() -> None:
     print(format_report(reports))
     print(f"\nLog : {result.log_path}")
     print(f"Transcript : {result.transcript_path}")
-    print(f"Audio FR par tour : {result.audio_dir}")
+    print(f"Audio FR par ligne/chunk : {result.audio_dir}")
 
 
 if __name__ == "__main__":

@@ -68,3 +68,86 @@ class SeamlessTranslator:
             repetition_penalty=1.2,
         )[0]
         return self._processor.decode(output_tokens.tolist(), skip_special_tokens=True)
+
+
+# ⚠ Valeur de départ non calibrée empiriquement (ADR-0041) — nombre de frames encodeur, pas
+# une durée, pour ne pas dépendre du taux de trame réel de l'encodeur parole de SeamlessM4T v2
+# (non vérifié). À ajuster une fois mesuré sur la machine cible.
+FRONTIER_FRAMES_DEFAULT = 4
+
+
+class AlignAttSeamlessTranslator:
+    """Traduction incrémentale via AlignAtt (Papi et al., Interspeech 2023) appliqué à
+    l'attention croisée de `SeamlessM4Tv2ForSpeechToText` — politique de commit de
+    ADR-0041, remplace l'attente d'un tour de parole complet par une décision continue
+    "ce préfixe de traduction est-il sûr à émettre étant donné l'audio disponible".
+
+    ⚠ Chaque appel à `translate_partial` ré-encode l'intégralité de l'audio fourni depuis
+    zéro (pas de cache décodeur réutilisé entre appels à audio de longueur différente) —
+    reproduire ce pattern de cache serait reproduire le bug `_continue_generation_with_cache`
+    qui a cassé NLLB (cf. ADR-0040). Le coût CPU/GPU grandit donc avec la longueur de la ligne
+    en cours — pas encore mesuré (à faire une fois câblé dans `harness_pipeline.py`).
+
+    ⚠ Forme exacte de `outputs.cross_attentions` (transformers `generate(output_attentions=
+    True, return_dict_in_generate=True)`) non vérifiée par exécution réelle — des
+    incohérences de forme entre versions/modèles sont documentées côté transformers (issues
+    GitHub #11788, #17327, #33296). Le code ci-dessous prend systématiquement la **dernière**
+    ligne de la dimension "longueur générée" de chaque tenseur d'attention, ce qui doit
+    correspondre au token courant que la forme soit `(..., 1, src_len)` (un pas à la fois) ou
+    `(..., gen_len_so_far, src_len)` (cumulatif) — à confirmer sur le premier run réel.
+    """
+
+    def __init__(
+        self,
+        model_name: str = MODEL_NAME,
+        device: str = "cuda",
+        frontier_frames: int = FRONTIER_FRAMES_DEFAULT,
+    ) -> None:
+        from transformers import AutoProcessor, SeamlessM4Tv2ForSpeechToText
+
+        self._processor = AutoProcessor.from_pretrained(model_name)
+        self._model = SeamlessM4Tv2ForSpeechToText.from_pretrained(model_name).to(device)
+        self._device = device
+        self._frontier_frames = frontier_frames
+
+    def translate_partial(self, audio: np.ndarray, target_lang: str = "fr") -> str:
+        """Traduit l'audio disponible jusqu'ici et retourne uniquement le préfixe "sûr"
+        (cf. `alignatt.safe_token_count`) — pas le texte complet généré. L'appelant est
+        responsable de diffuser ce préfixe contre le texte déjà commité (cf.
+        `alignatt.compute_increment`) pour n'envoyer au TTS que l'increment nouveau.
+        """
+        from loom_orchestrator.alignatt import safe_token_count
+
+        tgt_lang = resolve_language_code(target_lang)
+        inputs = self._processor(audio=audio, sampling_rate=SAMPLE_RATE_HZ, return_tensors="pt")
+        inputs = {k: v.to(self._device) for k, v in inputs.items()}
+
+        outputs = self._model.generate(
+            **inputs,
+            tgt_lang=tgt_lang,
+            no_repeat_ngram_size=3,
+            repetition_penalty=1.2,
+            output_attentions=True,
+            return_dict_in_generate=True,
+        )
+
+        token_ids = outputs.sequences[0]
+        cross_attentions = outputs.cross_attentions
+        if not cross_attentions:
+            return ""
+
+        encoder_seq_len = cross_attentions[0][-1].shape[-1]
+        attended_frames = []
+        for step_attn in cross_attentions:
+            last_layer_attn = step_attn[-1]  # (batch, heads, gen_len_so_far, src_len)
+            avg_over_heads = last_layer_attn[0].mean(dim=0)  # (gen_len_so_far, src_len)
+            attended_frames.append(int(avg_over_heads[-1].argmax().item()))
+
+        n_safe = safe_token_count(attended_frames, encoder_seq_len, self._frontier_frames)
+        if n_safe == 0:
+            return ""
+
+        # token_ids[0] est le token de début de séquence (BOS/langue cible), pas un token
+        # généré — cf. convention seq2seq de transformers.
+        safe_tokens = token_ids[1 : 1 + n_safe]
+        return self._processor.decode(safe_tokens.tolist(), skip_special_tokens=True)
