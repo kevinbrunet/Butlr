@@ -45,3 +45,4 @@ Deux phases, décidées ensemble mais implémentées séparément :
 ## Révisions
 
 - 2026-07-14 — création
+- 2026-07-15 — validation empirique Phase 1 (corpus `c`, ZH, segments de 10s, `env-loom/src/loom_orchestrator/bench/harness_seamless.py`) : plus aucune hallucination de mot type "auto"/"voiture" (le problème documenté ci-dessus est résolu). Défaut initial constaté — boucles de répétition en fin de segment ("les maisons" ×20, dégénérescence connue du décodage glouton, pas la même cause que le bug NLLB) — corrigé par `no_repeat_ngram_size=3` + `repetition_penalty=1.2` sur `generate()`. Effet de bord positif : latence améliorée (p95 1461ms → 1113ms), probablement parce que bloquer les boucles réduit le nombre de tokens générés. Défaut résiduel mineur, non corrigé par ce fix : au moins une hallucination de contenu observée ("Beijing Twin Towers"), à surveiller en continu (T1.3-équivalent pour Seamless) mais pas bloquant.
