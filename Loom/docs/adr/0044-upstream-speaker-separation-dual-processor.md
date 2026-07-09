@@ -1,0 +1,47 @@
+# ADR 0044 — Séparation de voix en amont de WLK, un AudioProcessor par locuteur suivi
+
+## Status
+
+Accepted
+
+## Context
+
+ADR-0043 remplace Seamless par un petit LLM qui traduit le **texte** déjà transcrit par WLK, plus l'audio brut. Ce choix supprime toute protection contre le chevauchement multi-locuteur : la séparation de voix (ADR-0042) nettoyait l'audio juste avant l'appel à Seamless, jamais l'entrée de WLK lui-même (`la diarisation WLK n'est pas touchée`, ADR-0042 §Decision) — donc sur le chemin `llm`, la corruption due au chevauchement est déjà dans le texte avant qu'on puisse agir. Confirmé empiriquement le 2026-07-16 (`corpus b`, cf. Révisions ADR-0043) : WLK produit des segments corrompus en zone de chevauchement ("Lebrvaks, Dieu était tiré de la vie" pour "Huck Finn is drawn from life", mots inventés comme "Movedic"), et le petit Qwen traduit ce charabia en français grammaticalement fluide — pire que Seamless, qui échouait au moins de façon plus visible.
+
+Trois pistes de correction ont été discutées :
+- **(B) Re-transcrire seulement la fenêtre déjà séparée**, juste avant traduction — le plus petit changement, réutilise `clean_audio_for_line` (déjà calculé, orphelin sur le chemin `llm`), coût borné. Mais ne corrige que le texte envoyé à la traduction : WLK continue en interne de produire/afficher un texte corrompu, et ça introduit une deuxième source de vérité (texte WLK vs re-transcription) à réconcilier — pas une correction à la racine.
+- **(C) Bascule dynamique vers Seamless+séparation pendant le chevauchement détecté** — le moins de code, mais dépend d'un signal de chevauchement fiable (pas juste `speaker_id`) dont la disponibilité dans les données WLK/Sortformer actuelles n'est pas confirmée.
+- **(A) Séparer en continu en amont de WLK**, une session WLK par locuteur suivi — corrige à la racine (WLK ne voit jamais l'audio mélangé pour un locuteur donné) mais le chantier le plus large.
+
+Kevin a tranché pour (A) : corriger le problème à la racine plutôt que le patcher en aval, priorité explicite sur le multi-locuteur.
+
+✓ Vérifié (documentation officielle WhisperLiveKit, lue le 2026-07-16) : un seul `TranscriptionEngine` (porte les modèles, coûteux en VRAM) peut alimenter plusieurs `AudioProcessor` indépendants — "Create a new AudioProcessor for each connection, passing the shared engine". Les poids ne sont chargés qu'une fois : (A) n'implique donc *pas* de doubler l'empreinte VRAM de WLK, seulement l'état de session (léger), contrairement à l'hypothèse initiale de coût qui aurait pu la faire rejeter. ⚠ Ce multi-session n'est documenté que côté "the backend supports multiple concurrent users" du serveur HTTP de référence — jamais vérifié pour un usage bibliothèque directe (notre cas, cf. ADR-0039) avec du vrai parallélisme asyncio à l'intérieur d'un seul process, ni pour la thread/coroutine-safety du `TranscriptionEngine` partagé.
+
+## Decision
+
+Un seul `TranscriptionEngine` partagé, un `AudioProcessor` par identité de locuteur suivie (2 pour le POC, cf. corpus `b`). L'audio brut entrant est séparé en continu (`VoiceSeparator`, réutilisé en continu plutôt que ponctuellement comme dans ADR-0042) sur des fenêtres glissantes bornées (même contrainte de coût quadratique que ADR-0042, même ordre de grandeur de fenêtre). Chaque flux séparé est attribué à une identité de locuteur par similarité d'embedding (`speaker_tracking.py`, réutilisé tel quel dans sa logique de comparaison), puis routé vers l'`AudioProcessor` correspondant.
+
+Bootstrap d'identité sans référence WLK : `speaker_tracking.pick_matching_stream` utilisait jusqu'ici l'embedding du mélange brut comme référence initiale, car WLK avait déjà attribué le segment à un locuteur (ADR-0042, en aval de WLK). En amont de WLK, cette référence n'existe pas encore — au premier segment où `streams_are_distinct` devient vrai, les deux flux sont assignés arbitrairement (identité 0 / identité 1), puis le suivi par embedding (`update_running_embedding`) prend le relai comme avant. Avant cette première détection (audio mono-locuteur en début de flux), tout part sur l'identité 0.
+
+Quand un seul locuteur est actif (`streams_are_distinct` faux) : l'audio brut est envoyé tel quel au processor de l'identité la plus proche par embedding (comme le fait déjà `_separate_and_track` aujourd'hui pour choisir entre flux séparés) ; l'autre processor ne reçoit rien pour cette fenêtre.
+
+Diarization Sortformer gardée activée par défaut sur chaque `AudioProcessor` au premier passage (comportement inchangé) — filet de sécurité si la séparation laisse fuiter l'autre locuteur, probablement redondante à terme puisque chaque processor ne voit qu'un locuteur par construction, mais pas retirée avant mesure (cf. "mesurer avant d'optimiser").
+
+## Consequences
+
+- VRAM WLK : ✓ pas de doublement attendu pour les poids du modèle (partagés via `TranscriptionEngine`) — mais l'empreinte totale (engine partagé + 2 sessions `AudioProcessor` + Sortformer + SepFormer + ECAPA + Pocket TTS + Qwen 4B, cf. ADR-0043) n'est pas mesurée. Premier harnais dédié requis avant tout code d'intégration (cf. Révisions).
+- ⚠ Sécurité de 2 `AudioProcessor` alimentés concurremment (asyncio) sur un seul `TranscriptionEngine` partagé non confirmée par la documentation — risque principal à lever en isolation avant d'investir dans la réécriture complète de la boucle d'ingestion.
+- ⚠ Tolérance de WLK à des pauses arbitrairement longues sans recevoir de nouveau chunk sur une session (cas "processor du locuteur inactif ne reçoit rien pendant que l'autre parle") non vérifiée.
+- Réécriture substantielle de la boucle d'ingestion de `harness_pipeline.py` — au-delà d'un flag comme ADR-0043, remplace `consume()`/`send()` (un seul flux WLK) par une boucle qui sépare en continu puis route vers 2 sessions, chacune produisant ses propres lignes WLK à committer/traduire indépendamment.
+- Le pattern de séparation ponctuelle "juste avant traduction" d'ADR-0042 (`clean_audio_for_line`, déjà orpheline sur le chemin `llm` depuis ADR-0043) devient définitivement obsolète pour ce chemin une fois (A) en place — ADR-0042 reste valide tel quel pour le chemin `seamless` (toujours le repli en cas de chevauchement non résolu par (A) elle-même, cf. ADR-0043 §Révisions).
+- Sortformer par session : coût dupliqué (une instance de diarisation par `AudioProcessor`, même si l'engine STT est partagé) — pas mesuré, à réévaluer si redondant une fois (A) validé.
+
+## Alternatives considérées
+
+- **(B) Re-transcrire seulement la fenêtre déjà séparée avant traduction** : rejetée comme solution définitive — ne protège que le texte envoyé à la traduction, pas la transcription WLK elle-même (toujours visible/loggée corrompue), introduit une deuxième source de vérité à réconcilier. Reste une option de repli si (A) échoue en complexité ou en coût.
+- **(C) Bascule dynamique vers Seamless+séparation pendant le chevauchement détecté** : rejetée pour l'instant — dépend d'un signal de chevauchement fiable non confirmé disponible dans les données WLK/Sortformer actuelles ; nécessiterait sa propre investigation avant d'être seulement évaluable.
+- **Garder l'architecture actuelle (séparation seulement avant traduction, ADR-0042 inchangée) et accepter la limite sur le multi-locuteur pour le POC** : rejetée — Kevin a explicitement priorisé la résolution du multi-locuteur plutôt que de la documenter comme limite connue.
+
+## Révisions
+
+- 2026-07-16 — création, suite à la confirmation empirique (ADR-0043 §Révisions, `corpus b`) que le chemin de traduction LLM n'a aucune protection contre la contamination STT en zone de chevauchement, et au choix explicite de Kevin de corriger à la racine plutôt que de patcher en aval.
