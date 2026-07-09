@@ -142,6 +142,35 @@ async def run_benchmark(
     known_embeddings: list[list[float] | None] = [None] * N_IDENTITIES
     embedding_counts: list[int] = [0] * N_IDENTITIES
 
+    # ⚠ Identifié seulement après un run réel qui restait à p95=9s malgré le découplage
+    # ci-dessus (cf. Révisions ADR-0044) : `AudioProcessor.process_audio` ne reçoit que des
+    # octets PCM bruts, sans horodatage — WLK ne peut donc mesurer `line["end"]` que relatif
+    # au volume d'audio *reçu par cette session*, jamais à la position réelle dans le flux
+    # source global. Or chaque identité ne reçoit qu'une fraction discontinue de l'audio
+    # (silence pendant que l'autre locuteur parle) : son horloge interne prend du retard sur
+    # l'horloge murale réelle, un retard qui grandit avec la part de temps de parole de
+    # l'autre identité — mesurer la latence WLK en comparant `line["end"]` (horloge interne
+    # du processor) à l'horloge murale globale confond donc ce décalage structurel avec de la
+    # vraie latence. `identity_timeline[ident]` : liste de `(échantillon_début_processor,
+    # échantillon_fin_processor, échantillon_début_global)` par incrément envoyé — permet de
+    # retraduire un timestamp interne à un processor vers sa position réelle dans le flux
+    # source global avant de mesurer quoi que ce soit.
+    identity_timeline: list[list[tuple[int, int, int]]] = [[] for _ in range(N_IDENTITIES)]
+
+    def _record_send(ident: int, n_samples: int, global_start_sample: int) -> None:
+        timeline = identity_timeline[ident]
+        processor_start = timeline[-1][1] if timeline else 0
+        timeline.append((processor_start, processor_start + n_samples, global_start_sample))
+
+    def _to_global_seconds(ident: int, processor_seconds: float) -> float:
+        processor_sample = int(processor_seconds * SAMPLE_RATE_HZ)
+        for processor_start, processor_end, global_start in identity_timeline[ident]:
+            if processor_start <= processor_sample <= processor_end:
+                return (global_start + (processor_sample - processor_start)) / SAMPLE_RATE_HZ
+        # Pas encore de correspondance connue (ne devrait pas arriver en usage normal, cf.
+        # docstring ci-dessus) — retourne tel quel plutôt que de faire échouer une mesure.
+        return processor_seconds
+
     with EventLogger(log_path) as logger:
         replay_start_monotonic = time.monotonic()
 
@@ -196,7 +225,7 @@ async def run_benchmark(
             if not segment:
                 return
 
-            end_s = hms_to_seconds(end)
+            end_s = _to_global_seconds(ident, hms_to_seconds(end))
             translated = await asyncio.to_thread(
                 llm_translator.translate, segment, source_lang, target_lang
             )
@@ -222,7 +251,7 @@ async def run_benchmark(
                 else:
                     state.flushed_source = new_flushed
                     if segment:
-                        end_s = hms_to_seconds(end)
+                        end_s = _to_global_seconds(ident, hms_to_seconds(end))
                         translated = await asyncio.to_thread(
                             llm_translator.translate, segment, source_lang, target_lang
                         )
@@ -314,7 +343,7 @@ async def run_benchmark(
                     if end is None:
                         continue
                     segment_id = f"{corpus_key}-id{ident}-wlk-line{idx}-{len(_text)}"
-                    t_in = hms_to_seconds(end)
+                    t_in = _to_global_seconds(ident, hms_to_seconds(end))
                     t_out = time.monotonic() - replay_start_monotonic
                     logger.log(LatencyEvent.create(segment_id, STAGE_WLK, t_in, t_out))
 
@@ -330,13 +359,18 @@ async def run_benchmark(
                 _queue_latest(partial_queues[ident], (active_idx, lines[active_idx]))
 
         async def route_window(
-            window: "np.ndarray", increment_start: int, increment_len: int
+            window: "np.ndarray",
+            increment_start: int,
+            increment_len: int,
+            global_start_sample: int,
         ) -> None:
             """Sépare `window` (les dernières SEPARATION_WINDOW_S secondes d'audio brut
             accumulé) et route seulement le nouvel incrément (`[increment_start:
             increment_start + increment_len]`, la partie jamais encore envoyée à un
             processor — cf. "le passé est immuable", Loom/CLAUDE.md) vers l'identité
-            correspondante.
+            correspondante. `global_start_sample` : position de cet incrément dans le flux
+            source global (pas relative à `window`) — enregistrée via `_record_send` pour
+            pouvoir retraduire les timestamps internes WLK plus tard (cf. `identity_timeline`).
 
             ⚠ Appelée depuis `route_consumer` (tâche de fond), jamais depuis `send` — cf.
             Révisions ADR-0044 : appeler ce genre de traitement GPU directement dans `send`
@@ -369,6 +403,7 @@ async def run_benchmark(
                     increment_audio = streams[stream_idx][
                         increment_start : increment_start + increment_len
                     ]
+                    _record_send(ident, len(increment_audio), global_start_sample)
                     sends.append(
                         sessions[ident].processor.process_audio(_pcm16_bytes(increment_audio))
                     )
@@ -383,6 +418,7 @@ async def run_benchmark(
                 )
                 embedding_counts[active_ident] += 1
                 increment_audio = window[increment_start : increment_start + increment_len]
+                _record_send(active_ident, len(increment_audio), global_start_sample)
                 await sessions[active_ident].processor.process_audio(
                     _pcm16_bytes(increment_audio)
                 )
@@ -400,9 +436,11 @@ async def run_benchmark(
             (cf. docstring de `route_window`)."""
             while True:
                 print(f"DEBUG route_consumer: file en attente = {route_queue.qsize()}")
-                window, increment_start, increment_len = await route_queue.get()
+                window, increment_start, increment_len, global_start_sample = (
+                    await route_queue.get()
+                )
                 try:
-                    await route_window(window, increment_start, increment_len)
+                    await route_window(window, increment_start, increment_len, global_start_sample)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001 — isole une erreur de séparation/routage
@@ -433,6 +471,7 @@ async def run_benchmark(
                 window = buffer[window_start:].copy()
                 increment_start = routed_samples - window_start
                 increment_len = len(buffer) - routed_samples
+                global_start_sample = routed_samples
                 # Marqué routé immédiatement (avant même que route_consumer n'ait traité le
                 # job) : `send` ne doit jamais attendre le traitement GPU, cf. docstring de
                 # route_window. Politique de drop si route_consumer est en retard : le plus
@@ -440,7 +479,7 @@ async def run_benchmark(
                 # pas rejoué plus tard — "le passé est immuable"), jamais `send` ne bloque
                 # (cf. "jamais de blocage amont", Loom/CLAUDE.md).
                 routed_samples = len(buffer)
-                job = (window, increment_start, increment_len)
+                job = (window, increment_start, increment_len, global_start_sample)
                 try:
                     route_queue.put_nowait(job)
                 except asyncio.QueueFull:
@@ -461,7 +500,7 @@ async def run_benchmark(
                 window_start = max(0, len(buffer) - window_samples)
                 window = buffer[window_start:].copy()
                 increment_start = routed_samples - window_start
-                job = (window, increment_start, unrouted)
+                job = (window, increment_start, unrouted, routed_samples)
                 try:
                     route_queue.put_nowait(job)
                 except asyncio.QueueFull:
