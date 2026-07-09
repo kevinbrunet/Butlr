@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from loom_orchestrator.speaker_tracking import (
+    assign_and_bootstrap,
+    assign_streams_to_identities,
     cosine_similarity,
+    pick_active_identity,
     pick_matching_stream,
     streams_are_distinct,
     update_running_embedding,
@@ -65,3 +68,59 @@ def test_update_running_embedding_weights_by_count() -> None:
     new = [0.0]
     result = update_running_embedding(old, new, count=9)
     assert result == [9.0]
+
+
+def test_assign_streams_to_identities_straight_pairing() -> None:
+    id0, id1 = [1.0, 0.0], [0.0, 1.0]
+    stream_close_to_id0, stream_close_to_id1 = [0.9, 0.1], [0.1, 0.9]
+    assert assign_streams_to_identities(
+        [id0, id1], [stream_close_to_id0, stream_close_to_id1]
+    ) == [0, 1]
+
+
+def test_assign_streams_to_identities_swapped_pairing() -> None:
+    id0, id1 = [1.0, 0.0], [0.0, 1.0]
+    stream_close_to_id1, stream_close_to_id0 = [0.1, 0.9], [0.9, 0.1]
+    assert assign_streams_to_identities(
+        [id0, id1], [stream_close_to_id1, stream_close_to_id0]
+    ) == [1, 0]
+
+
+def test_pick_active_identity_no_known_embeddings_defaults_to_zero() -> None:
+    assert pick_active_identity([None, None], [1.0, 0.0]) == 0
+
+
+def test_pick_active_identity_matches_closest_known() -> None:
+    id0, id1 = [1.0, 0.0], [0.0, 1.0]
+    assert pick_active_identity([id0, id1], [0.05, 0.95]) == 1
+    assert pick_active_identity([id0, id1], [0.95, 0.05]) == 0
+
+
+def test_pick_active_identity_only_one_known_so_far() -> None:
+    id1 = [0.0, 1.0]
+    assert pick_active_identity([None, id1], [0.1, 0.9]) == 1
+
+
+def test_assign_and_bootstrap_no_identity_known_yet() -> None:
+    stream0, stream1 = [0.9, 0.1], [0.1, 0.9]
+    assert assign_and_bootstrap([None, None], [stream0, stream1]) == [0, 1]
+
+
+def test_assign_and_bootstrap_only_identity_zero_known() -> None:
+    id0 = [1.0, 0.0]
+    stream_close_to_id0, other_stream = [0.9, 0.1], [0.1, 0.9]
+    assert assign_and_bootstrap([id0, None], [stream_close_to_id0, other_stream]) == [0, 1]
+    assert assign_and_bootstrap([id0, None], [other_stream, stream_close_to_id0]) == [1, 0]
+
+
+def test_assign_and_bootstrap_only_identity_one_known() -> None:
+    id1 = [0.0, 1.0]
+    stream_close_to_id0, stream_close_to_id1 = [0.9, 0.1], [0.1, 0.9]
+    assert assign_and_bootstrap([None, id1], [stream_close_to_id0, stream_close_to_id1]) == [0, 1]
+    assert assign_and_bootstrap([None, id1], [stream_close_to_id1, stream_close_to_id0]) == [1, 0]
+
+
+def test_assign_and_bootstrap_both_known_delegates_to_assign_streams() -> None:
+    id0, id1 = [1.0, 0.0], [0.0, 1.0]
+    stream0, stream1 = [0.9, 0.1], [0.1, 0.9]
+    assert assign_and_bootstrap([id0, id1], [stream0, stream1]) == [0, 1]

@@ -21,7 +21,7 @@ Loom = POC d'interprétariat simultané EN/ZH → FR. Audio d'un intervenant (an
   - `0041` — Politique de commit AlignAtt (attention Seamless), découplée des lignes WLK (*partie "commit côté Seamless" superseded par 0043 ; l'algorithme pur `alignatt.py` reste potentiellement réutilisable, cf. 0043*)
   - `0042` — Séparation de voix (SepFormer) + suivi d'identité par embedding, pour la contamination en zone de recouvrement — **ADR de référence pour la robustesse au chevauchement**
   - `0043` — Un petit LLM local (Qwen, llama.cpp embarqué) remplace Seamless pour la traduction — validé sur audio mono-locuteur (2026-07-16), reste ouvert pour le multi-locuteur (cf. 0044)
-  - `0044` — Séparation de voix en amont de WLK, un `AudioProcessor` par locuteur suivi — corrige la lacune multi-locuteur de 0043 à la racine, **conception actée, implémentation pas encore commencée (harnais isolé `harness_dual_processor.py` en premier)**
+  - `0044` — Séparation de voix en amont de WLK, un `AudioProcessor` par locuteur suivi — corrige la lacune multi-locuteur de 0043 à la racine, **premier jet de code posé (`harness_pipeline_dual.py`), pas encore validé sur la machine cible**
 
 ## Architecture
 

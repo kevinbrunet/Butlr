@@ -56,3 +56,71 @@ def update_running_embedding(
     if old is None or count == 0:
         return list(new)
     return [(o * count + n) / (count + 1) for o, n in zip(old, new)]
+
+
+def assign_streams_to_identities(
+    known_embeddings: list[list[float]], stream_embeddings: list[list[float]]
+) -> list[int]:
+    """Associe chaque identité déjà connue (`known_embeddings`, longueur 2) au flux séparé
+    (`stream_embeddings`, longueur 2) qui lui correspond le mieux (ADR-0044, séparation en
+    amont de WLK) — choisit la permutation qui maximise la similarité totale, plutôt que
+    deux appels indépendants à `pick_matching_stream` qui pourraient assigner le même flux
+    aux deux identités. Ne gère que 2 identités/2 flux (POC à 2 locuteurs) — pas généralisé
+    à N.
+
+    Retourne `[index_du_flux_pour_identité_0, index_du_flux_pour_identité_1]`.
+    """
+    straight = cosine_similarity(known_embeddings[0], stream_embeddings[0]) + cosine_similarity(
+        known_embeddings[1], stream_embeddings[1]
+    )
+    swapped = cosine_similarity(known_embeddings[0], stream_embeddings[1]) + cosine_similarity(
+        known_embeddings[1], stream_embeddings[0]
+    )
+    return [0, 1] if straight >= swapped else [1, 0]
+
+
+def assign_and_bootstrap(
+    known_embeddings: list[list[float] | None], stream_embeddings: list[list[float]]
+) -> list[int]:
+    """Associe les 2 flux séparés aux 2 identités, y compris pendant le bootstrap avant que
+    les deux identités aient un embedding sauvegardé (ADR-0044, séparation en amont de WLK —
+    contrairement à ADR-0042 où WLK avait déjà attribué le segment à un locuteur, ici rien
+    n'est connu au tout début du flux). Combine `assign_streams_to_identities` (cas normal,
+    les deux identités déjà connues) avec deux cas de bootstrap :
+    - aucune identité connue encore (chevauchement détecté avant que quiconque n'ait parlé
+      seul) : assignation arbitraire `[0, 1]`.
+    - une seule identité connue (cas le plus courant en pratique : un locuteur a parlé seul
+      avant que l'autre ne rejoigne) : le flux le plus proche de l'identité déjà connue lui
+      est assigné, l'autre flux devient la nouvelle identité.
+
+    Retourne `[index_du_flux_pour_identité_0, index_du_flux_pour_identité_1]`.
+    """
+    known_indices = [i for i, e in enumerate(known_embeddings) if e is not None]
+    if not known_indices:
+        return [0, 1]
+    if len(known_indices) == 1:
+        known_idx = known_indices[0]
+        other_idx = 1 - known_idx
+        matched_stream, _ = pick_matching_stream(known_embeddings[known_idx], stream_embeddings)
+        assignment = [0, 0]
+        assignment[known_idx] = matched_stream
+        assignment[other_idx] = 1 - matched_stream
+        return assignment
+    return assign_streams_to_identities(
+        [known_embeddings[0], known_embeddings[1]], stream_embeddings
+    )
+
+
+def pick_active_identity(
+    known_embeddings: list[list[float] | None], mixture_embedding: list[float]
+) -> int:
+    """Choisit l'identité active quand un seul locuteur parle (`streams_are_distinct` faux,
+    ADR-0044) — similarité de l'embedding du mélange brut contre chaque identité déjà connue.
+    Si aucune identité n'est encore connue (tout début de flux, avant toute détection de
+    chevauchement), retourne l'identité 0 par convention (cf. ADR-0044 §Decision, bootstrap).
+    """
+    known = [(i, e) for i, e in enumerate(known_embeddings) if e is not None]
+    if not known:
+        return 0
+    similarities = [(i, cosine_similarity(e, mixture_embedding)) for i, e in known]
+    return max(similarities, key=lambda pair: pair[1])[0]
