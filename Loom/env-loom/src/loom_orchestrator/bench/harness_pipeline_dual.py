@@ -75,6 +75,11 @@ N_IDENTITIES = 2
 SEPARATION_WINDOW_S = 6.0
 ROUTE_EVERY_S = 1.0
 
+# ⚠ Pas calibré empiriquement (cf. Révisions ADR-0044, corrigé après le premier run réel qui
+# a montré un pacing temps réel désynchronisé faute de découplage feed()/route_consumer()) —
+# taille de départ, quelques secondes de retard tolérées avant de perdre de l'audio.
+ROUTE_QUEUE_MAXSIZE = 5
+
 
 @dataclass
 class PipelineDualBenchmarkResult:
@@ -260,14 +265,22 @@ async def run_benchmark(
             accumulé) et route seulement le nouvel incrément (`[increment_start:
             increment_start + increment_len]`, la partie jamais encore envoyée à un
             processor — cf. "le passé est immuable", Loom/CLAUDE.md) vers l'identité
-            correspondante."""
+            correspondante.
+
+            ⚠ Appelée depuis `route_consumer` (tâche de fond), jamais depuis `send` — cf.
+            Révisions ADR-0044 : appeler ce genre de traitement GPU directement dans `send`
+            (attendu par `replay_realtime` avant le chunk suivant) désynchronise le pacing
+            temps réel dès que ce traitement dépasse le débit d'arrivée de l'audio, ce que le
+            premier run réel a confirmé (étage `wlk` p95=9s, largement hors budget).
+            """
             streams = await asyncio.to_thread(separator.separate, window)
-            stream_embeddings = [
-                await asyncio.to_thread(embedder.embed, s) for s in streams
-            ]
+            stream_embeddings = list(
+                await asyncio.gather(*(asyncio.to_thread(embedder.embed, s) for s in streams))
+            )
 
             if streams_are_distinct(stream_embeddings):
                 assignment = assign_and_bootstrap(known_embeddings, stream_embeddings)
+                sends = []
                 for ident in range(N_IDENTITIES):
                     stream_idx = assignment[ident]
                     known_embeddings[ident] = update_running_embedding(
@@ -279,7 +292,10 @@ async def run_benchmark(
                     increment_audio = streams[stream_idx][
                         increment_start : increment_start + increment_len
                     ]
-                    await sessions[ident].processor.process_audio(_pcm16_bytes(increment_audio))
+                    sends.append(
+                        sessions[ident].processor.process_audio(_pcm16_bytes(increment_audio))
+                    )
+                await asyncio.gather(*sends)
             else:
                 mixture_embedding = await asyncio.to_thread(embedder.embed, window)
                 active_ident = pick_active_identity(known_embeddings, mixture_embedding)
@@ -294,7 +310,22 @@ async def run_benchmark(
                     _pcm16_bytes(increment_audio)
                 )
 
-        async def feed() -> None:
+        async def route_consumer(route_queue: "asyncio.Queue") -> None:
+            """Draine `route_queue` en séquence (préserve l'ordre, évite les races sur
+            `known_embeddings`/`embedding_counts`), découplé du rythme temps réel de `feed`
+            (cf. docstring de `route_window`)."""
+            while True:
+                window, increment_start, increment_len = await route_queue.get()
+                try:
+                    await route_window(window, increment_start, increment_len)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 — isole une erreur de séparation/routage
+                    print(f"WARNING: route_window a échoué ({exc!r}) — incrément perdu.")
+                finally:
+                    route_queue.task_done()
+
+        async def feed(route_queue: "asyncio.Queue") -> None:
             import numpy as np
 
             buffer = np.zeros(0, dtype=np.float32)
@@ -313,28 +344,61 @@ async def run_benchmark(
                     return
 
                 window_start = max(0, len(buffer) - window_samples)
-                window = buffer[window_start:]
+                window = buffer[window_start:].copy()
                 increment_start = routed_samples - window_start
                 increment_len = len(buffer) - routed_samples
-                await route_window(window, increment_start, increment_len)
+                # Marqué routé immédiatement (avant même que route_consumer n'ait traité le
+                # job) : `send` ne doit jamais attendre le traitement GPU, cf. docstring de
+                # route_window. Politique de drop si route_consumer est en retard : le plus
+                # ancien job en attente saute (audio réellement perdu pour ce tour de parole,
+                # pas rejoué plus tard — "le passé est immuable"), jamais `send` ne bloque
+                # (cf. "jamais de blocage amont", Loom/CLAUDE.md).
                 routed_samples = len(buffer)
+                job = (window, increment_start, increment_len)
+                try:
+                    route_queue.put_nowait(job)
+                except asyncio.QueueFull:
+                    try:
+                        route_queue.get_nowait()
+                        route_queue.task_done()
+                    except asyncio.QueueEmpty:
+                        pass
+                    route_queue.put_nowait(job)
 
             await replay_realtime(wav_path, send)
 
-            # Reliquat plus court que ROUTE_EVERY_S en fin de flux — routé sans throttle.
+            # Reliquat plus court que ROUTE_EVERY_S en fin de flux — routé sans throttle,
+            # même politique de drop que send() si la file est pleine.
             unrouted = len(buffer) - routed_samples
             if unrouted > 0:
                 window_start = max(0, len(buffer) - window_samples)
-                window = buffer[window_start:]
+                window = buffer[window_start:].copy()
                 increment_start = routed_samples - window_start
-                await route_window(window, increment_start, unrouted)
+                job = (window, increment_start, unrouted)
+                try:
+                    route_queue.put_nowait(job)
+                except asyncio.QueueFull:
+                    try:
+                        route_queue.get_nowait()
+                        route_queue.task_done()
+                    except asyncio.QueueEmpty:
+                        pass
+                    route_queue.put_nowait(job)
 
+            await route_queue.join()
             for session in sessions:
                 await session.processor.process_audio(b"")
 
+        # File bornée (politique de drop du plus ancien, cf. `send`) entre le rythme temps
+        # réel de `feed` et le traitement GPU de `route_consumer` — ROUTE_QUEUE_MAXSIZE jobs
+        # de ROUTE_EVERY_S chacun, donc quelques secondes de retard tolérées avant de perdre
+        # de l'audio. ⚠ Taille pas calibrée empiriquement, valeur de départ.
+        route_queue: asyncio.Queue = asyncio.Queue(maxsize=ROUTE_QUEUE_MAXSIZE)
+        route_consumer_task = asyncio.create_task(route_consumer(route_queue))
         consumer_tasks = [asyncio.create_task(consume(ident)) for ident in range(N_IDENTITIES)]
-        await feed()
+        await feed(route_queue)
         await asyncio.sleep(2.0)
+        route_consumer_task.cancel()
         for task in consumer_tasks:
             task.cancel()
 
