@@ -286,11 +286,17 @@ async def run_benchmark(
             temps réel dès que ce traitement dépasse le débit d'arrivée de l'audio, ce que le
             premier run réel a confirmé (étage `wlk` p95=9s, largement hors budget).
             """
+            t0 = time.monotonic()
             streams = await asyncio.to_thread(separator.separate, window)
+            t_separate_s = time.monotonic() - t0
+
+            t0 = time.monotonic()
             stream_embeddings = list(
                 await asyncio.gather(*(asyncio.to_thread(embedder.embed, s) for s in streams))
             )
+            t_embed_s = time.monotonic() - t0
 
+            t0 = time.monotonic()
             if streams_are_distinct(stream_embeddings):
                 assignment = assign_and_bootstrap(known_embeddings, stream_embeddings)
                 sends = []
@@ -322,12 +328,20 @@ async def run_benchmark(
                 await sessions[active_ident].processor.process_audio(
                     _pcm16_bytes(increment_audio)
                 )
+            t_route_s = time.monotonic() - t0
+
+            print(
+                f"DEBUG route_window: window={len(window) / SAMPLE_RATE_HZ:.1f}s "
+                f"separate={t_separate_s * 1000:.0f}ms embed={t_embed_s * 1000:.0f}ms "
+                f"route={t_route_s * 1000:.0f}ms total={(t_separate_s + t_embed_s + t_route_s) * 1000:.0f}ms"
+            )
 
         async def route_consumer(route_queue: "asyncio.Queue") -> None:
             """Draine `route_queue` en séquence (préserve l'ordre, évite les races sur
             `known_embeddings`/`embedding_counts`), découplé du rythme temps réel de `feed`
             (cf. docstring de `route_window`)."""
             while True:
+                print(f"DEBUG route_consumer: file en attente = {route_queue.qsize()}")
                 window, increment_start, increment_len = await route_queue.get()
                 try:
                     await route_window(window, increment_start, increment_len)
@@ -345,6 +359,7 @@ async def run_benchmark(
             routed_samples = 0
             window_samples = int(SEPARATION_WINDOW_S * SAMPLE_RATE_HZ)
             route_every_samples = int(ROUTE_EVERY_S * SAMPLE_RATE_HZ)
+            drop_count = [0]  # cf. DEBUG print après route_queue.join()
 
             async def send(chunk_bytes: bytes) -> None:
                 nonlocal buffer, routed_samples
@@ -371,6 +386,7 @@ async def run_benchmark(
                 try:
                     route_queue.put_nowait(job)
                 except asyncio.QueueFull:
+                    drop_count[0] += 1
                     try:
                         route_queue.get_nowait()
                         route_queue.task_done()
@@ -391,6 +407,7 @@ async def run_benchmark(
                 try:
                     route_queue.put_nowait(job)
                 except asyncio.QueueFull:
+                    drop_count[0] += 1
                     try:
                         route_queue.get_nowait()
                         route_queue.task_done()
@@ -399,6 +416,7 @@ async def run_benchmark(
                     route_queue.put_nowait(job)
 
             await route_queue.join()
+            print(f"DEBUG feed: jobs droppés (file pleine) = {drop_count[0]}")
             for session in sessions:
                 await session.processor.process_audio(b"")
 
