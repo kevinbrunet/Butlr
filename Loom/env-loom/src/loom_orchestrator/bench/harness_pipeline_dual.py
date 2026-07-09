@@ -142,16 +142,6 @@ async def run_benchmark(
     known_embeddings: list[list[float] | None] = [None] * N_IDENTITIES
     embedding_counts: list[int] = [0] * N_IDENTITIES
 
-    # ⚠ Ajoutés après un crash CUDA réel (GGML_ASSERT(buffer) failed dans llama.cpp, cf.
-    # Révisions ADR-0044) : LlmTranslator/PocketTtsSynthesizer sont partagés entre les
-    # N_IDENTITIES sessions, qui tournent maintenant vraiment en parallèle (route_consumer
-    # découplé du pacing). Ni llama-cpp-python ni Pocket TTS ne sont garantis thread-safe pour
-    # des appels d'inférence concurrents sur la même instance — un `Lock` par modèle partagé
-    # sérialise ces appels sans sérialiser tout le reste (séparation/embedding restent
-    # naturellement séquentiels, un seul `route_consumer`).
-    translate_lock = asyncio.Lock()
-    synth_lock = asyncio.Lock()
-
     with EventLogger(log_path) as logger:
         replay_start_monotonic = time.monotonic()
 
@@ -164,10 +154,17 @@ async def run_benchmark(
             if state.voice_state is None:
                 state.voice_state = synth.new_line_state()
 
-            async with synth_lock:
-                new_chunks, ttfc_s = await asyncio.to_thread(
-                    _consume_continuation, synth, state.voice_state, increment
-                )
+            # ⚠ Pas de lock ici : LlmTranslator/PocketTtsSynthesizer sont partagés entre les
+            # N_IDENTITIES sessions, mais `commit_worker` (cf. plus bas) est l'unique tâche
+            # qui les appelle — la sérialisation vient de la structure (un seul consommateur),
+            # pas d'un verrou explicite. Historique : un premier jet appelait ceci directement
+            # depuis `consume()` (une tâche par identité, donc 2 appelantes concurrentes) et a
+            # provoqué un crash CUDA dur dans llama.cpp (GGML_ASSERT(buffer) failed) — corrigé
+            # une première fois avec des `asyncio.Lock`, puis remplacé par ce découplage qui
+            # résout aussi le vrai problème sous-jacent (cf. docstring de `commit_worker`).
+            new_chunks, ttfc_s = await asyncio.to_thread(
+                _consume_continuation, synth, state.voice_state, increment
+            )
             t_first_chunk = event_stage_t_in + ttfc_s
             segment_id = f"{corpus_key}-id{ident}-line{idx}-chunk{state.chunk_count}"
             logger.log(LatencyEvent.create(segment_id, STAGE_TTS, event_stage_t_in, t_first_chunk))
@@ -200,10 +197,9 @@ async def run_benchmark(
                 return
 
             end_s = hms_to_seconds(end)
-            async with translate_lock:
-                translated = await asyncio.to_thread(
-                    llm_translator.translate, segment, source_lang, target_lang
-                )
+            translated = await asyncio.to_thread(
+                llm_translator.translate, segment, source_lang, target_lang
+            )
             t_translate_end = time.monotonic() - replay_start_monotonic
             segment_id = f"{corpus_key}-id{ident}-line{idx}-chunk{state.chunk_count}"
             logger.log(LatencyEvent.create(segment_id, STAGE_TRANSLATE_LLM, end_s, t_translate_end))
@@ -227,10 +223,9 @@ async def run_benchmark(
                     state.flushed_source = new_flushed
                     if segment:
                         end_s = hms_to_seconds(end)
-                        async with translate_lock:
-                            translated = await asyncio.to_thread(
-                                llm_translator.translate, segment, source_lang, target_lang
-                            )
+                        translated = await asyncio.to_thread(
+                            llm_translator.translate, segment, source_lang, target_lang
+                        )
                         t_translate_end = time.monotonic() - replay_start_monotonic
                         segment_id = f"{corpus_key}-id{ident}-line{idx}-final"
                         logger.log(
@@ -242,6 +237,69 @@ async def run_benchmark(
                         speaker = line.get("speaker", "?")
                         await emit_increment(ident, idx, speaker, translated, t_translate_end)
             _release_gpu_state(state)
+
+        # Une seule tâche de fond (commit_worker, plus bas) traite try_llm_commit/
+        # force_final_commit_llm — jamais `consume()` directement. `partial_queues[ident]`
+        # (maxsize=1, "la dernière valeur gagne") pour la ligne active d'une identité :
+        # coalescer plutôt que mettre en file toutes les mises à jour WLK intermédiaires,
+        # puisque `compute_flush` n'a besoin que du texte le plus récent (les anciennes
+        # captures sont des préfixes de la nouvelle, cf. "le passé est immuable"). `final_queue`
+        # (illimitée en pratique — bornée par le nombre total de lignes d'un run, jamais
+        # coalescée : chaque scellement de ligne doit être traité, aucun n'est remplaçable).
+        partial_queues: list[asyncio.Queue] = [asyncio.Queue(maxsize=1) for _ in sessions]
+        final_queue: asyncio.Queue = asyncio.Queue()
+
+        def _queue_latest(queue: asyncio.Queue, item: tuple) -> None:
+            if queue.full():
+                try:
+                    queue.get_nowait()
+                    queue.task_done()
+                except asyncio.QueueEmpty:
+                    pass
+            queue.put_nowait(item)
+
+        async def commit_worker() -> None:
+            """Tâche de fond unique qui appelle try_llm_commit/force_final_commit_llm — cf.
+            Révisions ADR-0044 : un premier jet appelait ces fonctions directement depuis
+            `consume(ident)`, dans la même boucle qui lit les résultats WLK. Une fois
+            LlmTranslator/PocketTtsSynthesizer partagés entre 2 identités réellement
+            concurrentes, chaque appel bloquant à `translate`/`synthesize_continuation`
+            retardait d'autant la lecture du résultat WLK suivant — exactement la
+            "backpressure vers WLK" interdite par `Loom/CLAUDE.md`, mesurée comme une
+            explosion de la latence de l'étage `wlk` alors que WLK lui-même (et le routage
+            audio en amont, `route_window`) n'y étaient pour rien. Ce worker unique découple
+            `consume()` (jamais bloqué au-delà de la lecture WLK) du travail GPU réel, et
+            sérialise `translate`/`synthesize_continuation` par construction (un seul
+            appelant) — plus besoin des `asyncio.Lock` du premier correctif.
+            """
+            while True:
+                if not final_queue.empty():
+                    ident, idx, line = await final_queue.get()
+                    try:
+                        await force_final_commit_llm(ident, idx, line)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 — isole une erreur de commit final
+                        print(f"WARNING: force_final_commit_llm(id{ident}) a échoué ({exc!r}).")
+                    finally:
+                        final_queue.task_done()
+                    continue
+
+                did_work = False
+                for ident, queue in enumerate(partial_queues):
+                    if queue.empty():
+                        continue
+                    idx, line = queue.get_nowait()
+                    queue.task_done()
+                    did_work = True
+                    try:
+                        await try_llm_commit(ident, idx, line)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 — isole une erreur de commit partiel
+                        print(f"WARNING: try_llm_commit(id{ident}) a échoué ({exc!r}).")
+                if not did_work:
+                    await asyncio.sleep(0.02)
 
         async def consume(ident: int) -> None:
             session = sessions[ident]
@@ -265,11 +323,11 @@ async def run_benchmark(
 
                 for idx in range(len(lines) - 1):
                     if idx not in session.sealed:
-                        await force_final_commit_llm(ident, idx, lines[idx])
+                        final_queue.put_nowait((ident, idx, lines[idx]))
                         session.sealed.add(idx)
 
                 active_idx = len(lines) - 1
-                await try_llm_commit(ident, active_idx, lines[active_idx])
+                _queue_latest(partial_queues[ident], (active_idx, lines[active_idx]))
 
         async def route_window(
             window: "np.ndarray", increment_start: int, increment_len: int
@@ -426,10 +484,19 @@ async def run_benchmark(
         # de l'audio. ⚠ Taille pas calibrée empiriquement, valeur de départ.
         route_queue: asyncio.Queue = asyncio.Queue(maxsize=ROUTE_QUEUE_MAXSIZE)
         route_consumer_task = asyncio.create_task(route_consumer(route_queue))
+        commit_worker_task = asyncio.create_task(commit_worker())
         consumer_tasks = [asyncio.create_task(consume(ident)) for ident in range(N_IDENTITIES)]
         await feed(route_queue)
         await asyncio.sleep(2.0)
+
+        # Laisse commit_worker vider ce qui reste avant de tout couper — un backlog éventuel
+        # (cf. Révisions ADR-0044) doit finir de se traiter, pas être tronqué silencieusement.
+        await final_queue.join()
+        for queue in partial_queues:
+            await queue.join()
+
         route_consumer_task.cancel()
+        commit_worker_task.cancel()
         for task in consumer_tasks:
             task.cancel()
 
