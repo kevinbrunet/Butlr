@@ -27,6 +27,7 @@ from loom_orchestrator.bench.aggregate import (
 from loom_orchestrator.bench.audio_chunks import read_segment
 from loom_orchestrator.bench.instrumentation import (
     STAGE_SEAMLESS,
+    STAGE_TRANSLATE_LLM,
     STAGE_TTS,
     STAGE_WLK,
     EventLogger,
@@ -35,6 +36,7 @@ from loom_orchestrator.bench.instrumentation import (
 from loom_orchestrator.bench.line_tracking import extract_updates
 from loom_orchestrator.bench.replay import replay_realtime
 from loom_orchestrator.bench.timestamps import hms_to_seconds
+from loom_orchestrator.commit_policy import compute_flush, force_flush
 from loom_orchestrator.speaker_separation import SAMPLE_RATE_HZ, SpeakerEmbedder, VoiceSeparator
 from loom_orchestrator.speaker_tracking import (
     MATCH_CONFIDENCE_THRESHOLD,
@@ -42,6 +44,7 @@ from loom_orchestrator.speaker_tracking import (
     streams_are_distinct,
     update_running_embedding,
 )
+from loom_orchestrator.translation_llm import LlmTranslator
 from loom_orchestrator.translation_seamless import AlignAttSeamlessTranslator, SeamlessTranslator
 from loom_orchestrator.tts_pocket import PocketTtsSynthesizer
 
@@ -81,6 +84,7 @@ class LineCommitState:
     audio_chunks: list = field(default_factory=list)
     embedding: list | None = None
     embedding_count: int = 0
+    flushed_source: str = ""
 
 
 def _write_wav(path: Path, audio: "np.ndarray", sample_rate_hz: int) -> None:
@@ -175,12 +179,25 @@ async def run_benchmark(
     lan: str = "auto",
     target_lang: str = "fr",
     separation: bool = True,
+    translator: str = "seamless",
 ) -> PipelineBenchmarkResult:
-    """Câblage bout-en-bout (préliminaire à T2.3) : WLK (STT+diarisation) → politique de
-    commit AlignAtt (ADR-0041) → SeamlessM4T v2 (traduction incrémentale) → Pocket TTS
-    (synthèse FR, voix de repli unique, pas de clonage par locuteur — cf. `tts_pocket.py`).
-    Pas encore l'orchestrateur final : pas de file bornée, pas de registre de voix par
-    locuteur (cf. `main.py`, toujours `NotImplementedError` pour le vrai T2.3).
+    """Câblage bout-en-bout (préliminaire à T2.3) : WLK (STT+diarisation) → traduction →
+    Pocket TTS (synthèse FR, voix de repli unique, pas de clonage par locuteur — cf.
+    `tts_pocket.py`). Pas encore l'orchestrateur final : pas de file bornée, pas de registre
+    de voix par locuteur (cf. `main.py`, toujours `NotImplementedError` pour le vrai T2.3).
+
+    `translator` sélectionne l'étage de traduction (ADR-0043, les deux chemins cohabitent
+    tant que le remplacement n'est pas validé, cf. convention "mesurer avant d'optimiser") :
+    - `"seamless"` (défaut, inchangé) : `AlignAttSeamlessTranslator`/`SeamlessTranslator`,
+      traduction audio-native, commit par attention croisée (ADR-0041). Voir docstring
+      ci-dessous pour le détail.
+    - `"llm"` : `LlmTranslator` (ADR-0043), traduction du **texte** WLK déjà transcrit (pas
+      l'audio) — commit par segmentation ponctuation/pause (`commit_policy.compute_flush`)
+      sur le texte source, pas par attention croisée. ⚠ Conséquence pas explicitée dans
+      ADR-0043 avant ce câblage : la séparation de voix (ADR-0042) nettoyait l'audio juste
+      avant l'appel Seamless — elle n'a plus de consommateur avec ce chemin, qui ne touche
+      jamais à l'audio pour la traduction. `separator`/`embedder` ne sont donc pas
+      instanciés quand `translator="llm"`, quelle que soit la valeur de `separation`.
 
     Politique de commit (ADR-0041, révisée le 2026-07-15 — remplace une première version
     "attend la fin du flux", elle-même remplaçant une version encore antérieure "scelle sur
@@ -237,11 +254,22 @@ async def run_benchmark(
         lan=lan,
     )
     processor = AudioProcessor(transcription_engine=engine, mode="full")
-    alignatt_translator = AlignAttSeamlessTranslator()
-    final_translator = SeamlessTranslator()
     synth = PocketTtsSynthesizer()
-    separator = VoiceSeparator() if separation else None
-    embedder = SpeakerEmbedder() if separation else None
+
+    alignatt_translator = AlignAttSeamlessTranslator() if translator == "seamless" else None
+    final_translator = SeamlessTranslator() if translator == "seamless" else None
+    llm_translator = LlmTranslator() if translator == "llm" else None
+    # Cf. docstring ci-dessus : la séparation de voix (ADR-0042) n'a de rôle que pour nettoyer
+    # l'audio avant un appel Seamless — orpheline avec le traducteur LLM (texte, pas audio).
+    separator = VoiceSeparator() if (separation and translator == "seamless") else None
+    embedder = SpeakerEmbedder() if (separation and translator == "seamless") else None
+
+    # ⚠ Un seul `source_lang` par run (ADR-0043) : le petit Qwen a besoin d'un code langue
+    # explicite par appel (`translation_llm.LANGUAGE_NAMES`), contrairement à Seamless qui
+    # détecte/accepte `lan="auto"` en amont côté WLK. On suppose ici un seul locuteur/langue
+    # source par fichier corpus — vrai pour toutes les entrées de `corpus.CORPUS_MANIFEST` à
+    # ce jour (pas de code-switching intra-fichier), pas garanti en usage réel multi-locuteur.
+    source_lang = next(c for c in corpus.CORPUS_MANIFEST if c.key == corpus_key).language
 
     # ⚠ Instrumentation temporaire (2026-07-15, cf. Révisions ADR-0042) : isole la VRAM déjà
     # occupée par les modèles résidents (WLK/Sortformer/Seamless×2/Pocket TTS/SepFormer/ECAPA
@@ -414,6 +442,78 @@ async def run_benchmark(
             # libère l'état GPU retenu, cf. fuite mémoire constatée (Révisions ADR-0042).
             _release_gpu_state(state)
 
+        async def try_llm_commit(idx: int, line: dict) -> None:
+            """Équivalent de `try_alignatt_commit` pour `translator="llm"` (ADR-0043) : pas
+            d'audio, pas d'attention croisée — segmente le **texte** WLK déjà transcrit sur
+            ponctuation/pause (`commit_policy.compute_flush`) et traduit chaque nouveau
+            segment complet (pas de préfixe "sûr" à rediffer, `compute_flush` ne retourne
+            déjà que la partie neuve)."""
+            text, end = line.get("text"), line.get("end")
+            if not text or end is None:
+                return
+
+            state = commit_state.setdefault(idx, LineCommitState())
+            segment, new_flushed, is_consistent = compute_flush(text, state.flushed_source)
+            if not is_consistent:
+                print(
+                    f"WARNING: WLK a révisé du texte déjà flushé sur line{idx} (source="
+                    f"{text!r}, déjà flushé={state.flushed_source!r}). Increment ignoré, "
+                    "texte déjà flushé conservé."
+                )
+                return
+            state.flushed_source = new_flushed
+            if not segment:
+                return
+
+            end_s = hms_to_seconds(end)
+            translated = await asyncio.to_thread(
+                llm_translator.translate, segment, source_lang, target_lang
+            )
+            t_translate_end = time.monotonic() - replay_start_monotonic
+            segment_id = f"{corpus_key}-line{idx}-chunk{state.chunk_count}"
+            logger.log(LatencyEvent.create(segment_id, STAGE_TRANSLATE_LLM, end_s, t_translate_end))
+
+            state.committed_fr = f"{state.committed_fr} {translated}".strip()
+            speaker = line.get("speaker", "?")
+            await emit_increment(idx, speaker, translated, t_translate_end)
+
+        async def force_final_commit_llm(idx: int, line: dict) -> None:
+            """Équivalent de `force_final_commit` pour `translator="llm"` : flush le texte
+            source restant sans attendre de ponctuation (`commit_policy.force_flush`,
+            l'audio de cette ligne ne grandira plus) puis traduit."""
+            text, end = line.get("text"), line.get("end")
+            state = commit_state.setdefault(idx, LineCommitState())
+            if text and end is not None:
+                segment, new_flushed, is_consistent = force_flush(text, state.flushed_source)
+                if not is_consistent:
+                    print(
+                        f"WARNING: traduction finale (llm) de line{idx} incohérente avec le "
+                        f"texte déjà flushé (déjà flushé={state.flushed_source!r}, source="
+                        f"{text!r}). Tail final ignoré."
+                    )
+                else:
+                    state.flushed_source = new_flushed
+                    if segment:
+                        end_s = hms_to_seconds(end)
+                        translated = await asyncio.to_thread(
+                            llm_translator.translate, segment, source_lang, target_lang
+                        )
+                        t_translate_end = time.monotonic() - replay_start_monotonic
+                        segment_id = f"{corpus_key}-line{idx}-final"
+                        logger.log(
+                            LatencyEvent.create(
+                                segment_id, STAGE_TRANSLATE_LLM, end_s, t_translate_end
+                            )
+                        )
+                        state.committed_fr = f"{state.committed_fr} {translated}".strip()
+                        speaker = line.get("speaker", "?")
+                        await emit_increment(idx, speaker, translated, t_translate_end)
+
+            # Ligne définitivement scellée à ce point — même nettoyage GPU que le chemin
+            # Seamless (cf. `force_final_commit`), même si `translator="llm"` ne charge pas
+            # les mêmes modèles : `voice_state` (Pocket TTS) reste commun aux deux chemins.
+            _release_gpu_state(state)
+
         async def consume() -> None:
             results_generator = await processor.create_tasks()
             async for response in results_generator:
@@ -438,13 +538,21 @@ async def run_benchmark(
                 # partielle, l'audio de cette ligne ne grandira plus.
                 for idx in range(len(lines) - 1):
                     if idx not in sealed_committed:
-                        await force_final_commit(idx, lines[idx])
+                        if translator == "llm":
+                            await force_final_commit_llm(idx, lines[idx])
+                        else:
+                            await force_final_commit(idx, lines[idx])
                         sealed_committed.add(idx)
 
-                # Commit incrémental AlignAtt sur la ligne active (la dernière, encore en
-                # croissance) — throttlé par MIN_NEW_AUDIO_S à l'intérieur de la fonction.
+                # Commit incrémental sur la ligne active (la dernière, encore en croissance).
+                # Chemin seamless : throttlé par MIN_NEW_AUDIO_S côté audio. Chemin llm :
+                # naturellement throttlé par `compute_flush` (rien à faire tant qu'aucun
+                # nouveau point de segmentation n'est apparu dans le texte).
                 active_idx = len(lines) - 1
-                await try_alignatt_commit(active_idx, lines[active_idx])
+                if translator == "llm":
+                    await try_llm_commit(active_idx, lines[active_idx])
+                else:
+                    await try_alignatt_commit(active_idx, lines[active_idx])
 
         consumer_task = asyncio.create_task(consume())
         await replay_realtime(wav_path, send)
@@ -454,7 +562,10 @@ async def run_benchmark(
 
         for idx, line in enumerate(last_lines):
             if idx not in sealed_committed:
-                await force_final_commit(idx, line)
+                if translator == "llm":
+                    await force_final_commit_llm(idx, line)
+                else:
+                    await force_final_commit(idx, line)
 
     return PipelineBenchmarkResult(
         log_path=log_path,
@@ -481,6 +592,14 @@ def main() -> None:
     )
     parser.add_argument("--lan", default="auto")
     parser.add_argument("--target-lang", default="fr")
+    parser.add_argument(
+        "--translator",
+        choices=["seamless", "llm"],
+        default="seamless",
+        help="Étage de traduction (ADR-0043) : 'seamless' (défaut, inchangé, audio-native) "
+        "ou 'llm' (petit Qwen local sur le texte WLK — désactive la séparation de voix, "
+        "cf. docstring de run_benchmark).",
+    )
     args = parser.parse_args()
 
     result = asyncio.run(
@@ -492,6 +611,7 @@ def main() -> None:
             lan=args.lan,
             target_lang=args.target_lang,
             separation=not args.no_separation,
+            translator=args.translator,
         )
     )
 

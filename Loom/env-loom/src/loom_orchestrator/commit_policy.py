@@ -56,3 +56,18 @@ def compute_flush(full_text: str, already_flushed: str) -> tuple[str, str, bool]
     if not segment:
         return "", new_already_flushed, True
     return segment, new_already_flushed, True
+
+
+def force_flush(full_text: str, already_flushed: str) -> tuple[str, str, bool]:
+    """Comme `compute_flush`, mais sans attendre de point de segmentation — flush tout le
+    texte non encore flushé tel quel. Pour le scellement définitif d'une ligne WLK (fin de
+    tour de parole ou changement de locuteur) : l'audio ne grandira plus, il n'y a pas de
+    raison d'attendre une ponctuation qui ne viendra peut-être jamais (cf.
+    `force_final_commit` dans `harness_pipeline.py`, même rôle que pour AlignAtt)."""
+    if not full_text.startswith(already_flushed):
+        return "", already_flushed, False
+
+    segment = full_text[len(already_flushed) :].strip()
+    if not segment:
+        return "", full_text, True
+    return segment, full_text, True

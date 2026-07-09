@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from loom_orchestrator.commit_policy import compute_flush, find_last_boundary
+from loom_orchestrator.commit_policy import compute_flush, find_last_boundary, force_flush
 
 
 def test_find_last_boundary_finds_sentence_end() -> None:
@@ -56,3 +56,33 @@ def test_compute_flush_empty_already_flushed_and_no_boundary_yet() -> None:
     assert segment == ""
     assert new_flushed == ""
     assert is_consistent is True
+
+
+def test_force_flush_emits_remainder_without_boundary() -> None:
+    segment, new_flushed, is_consistent = force_flush("First sentence without end", "")
+    assert segment == "First sentence without end"
+    assert new_flushed == "First sentence without end"
+    assert is_consistent is True
+
+
+def test_force_flush_only_returns_unflushed_part() -> None:
+    segment, new_flushed, is_consistent = force_flush(
+        "First sentence. Trailing bit", "First sentence."
+    )
+    assert segment == "Trailing bit"
+    assert new_flushed == "First sentence. Trailing bit"
+    assert is_consistent is True
+
+
+def test_force_flush_nothing_left_returns_empty_segment() -> None:
+    segment, new_flushed, is_consistent = force_flush("Done.", "Done.")
+    assert segment == ""
+    assert new_flushed == "Done."
+    assert is_consistent is True
+
+
+def test_force_flush_flags_inconsistent_revision() -> None:
+    segment, new_flushed, is_consistent = force_flush("Totally different.", "First sentence.")
+    assert segment == ""
+    assert new_flushed == "First sentence."
+    assert is_consistent is False
