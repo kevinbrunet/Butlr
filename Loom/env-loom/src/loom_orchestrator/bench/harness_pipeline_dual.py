@@ -377,6 +377,14 @@ async def run_benchmark(
             (attendu par `replay_realtime` avant le chunk suivant) désynchronise le pacing
             temps réel dès que ce traitement dépasse le débit d'arrivée de l'audio, ce que le
             premier run réel a confirmé (étage `wlk` p95=9s, largement hors budget).
+
+            Quand un seul locuteur est actif (`streams_are_distinct` faux), les identités
+            inactives reçoivent du silence (zéros) plutôt qu'aucun chunk du tout — constaté
+            empiriquement (cf. Révisions ADR-0044) : ne rien envoyer pendant de longues
+            secondes à une session WLK fait grimper sa latence de ~4x par rapport à une
+            identité alimentée en continu, probablement parce que WLK suppose un flux
+            continu. Le silence garde l'horloge interne de la session alignée sur l'horloge
+            murale sans lui faire "entendre" du contenu qu'elle n'a pas.
             """
             t0 = time.monotonic()
             streams = await asyncio.to_thread(separator.separate, window)
@@ -419,9 +427,24 @@ async def run_benchmark(
                 embedding_counts[active_ident] += 1
                 increment_audio = window[increment_start : increment_start + increment_len]
                 _record_send(active_ident, len(increment_audio), global_start_sample)
-                await sessions[active_ident].processor.process_audio(
-                    _pcm16_bytes(increment_audio)
-                )
+                sends = [
+                    sessions[active_ident].processor.process_audio(_pcm16_bytes(increment_audio))
+                ]
+                # Silence (pas juste "rien") vers les identités inactives — cf. docstring de
+                # route_window : les laisser sans le moindre chunk pendant que l'autre parle
+                # s'est révélé coûteux pour WLK (latence ~4x plus élevée sur l'identité qui
+                # reçoit le moins souvent, cf. Révisions ADR-0044), probablement parce que WLK
+                # suppose un flux continu. Garde son horloge interne alignée sur l'horloge
+                # murale sans lui faire "entendre" du contenu qu'elle n'a pas.
+                import numpy as np
+
+                silence = np.zeros(increment_len, dtype=np.float32)
+                for ident in range(N_IDENTITIES):
+                    if ident == active_ident:
+                        continue
+                    _record_send(ident, len(silence), global_start_sample)
+                    sends.append(sessions[ident].processor.process_audio(_pcm16_bytes(silence)))
+                await asyncio.gather(*sends)
             t_route_s = time.monotonic() - t0
 
             print(
