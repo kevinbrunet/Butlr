@@ -142,6 +142,16 @@ async def run_benchmark(
     known_embeddings: list[list[float] | None] = [None] * N_IDENTITIES
     embedding_counts: list[int] = [0] * N_IDENTITIES
 
+    # ⚠ Ajoutés après un crash CUDA réel (GGML_ASSERT(buffer) failed dans llama.cpp, cf.
+    # Révisions ADR-0044) : LlmTranslator/PocketTtsSynthesizer sont partagés entre les
+    # N_IDENTITIES sessions, qui tournent maintenant vraiment en parallèle (route_consumer
+    # découplé du pacing). Ni llama-cpp-python ni Pocket TTS ne sont garantis thread-safe pour
+    # des appels d'inférence concurrents sur la même instance — un `Lock` par modèle partagé
+    # sérialise ces appels sans sérialiser tout le reste (séparation/embedding restent
+    # naturellement séquentiels, un seul `route_consumer`).
+    translate_lock = asyncio.Lock()
+    synth_lock = asyncio.Lock()
+
     with EventLogger(log_path) as logger:
         replay_start_monotonic = time.monotonic()
 
@@ -154,9 +164,10 @@ async def run_benchmark(
             if state.voice_state is None:
                 state.voice_state = synth.new_line_state()
 
-            new_chunks, ttfc_s = await asyncio.to_thread(
-                _consume_continuation, synth, state.voice_state, increment
-            )
+            async with synth_lock:
+                new_chunks, ttfc_s = await asyncio.to_thread(
+                    _consume_continuation, synth, state.voice_state, increment
+                )
             t_first_chunk = event_stage_t_in + ttfc_s
             segment_id = f"{corpus_key}-id{ident}-line{idx}-chunk{state.chunk_count}"
             logger.log(LatencyEvent.create(segment_id, STAGE_TTS, event_stage_t_in, t_first_chunk))
@@ -189,9 +200,10 @@ async def run_benchmark(
                 return
 
             end_s = hms_to_seconds(end)
-            translated = await asyncio.to_thread(
-                llm_translator.translate, segment, source_lang, target_lang
-            )
+            async with translate_lock:
+                translated = await asyncio.to_thread(
+                    llm_translator.translate, segment, source_lang, target_lang
+                )
             t_translate_end = time.monotonic() - replay_start_monotonic
             segment_id = f"{corpus_key}-id{ident}-line{idx}-chunk{state.chunk_count}"
             logger.log(LatencyEvent.create(segment_id, STAGE_TRANSLATE_LLM, end_s, t_translate_end))
@@ -215,9 +227,10 @@ async def run_benchmark(
                     state.flushed_source = new_flushed
                     if segment:
                         end_s = hms_to_seconds(end)
-                        translated = await asyncio.to_thread(
-                            llm_translator.translate, segment, source_lang, target_lang
-                        )
+                        async with translate_lock:
+                            translated = await asyncio.to_thread(
+                                llm_translator.translate, segment, source_lang, target_lang
+                            )
                         t_translate_end = time.monotonic() - replay_start_monotonic
                         segment_id = f"{corpus_key}-id{ident}-line{idx}-final"
                         logger.log(
