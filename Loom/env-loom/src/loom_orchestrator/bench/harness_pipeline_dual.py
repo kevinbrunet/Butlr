@@ -157,10 +157,25 @@ async def run_benchmark(
     # source global avant de mesurer quoi que ce soit.
     identity_timeline: list[list[tuple[int, int, int]]] = [[] for _ in range(N_IDENTITIES)]
 
-    def _record_send(ident: int, n_samples: int, global_start_sample: int) -> None:
+    # DEBUG (diagnostic ADR-0044, à retirer une fois la cause de l'écart id0/id1 confirmée) :
+    # volume total réel vs silence envoyé par identité, et compte des décisions de routage
+    # distinct/non-distinct — pour savoir si l'écart de latence vient de la branche silence
+    # (peu de contenu réel) ou de la branche "chevauchement" (contenu réel des deux côtés).
+    content_seconds = [0.0] * N_IDENTITIES
+    silence_seconds = [0.0] * N_IDENTITIES
+    distinct_count = [0]
+    non_distinct_count = [0]
+
+    def _record_send(
+        ident: int, n_samples: int, global_start_sample: int, is_silence: bool = False
+    ) -> None:
         timeline = identity_timeline[ident]
         processor_start = timeline[-1][1] if timeline else 0
         timeline.append((processor_start, processor_start + n_samples, global_start_sample))
+        if is_silence:
+            silence_seconds[ident] += n_samples / SAMPLE_RATE_HZ
+        else:
+            content_seconds[ident] += n_samples / SAMPLE_RATE_HZ
 
     def _to_global_seconds(ident: int, processor_seconds: float) -> float:
         processor_sample = int(processor_seconds * SAMPLE_RATE_HZ)
@@ -398,6 +413,7 @@ async def run_benchmark(
 
             t0 = time.monotonic()
             if streams_are_distinct(stream_embeddings):
+                distinct_count[0] += 1
                 assignment = assign_and_bootstrap(known_embeddings, stream_embeddings)
                 sends = []
                 for ident in range(N_IDENTITIES):
@@ -417,6 +433,7 @@ async def run_benchmark(
                     )
                 await asyncio.gather(*sends)
             else:
+                non_distinct_count[0] += 1
                 mixture_embedding = await asyncio.to_thread(embedder.embed, window)
                 active_ident = pick_active_identity(known_embeddings, mixture_embedding)
                 known_embeddings[active_ident] = update_running_embedding(
@@ -442,7 +459,7 @@ async def run_benchmark(
                 for ident in range(N_IDENTITIES):
                     if ident == active_ident:
                         continue
-                    _record_send(ident, len(silence), global_start_sample)
+                    _record_send(ident, len(silence), global_start_sample, is_silence=True)
                     sends.append(sessions[ident].processor.process_audio(_pcm16_bytes(silence)))
                 await asyncio.gather(*sends)
             t_route_s = time.monotonic() - t0
@@ -450,7 +467,10 @@ async def run_benchmark(
             print(
                 f"DEBUG route_window: window={len(window) / SAMPLE_RATE_HZ:.1f}s "
                 f"separate={t_separate_s * 1000:.0f}ms embed={t_embed_s * 1000:.0f}ms "
-                f"route={t_route_s * 1000:.0f}ms total={(t_separate_s + t_embed_s + t_route_s) * 1000:.0f}ms"
+                f"route={t_route_s * 1000:.0f}ms total={(t_separate_s + t_embed_s + t_route_s) * 1000:.0f}ms "
+                f"distinct={distinct_count[0]} non_distinct={non_distinct_count[0]} "
+                f"content_s={[round(c, 1) for c in content_seconds]} "
+                f"silence_s={[round(s, 1) for s in silence_seconds]}"
             )
 
         async def route_consumer(route_queue: "asyncio.Queue") -> None:
