@@ -75,6 +75,13 @@ N_IDENTITIES = 2
 SEPARATION_WINDOW_S = 6.0
 ROUTE_EVERY_S = 1.0
 
+# ⚠ Pas calibré empiriquement — même idée que MIN_SEPARATION_AUDIO_S dans harness_pipeline.py
+# (ADR-0042) : en dessous de ce seuil de contexte accumulé, SepFormer n'a pas assez de matière
+# pour séparer utilement (proposition de Kevin, 2026-07-17) — route_window saute l'appel à
+# separator.separate() et route l'audio brut directement (même chemin que "un seul locuteur
+# actif"), le temps que la fenêtre de séparation atteigne une taille utile.
+MIN_SEPARATION_AUDIO_S = 2.0
+
 # ⚠ Pas calibré empiriquement (cf. Révisions ADR-0044, corrigé après le premier run réel qui
 # a montré un pacing temps réel désynchronisé faute de découplage feed()/route_consumer()) —
 # taille de départ, quelques secondes de retard tolérées avant de perdre de l'audio.
@@ -165,6 +172,7 @@ async def run_benchmark(
     silence_seconds = [0.0] * N_IDENTITIES
     distinct_count = [0]
     non_distinct_count = [0]
+    too_short_count = [0]
 
     def _record_send(
         ident: int, n_samples: int, global_start_sample: int, is_silence: bool = False
@@ -400,19 +408,31 @@ async def run_benchmark(
             identité alimentée en continu, probablement parce que WLK suppose un flux
             continu. Le silence garde l'horloge interne de la session alignée sur l'horloge
             murale sans lui faire "entendre" du contenu qu'elle n'a pas.
+
+            Sous `MIN_SEPARATION_AUDIO_S` de contexte accumulé (tout début de flux, avant que
+            `window` atteigne une taille utile), `separator.separate` n'est même pas appelé —
+            proposition de Kevin (2026-07-17) : pas assez de matière pour que SepFormer sépare
+            utilement, autant économiser l'appel et router l'audio brut directement (même
+            chemin que "un seul locuteur actif" ci-dessus, cf. `pick_active_identity`).
             """
+            too_short_for_separation = len(window) / SAMPLE_RATE_HZ < MIN_SEPARATION_AUDIO_S
+
             t0 = time.monotonic()
-            streams = await asyncio.to_thread(separator.separate, window)
+            streams = None if too_short_for_separation else await asyncio.to_thread(
+                separator.separate, window
+            )
             t_separate_s = time.monotonic() - t0
 
             t0 = time.monotonic()
-            stream_embeddings = list(
-                await asyncio.gather(*(asyncio.to_thread(embedder.embed, s) for s in streams))
-            )
+            stream_embeddings = None
+            if not too_short_for_separation:
+                stream_embeddings = list(
+                    await asyncio.gather(*(asyncio.to_thread(embedder.embed, s) for s in streams))
+                )
             t_embed_s = time.monotonic() - t0
 
             t0 = time.monotonic()
-            if streams_are_distinct(stream_embeddings):
+            if not too_short_for_separation and streams_are_distinct(stream_embeddings):
                 distinct_count[0] += 1
                 assignment = assign_and_bootstrap(known_embeddings, stream_embeddings)
                 sends = []
@@ -433,7 +453,10 @@ async def run_benchmark(
                     )
                 await asyncio.gather(*sends)
             else:
-                non_distinct_count[0] += 1
+                if too_short_for_separation:
+                    too_short_count[0] += 1
+                else:
+                    non_distinct_count[0] += 1
                 mixture_embedding = await asyncio.to_thread(embedder.embed, window)
                 active_ident = pick_active_identity(known_embeddings, mixture_embedding)
                 known_embeddings[active_ident] = update_running_embedding(
@@ -469,6 +492,7 @@ async def run_benchmark(
                 f"separate={t_separate_s * 1000:.0f}ms embed={t_embed_s * 1000:.0f}ms "
                 f"route={t_route_s * 1000:.0f}ms total={(t_separate_s + t_embed_s + t_route_s) * 1000:.0f}ms "
                 f"distinct={distinct_count[0]} non_distinct={non_distinct_count[0]} "
+                f"too_short={too_short_count[0]} "
                 f"content_s={[round(c, 1) for c in content_seconds]} "
                 f"silence_s={[round(s, 1) for s in silence_seconds]}"
             )
