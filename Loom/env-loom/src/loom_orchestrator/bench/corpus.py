@@ -46,21 +46,22 @@ class CorpusFile:
 # mono, pas de resample nécessaire.
 #
 # Provenance (2026-07-17) — g : contrairement à `b`/`e`/`f` (mix synthétique ffmpeg de deux
-# enregistrements sans rapport), premier corpus de chevauchement capté par un **vrai micro
-# unique** sur deux vraies personnes dans la même pièce — cf. ADR-0044 §Révisions (suspicion
-# que `b` soit un cas trop adversarial pour juger SepFormer dans l'absolu, faute d'homogénéité
-# acoustique entre les deux pistes sources). Source : AMI Meeting Corpus (huggingface.co/
-# datasets/edinburghcstr/ami, configuration "sdm" — Single Distant Microphone), licence CC-BY
-# 4.0, University of Edinburgh - Centre For Speech Technology Research. Réunion `EN2001a`,
-# locuteurs `MEO069` et `MEE067` — deux tours de parole qui se chevauchent réellement
-# (0,77s), extraits via `datasets` (streaming, recherche programmatique d'un chevauchement
-# inter-locuteur dans les mêmes coordonnées temporelles) puis reconstruits en un seul flux
-# continu (tour de `MEO069` en entier + queue du tour de `MEE067` au-delà de la fin du
-# premier, jamais additionnés — les deux extraits partagent le même signal micro physique
-# sur leur fenêtre commune, les additionner aurait doublé l'amplitude de cette zone). ⚠ Très
-# court (5,76s, un seul point de chevauchement) — utile pour un test de qualité de séparation
-# ciblé, pas un remplacement de `b` pour le reste des bancs d'essai (durée/contenu trop
-# limités pour ça).
+# enregistrements sans rapport), premier corpus de chevauchement capté par un **vrai micro**
+# sur deux vraies personnes dans la même réunion — cf. ADR-0044 §Révisions (suspicion que `b`
+# soit un cas trop adversarial pour juger SepFormer dans l'absolu, faute d'homogénéité
+# acoustique entre les deux pistes sources). Source : AMI Meeting Corpus, réunion `EN2001a`,
+# piste "Mix-Headset" (mix de micros-casque individuels propres, pas le micro distant SDM —
+# ⚠ un premier essai avec le SDM de cette même réunion s'est révélé inexploitable à l'oreille,
+# "pourri" y compris sur le mélange brut avant toute séparation, cause non investiguée : soit
+# la captation distante elle-même, soit un artefact de reconstruction ; remplacé par ce
+# fichier sans creuser plus, cf. discussion 2026-07-17), téléchargé directement depuis
+# groups.inf.ed.ac.uk/ami/AMICorpusMirror (licence CC-BY 4.0, University of Edinburgh -
+# Centre For Speech Technology Research). Fenêtre 707-718s de la réunion, encadrant un
+# chevauchement réel vérifié (locuteurs `MEO069`/`MEE067`, 709,73-715,49s, 0,77s de
+# recouvrement — timestamps obtenus séparément via l'annotation HF `edinburghcstr/ami`
+# config "sdm", cf. Révisions ADR-0044) et confirmé à l'oreille par Kevin. ⚠ Court (11s, un
+# seul point de chevauchement) — utile pour un test de qualité de séparation ciblé, pas un
+# remplacement de `b` pour le reste des bancs d'essai (durée/contenu trop limités pour ça).
 CORPUS_MANIFEST: tuple[CorpusFile, ...] = (
     CorpusFile(
         "a", "a_en_mono.wav", "en", 1, 180.0, "EN mono-locuteur, ~3 min",
@@ -96,12 +97,12 @@ CORPUS_MANIFEST: tuple[CorpusFile, ...] = (
         "(zenodo.org/records/1227121, CC BY-SA 3.0), mixé par script Python (RMS, SNR cible 10dB).",
     ),
     CorpusFile(
-        "g", "g_en_overlap_real.wav", "en", 2, 5.0,
-        "EN 2 locuteurs, chevauchement réel capté par un micro unique (5,76s, court)",
-        provenance="huggingface.co/datasets/edinburghcstr/ami, config \"sdm\", réunion EN2001a, "
-        "locuteurs MEO069+MEE067, CC-BY 4.0 (University of Edinburgh). Reconstruction continue "
-        "de deux tours de parole qui se chevauchent réellement dans le flux SDM d'origine (pas "
-        "un mix synthétique) — cf. commentaire de provenance ci-dessus pour le détail.",
+        "g", "g_en_overlap_real.wav", "en", 2, 11.0,
+        "EN 2 locuteurs, chevauchement réel capté par micro (11s, court, écoute confirmée)",
+        provenance="groups.inf.ed.ac.uk/ami/AMICorpusMirror, réunion EN2001a, piste "
+        "Mix-Headset, CC-BY 4.0 (University of Edinburgh). Fenêtre 707-718s, chevauchement "
+        "MEO069+MEE067 vérifié par timestamps HF (edinburghcstr/ami) et confirmé à l'oreille "
+        "— cf. commentaire de provenance ci-dessus pour le détail.",
     ),
 )
 
