@@ -26,12 +26,18 @@ def dump_separated_streams(
     corpus_dir: Path = corpus.CORPUS_DIR,
     window_s: float = 6.0,
     backend: str = "sepformer",
+    start_s: float = 0.0,
 ) -> None:
-    """Sépare les `window_s` premières secondes de `corpus_key` et écrit les flux séparés +
+    """Sépare `[start_s, start_s + window_s)` de `corpus_key` et écrit les flux séparés +
     le mélange brut en wav dans `out_dir`, pour juger la qualité de séparation à l'oreille —
     contrairement à `run_probe`, qui ne mesure que la latence sans jamais rien écrire.
     Rapporte aussi `streams_are_distinct` et la similarité cosinus entre les 2 premiers flux
     (proche de 1 = quasi identiques, rien de réel à séparer ; proche de 0/négatif = distincts).
+
+    ⚠ `start_s` par défaut à 0.0 (début du fichier) — sur `corpus g`, le vrai chevauchement
+    inter-locuteur vérifié n'est PAS au tout début du fichier (il est à ~6,95-7,72s relatif
+    au fichier, cf. Révisions ADR-0044) : sans ajuster `start_s`, une fenêtre par défaut peut
+    ne capturer que le début ou la fin d'un tour de parole plutôt que le vrai chevauchement.
 
     `backend="pyannote"` (ADR-0044, 2026-07-17) : `pyannote/separation-ami-1.0`, entraîné sur
     AMI-SDM réel plutôt que des mix synthétiques — alternative à SepFormer-WHAMR après
@@ -46,7 +52,7 @@ def dump_separated_streams(
 
     if backend == "pyannote":
         window_s = min(window_s, PYANNOTE_CHUNK_SAMPLES / SAMPLE_RATE_HZ)
-    window = read_segment(wav_path, 0.0, window_s)
+    window = read_segment(wav_path, start_s, start_s + window_s)
 
     embedder = SpeakerEmbedder()
     if backend == "pyannote":
@@ -140,11 +146,23 @@ def main() -> None:
         help="Modèle de séparation à utiliser avec --dump-audio (ADR-0044) — 'pyannote' "
         "nécessite HF_TOKEN (modèle à accès conditionnel, cf. PyannoteVoiceSeparator).",
     )
+    parser.add_argument(
+        "--start-s",
+        type=float,
+        default=0.0,
+        help="Décalage (secondes) avant de lire --window-s, avec --dump-audio — utile pour "
+        "cibler un chevauchement qui n'est pas au tout début du fichier corpus.",
+    )
     args = parser.parse_args()
 
     if args.dump_audio is not None:
         dump_separated_streams(
-            args.corpus_key, args.dump_audio, args.corpus_dir, args.window_s, args.backend
+            args.corpus_key,
+            args.dump_audio,
+            args.corpus_dir,
+            args.window_s,
+            args.backend,
+            args.start_s,
         )
         return
 
