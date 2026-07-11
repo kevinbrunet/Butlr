@@ -86,3 +86,71 @@ class SpeakerEmbedder:
         wav = torch.from_numpy(audio).float().unsqueeze(0).to(self._device)
         embedding = self._model.encode_batch(wav)
         return embedding.squeeze().detach().cpu().tolist()
+
+
+PYANNOTE_SAMPLE_RATE_HZ = 16_000
+# ✓ Fenêtre fixe imposée par le modèle (80 000 échantillons = 5s à 16kHz), pas un choix —
+# vérifié par lecture de la fiche modèle HF (2026-07-17). Contrairement à VoiceSeparator
+# (SepFormer), pas de marge sur la durée : l'appelant doit fournir au plus cette taille.
+PYANNOTE_CHUNK_SAMPLES = 80_000
+DEFAULT_PYANNOTE_SOURCE = "pyannote/separation-ami-1.0"
+
+
+class PyannoteVoiceSeparator:
+    """Sépare un mélange en jusqu'à 3 flux — `pyannote/separation-ami-1.0` (ADR-0044,
+    2026-07-17), alternative à `VoiceSeparator` (SepFormer-WHAMR) après confirmation
+    empirique que ce dernier sépare mal même un enregistrement réel homogène (cf. Révisions
+    ADR-0044, `corpus g` — un flux séparé "carrément inaudible" selon Kevin). Entraîné
+    directement sur AMI-SDM (audio réel de réunion, micro unique) via MixIT+PIT, contrairement
+    à SepFormer-WHAMR (mix synthétiques WSJ0+WHAM) — meilleure adéquation de domaine attendue,
+    ⚠ pas encore confirmée à l'oreille sur notre propre corpus.
+
+    ⚠ Modèle à accès conditionnel sur Hugging Face (gated) — accepter les conditions de
+    `pyannote/separation-ami-1.0` **et** `pyannote/speech-separation-ami-1.0` sur
+    huggingface.co, puis exporter un token d'accès dans la variable d'environnement
+    `HF_TOKEN`. Jamais committé (cf. `Butlr/CLAUDE.md`, pas de secrets en git).
+
+    On appelle ici le modèle de base directement (`Model.from_pretrained`), un forward par
+    fenêtre fixe de 5s — pas le `Pipeline` complet (`pyannote/speech-separation-ami-1.0`), qui
+    lui découpe/recolle un fichier entier avec un pas de 500ms (~10 appels par 5s) et viserait
+    plutôt un traitement hors-ligne fichier entier, incompatible avec notre budget de latence.
+    """
+
+    def __init__(self, source: str = DEFAULT_PYANNOTE_SOURCE, device: str = "cuda") -> None:
+        import os
+
+        from pyannote.audio import Model
+
+        token = os.environ.get("HF_TOKEN")
+        if not token:
+            raise RuntimeError(
+                "HF_TOKEN manquant — pyannote/separation-ami-1.0 est un modèle à accès "
+                "conditionnel (gated) : accepter ses conditions sur huggingface.co (et celles "
+                "de pyannote/speech-separation-ami-1.0) puis exporter un token d'accès dans "
+                "HF_TOKEN avant d'instancier PyannoteVoiceSeparator."
+            )
+        self._model = Model.from_pretrained(source, use_auth_token=token)
+        self._model.to(device)
+        self._device = device
+
+    def separate(self, audio: "np.ndarray") -> list["np.ndarray"]:
+        """Sépare `audio` (16kHz mono, doit faire au plus `PYANNOTE_CHUNK_SAMPLES` — padding
+        silence si plus court) en jusqu'à 3 flux (16kHz mono chacun, tronqués à la longueur
+        de `audio`, le padding retiré avant de retourner)."""
+        import numpy as np
+        import torch
+
+        if len(audio) > PYANNOTE_CHUNK_SAMPLES:
+            raise ValueError(
+                f"audio de {len(audio)} échantillons > {PYANNOTE_CHUNK_SAMPLES} attendus par "
+                "pyannote/separation-ami-1.0 (fenêtre fixe de 5s) — tronquer avant l'appel."
+            )
+        padded = np.zeros(PYANNOTE_CHUNK_SAMPLES, dtype=np.float32)
+        padded[: len(audio)] = audio
+
+        waveform = torch.from_numpy(padded).float().unsqueeze(0).unsqueeze(0).to(self._device)
+        with torch.inference_mode():
+            _diarization, sources = self._model(waveform)
+        # sources : (batch=1, échantillons, locuteurs) — cf. fiche modèle HF.
+        n_speakers = sources.shape[-1]
+        return [sources[0, : len(audio), i].detach().cpu().numpy() for i in range(n_speakers)]
