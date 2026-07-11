@@ -142,9 +142,20 @@ async def run_benchmark(
     audio_dir.mkdir(parents=True, exist_ok=True)
     transcript_path.write_text("", encoding="utf-8")
 
-    engine = TranscriptionEngine(
-        pcm_input=True, diarization=True, diarization_backend="sortformer", lan=lan
-    )
+    # ⚠ Sortformer (NeMo) désactivé quand separator_backend="pyannote" — constaté (2026-07-17,
+    # cf. Révisions ADR-0044) : pyannote.audio[separation] force une résolution de dépendances
+    # (pytorch-lightning très ancien, imposé par nemo-toolkit) qui casse l'initialisation de
+    # Sortformer (échec silencieux, `sys.exit(1)` côté NeMo, pas d'exception attrapable). Pas
+    # une perte fonctionnelle sur ce chemin : `pyannote/separation-ami-1.0` retourne déjà sa
+    # propre diarisation avec la séparation (`diarization, sources = model(...)`), Sortformer
+    # ferait double emploi. Chaque session WLK ne voit de toute façon qu'un flux déjà séparé
+    # par identité — sa propre diarisation servirait de filet de sécurité, pas de mécanisme
+    # principal (même raisonnement que pour SepFormer, cf. Decision plus haut).
+    use_sortformer = separator_backend != "pyannote"
+    engine_kwargs = {"pcm_input": True, "diarization": use_sortformer, "lan": lan}
+    if use_sortformer:
+        engine_kwargs["diarization_backend"] = "sortformer"
+    engine = TranscriptionEngine(**engine_kwargs)
     sessions = [
         IdentitySession(processor=AudioProcessor(transcription_engine=engine, mode="full"))
         for _ in range(N_IDENTITIES)
