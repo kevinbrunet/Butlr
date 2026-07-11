@@ -22,6 +22,15 @@ authors = [{ name = "Kevin Brunet" }]
 # depuis les sources probable :
 #   CMAKE_ARGS="-DGGML_CUDA=on" uv sync
 # à documenter/adapter une fois testé sur fedora2.
+# ⚠ pyannote.audio[separation] (ADR-0044, 2026-07-17) : alternative à SepFormer-WHAMR pour la
+# séparation de voix — confirmée audible en isolation (harness_separation.py --backend
+# pyannote sur corpus g) mais jamais résolue ensemble avec nemo-toolkit/speechbrain/
+# llama-cpp-python dans un même environnement figé (uv.lock) ; testée jusqu'ici uniquement
+# via `uv run --with`, qui a révélé un conflit de résolution cassant la détection de
+# Sortformer (nemo-toolkit). Version non pinnée (3.3.2 casse avec le torchaudio déjà résolu
+# ici, cf. Révisions ADR-0044 — AttributeError AudioMetaData). setuptools<81 requis en plus :
+# torchmetrics (dépendance transitive via pytorch_lightning) importe encore pkg_resources,
+# retiré des setuptools récents.
 dependencies = [
     "whisperlivekit[diarization-sortformer]",
     "pocket-tts",
@@ -33,6 +42,8 @@ dependencies = [
     "nemo-toolkit[asr]",
     "llama-cpp-python>=0.3",
     "huggingface-hub>=0.24",
+    "pyannote.audio[separation]",
+    "setuptools<81",
 ]
 
 [project.optional-dependencies]
