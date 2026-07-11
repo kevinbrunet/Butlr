@@ -37,7 +37,13 @@ from loom_orchestrator.bench.line_tracking import extract_updates
 from loom_orchestrator.bench.replay import replay_realtime
 from loom_orchestrator.bench.timestamps import hms_to_seconds
 from loom_orchestrator.commit_policy import compute_flush, force_flush
-from loom_orchestrator.speaker_separation import SAMPLE_RATE_HZ, SpeakerEmbedder, VoiceSeparator
+from loom_orchestrator.speaker_separation import (
+    PYANNOTE_CHUNK_SAMPLES,
+    SAMPLE_RATE_HZ,
+    PyannoteVoiceSeparator,
+    SpeakerEmbedder,
+    VoiceSeparator,
+)
 from loom_orchestrator.speaker_tracking import (
     assign_and_bootstrap,
     cosine_similarity,
@@ -122,6 +128,7 @@ async def run_benchmark(
     corpus_dir: Path = corpus.CORPUS_DIR,
     lan: str = "auto",
     target_lang: str = "fr",
+    separator_backend: str = "sepformer",
 ) -> PipelineDualBenchmarkResult:
     corpus.validate(corpus_key, corpus_dir=corpus_dir)
     wav_path = corpus.resolve(corpus_key, corpus_dir=corpus_dir)
@@ -142,7 +149,21 @@ async def run_benchmark(
         IdentitySession(processor=AudioProcessor(transcription_engine=engine, mode="full"))
         for _ in range(N_IDENTITIES)
     ]
-    separator = VoiceSeparator()
+    # ⚠ pyannote/separation-ami-1.0 impose une fenêtre fixe de 5s (PYANNOTE_CHUNK_SAMPLES) —
+    # separation_window_s remplace localement le module-level SEPARATION_WINDOW_S (6s, réglé
+    # pour SepFormer) pour ce backend, cf. Révisions ADR-0044 (2026-07-17) : premier test
+    # audible seulement une fois la fenêtre correctement dimensionnée/positionnée.
+    if separator_backend == "pyannote":
+        separator = PyannoteVoiceSeparator()
+        separation_window_s = PYANNOTE_CHUNK_SAMPLES / SAMPLE_RATE_HZ
+    elif separator_backend == "sepformer":
+        separator = VoiceSeparator()
+        separation_window_s = SEPARATION_WINDOW_S
+    else:
+        raise ValueError(
+            f"separator_backend inconnu : {separator_backend!r} — attendu 'sepformer' ou "
+            "'pyannote'"
+        )
     embedder = SpeakerEmbedder()
     llm_translator = LlmTranslator()
     synth = PocketTtsSynthesizer()
@@ -422,6 +443,11 @@ async def run_benchmark(
             streams = None if too_short_for_separation else await asyncio.to_thread(
                 separator.separate, window
             )
+            if streams is not None and len(streams) > N_IDENTITIES:
+                # pyannote/separation-ami-1.0 peut retourner jusqu'à 3 flux — on ne gère que
+                # N_IDENTITIES=2 aujourd'hui (cf. ADR-0044, pas encore généralisé à N), les
+                # flux excédentaires sont ignorés plutôt que de planter assign_and_bootstrap.
+                streams = streams[:N_IDENTITIES]
             t_separate_s = time.monotonic() - t0
 
             t0 = time.monotonic()
@@ -529,7 +555,7 @@ async def run_benchmark(
 
             buffer = np.zeros(0, dtype=np.float32)
             routed_samples = 0
-            window_samples = int(SEPARATION_WINDOW_S * SAMPLE_RATE_HZ)
+            window_samples = int(separation_window_s * SAMPLE_RATE_HZ)
             route_every_samples = int(ROUTE_EVERY_S * SAMPLE_RATE_HZ)
             drop_count = [0]  # cf. DEBUG print après route_queue.join()
 
@@ -636,6 +662,13 @@ def main() -> None:
     parser.add_argument("--corpus-dir", type=Path, default=corpus.CORPUS_DIR)
     parser.add_argument("--lan", default="auto")
     parser.add_argument("--target-lang", default="fr")
+    parser.add_argument(
+        "--separator-backend",
+        choices=["sepformer", "pyannote"],
+        default="sepformer",
+        help="Modèle de séparation de voix (ADR-0044) — 'pyannote' (pyannote/separation-ami-1.0) "
+        "nécessite HF_TOKEN (modèle à accès conditionnel).",
+    )
     args = parser.parse_args()
 
     result = asyncio.run(
@@ -645,6 +678,7 @@ def main() -> None:
             args.corpus_dir,
             lan=args.lan,
             target_lang=args.target_lang,
+            separator_backend=args.separator_backend,
         )
     )
 
