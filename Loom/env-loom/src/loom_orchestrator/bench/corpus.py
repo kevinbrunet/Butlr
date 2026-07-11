@@ -44,6 +44,23 @@ class CorpusFile:
 # ✓ catégories PCAFETER (cafétéria animée) et PRESTO (restaurant universitaire à l'heure du
 # déjeuner), un seul canal (ch01) extrait des enregistrements 16 canaux, déjà nativement 16kHz
 # mono, pas de resample nécessaire.
+#
+# Provenance (2026-07-17) — g : contrairement à `b`/`e`/`f` (mix synthétique ffmpeg de deux
+# enregistrements sans rapport), premier corpus de chevauchement capté par un **vrai micro
+# unique** sur deux vraies personnes dans la même pièce — cf. ADR-0044 §Révisions (suspicion
+# que `b` soit un cas trop adversarial pour juger SepFormer dans l'absolu, faute d'homogénéité
+# acoustique entre les deux pistes sources). Source : AMI Meeting Corpus (huggingface.co/
+# datasets/edinburghcstr/ami, configuration "sdm" — Single Distant Microphone), licence CC-BY
+# 4.0, University of Edinburgh - Centre For Speech Technology Research. Réunion `EN2001a`,
+# locuteurs `MEO069` et `MEE067` — deux tours de parole qui se chevauchent réellement
+# (0,77s), extraits via `datasets` (streaming, recherche programmatique d'un chevauchement
+# inter-locuteur dans les mêmes coordonnées temporelles) puis reconstruits en un seul flux
+# continu (tour de `MEO069` en entier + queue du tour de `MEE067` au-delà de la fin du
+# premier, jamais additionnés — les deux extraits partagent le même signal micro physique
+# sur leur fenêtre commune, les additionner aurait doublé l'amplitude de cette zone). ⚠ Très
+# court (5,76s, un seul point de chevauchement) — utile pour un test de qualité de séparation
+# ciblé, pas un remplacement de `b` pour le reste des bancs d'essai (durée/contenu trop
+# limités pour ça).
 CORPUS_MANIFEST: tuple[CorpusFile, ...] = (
     CorpusFile(
         "a", "a_en_mono.wav", "en", 1, 180.0, "EN mono-locuteur, ~3 min",
@@ -77,6 +94,14 @@ CORPUS_MANIFEST: tuple[CorpusFile, ...] = (
         "EN 2 locuteurs avec chevauchements + bruit de restaurant (SNR ~10dB)",
         provenance="b_en_overlap.wav (mêmes locuteurs/chevauchement) + bruit DEMAND PRESTO_16k "
         "(zenodo.org/records/1227121, CC BY-SA 3.0), mixé par script Python (RMS, SNR cible 10dB).",
+    ),
+    CorpusFile(
+        "g", "g_en_overlap_real.wav", "en", 2, 5.0,
+        "EN 2 locuteurs, chevauchement réel capté par un micro unique (5,76s, court)",
+        provenance="huggingface.co/datasets/edinburghcstr/ami, config \"sdm\", réunion EN2001a, "
+        "locuteurs MEO069+MEE067, CC-BY 4.0 (University of Edinburgh). Reconstruction continue "
+        "de deux tours de parole qui se chevauchent réellement dans le flux SDM d'origine (pas "
+        "un mix synthétique) — cf. commentaire de provenance ci-dessus pour le détail.",
     ),
 )
 
