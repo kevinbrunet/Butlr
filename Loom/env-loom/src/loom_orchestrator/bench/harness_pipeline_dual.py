@@ -40,6 +40,7 @@ from loom_orchestrator.commit_policy import compute_flush, force_flush
 from loom_orchestrator.speaker_separation import SAMPLE_RATE_HZ, SpeakerEmbedder, VoiceSeparator
 from loom_orchestrator.speaker_tracking import (
     assign_and_bootstrap,
+    cosine_similarity,
     pick_active_identity,
     streams_are_distinct,
     update_running_embedding,
@@ -436,8 +437,23 @@ async def run_benchmark(
                 distinct_count[0] += 1
                 assignment = assign_and_bootstrap(known_embeddings, stream_embeddings)
                 sends = []
+                assignment_debug = []
                 for ident in range(N_IDENTITIES):
                     stream_idx = assignment[ident]
+                    # DEBUG (diagnostic ADR-0044, 2026-07-17) : similarité entre le flux choisi
+                    # et l'embedding "roulant" déjà connu de cette identité, calculée AVANT la
+                    # mise à jour — si cette valeur est basse/erratique d'un appel à l'autre,
+                    # l'assignation flotte (mélange des deux locuteurs sur une même identité au
+                    # lieu de rester stable), hypothèse à distinguer du silence-fill (retiré
+                    # ci-dessous, aucun effet mesuré sur la latence) comme cause de la
+                    # transcription "[inaudible]" massive observée sur une identité.
+                    prior = known_embeddings[ident]
+                    similarity = (
+                        cosine_similarity(prior, stream_embeddings[stream_idx])
+                        if prior is not None
+                        else float("nan")
+                    )
+                    assignment_debug.append(f"id{ident}<-stream{stream_idx}(sim={similarity:.2f})")
                     known_embeddings[ident] = update_running_embedding(
                         known_embeddings[ident],
                         stream_embeddings[stream_idx],
@@ -452,6 +468,7 @@ async def run_benchmark(
                         sessions[ident].processor.process_audio(_pcm16_bytes(increment_audio))
                     )
                 await asyncio.gather(*sends)
+                print(f"DEBUG assignment: {' '.join(assignment_debug)}")
             else:
                 if too_short_for_separation:
                     too_short_count[0] += 1
@@ -467,24 +484,16 @@ async def run_benchmark(
                 embedding_counts[active_ident] += 1
                 increment_audio = window[increment_start : increment_start + increment_len]
                 _record_send(active_ident, len(increment_audio), global_start_sample)
-                sends = [
-                    sessions[active_ident].processor.process_audio(_pcm16_bytes(increment_audio))
-                ]
-                # Silence (pas juste "rien") vers les identités inactives — cf. docstring de
-                # route_window : les laisser sans le moindre chunk pendant que l'autre parle
-                # s'est révélé coûteux pour WLK (latence ~4x plus élevée sur l'identité qui
-                # reçoit le moins souvent, cf. Révisions ADR-0044), probablement parce que WLK
-                # suppose un flux continu. Garde son horloge interne alignée sur l'horloge
-                # murale sans lui faire "entendre" du contenu qu'elle n'a pas.
-                import numpy as np
-
-                silence = np.zeros(increment_len, dtype=np.float32)
-                for ident in range(N_IDENTITIES):
-                    if ident == active_ident:
-                        continue
-                    _record_send(ident, len(silence), global_start_sample, is_silence=True)
-                    sends.append(sessions[ident].processor.process_audio(_pcm16_bytes(silence)))
-                await asyncio.gather(*sends)
+                # ⚠ Retour à "rien envoyé" aux identités inactives (2026-07-17) : le silence-fill
+                # (cf. Révisions ADR-0044) n'a montré aucun effet mesuré sur la latence lors de
+                # son propre test, et une dégradation sévère de qualité est apparue après son
+                # ajout (une identité quasi entièrement "[inaudible]" alors qu'elle recevait
+                # pourtant du contenu réel) — retiré le temps de confirmer/infirmer via
+                # l'instrumentation de stabilité d'assignation ci-dessus plutôt que de garder
+                # deux changements non isolés en même temps.
+                await sessions[active_ident].processor.process_audio(
+                    _pcm16_bytes(increment_audio)
+                )
             t_route_s = time.monotonic() - t0
 
             print(
