@@ -488,6 +488,20 @@ async def run_benchmark(
             entier. ECAPA (`embedder.embed`) sert uniquement à ce suivi d'identité dans le
             temps, jamais à juger si la séparation elle-même avait un sens.
 
+            Référence bâtie uniquement sur les passages sans chevauchement (2026-07-19,
+            remarque de Kevin) : la voix issue d'un flux séparé/masqué est altérée par rapport
+            à l'originale — la comparer à la référence connue reste le seul signal disponible
+            pour l'assignation pendant un chevauchement, mais la réutiliser pour **rafraîchir**
+            cette référence la dilue progressivement avec des échantillons dégradés (cause
+            identifiée de la dérive id1→id9, cf. Révisions ADR-0044 2026-07-18). Une identité
+            déjà connue (`known_embeddings[ident] is not None`) n'est donc plus mise à jour
+            depuis un flux masqué — seule la branche "un seul locuteur actif" ci-dessous (audio
+            brut de la fenêtre, jamais masqué puisqu'aucune séparation n'a eu lieu) l'affine.
+            Une identité tout juste créée pendant un chevauchement (jamais vue en dehors)
+            garde son tout premier embedding masqué comme référence tant qu'un passage sans
+            chevauchement ne l'a pas encore recalée —⚠ dégradé mais strictement pas pire que
+            l'ancien comportement (qui continuait de diluer indéfiniment).
+
             Sous `MIN_SEPARATION_AUDIO_S` de contexte accumulé (tout début de flux, avant que
             `window` atteigne une taille utile), `separator.separate` n'est même pas appelé —
             proposition de Kevin (2026-07-17) : pas assez de matière pour que SepFormer sépare
@@ -549,12 +563,19 @@ async def run_benchmark(
                         else float("nan")
                     )
                     assignment_debug.append(f"id{ident}<-stream{stream_idx}(sim={similarity:.2f})")
-                    known_embeddings[ident] = update_running_embedding(
-                        known_embeddings[ident],
-                        stream_embeddings[stream_idx],
-                        embedding_counts[ident],
-                    )
-                    embedding_counts[ident] += 1
+                    # Référence mise à jour seulement au tout premier passage (bootstrap
+                    # d'une identité jamais vue ailleurs) — sinon la voix vient d'un flux
+                    # séparé/masqué, altéré par rapport à l'original (remarque de Kevin,
+                    # 2026-07-19) : la rafraîchir à chaque chevauchement dilue la référence
+                    # avec des échantillons dégradés, cf. ADR-0044 §Révisions (dérive
+                    # id1→id9 sur le run du 2026-07-18). Seule la branche "un seul locuteur
+                    # actif" ci-dessous (audio brut, jamais masqué) affine la référence après
+                    # ce premier enregistrement.
+                    if known_embeddings[ident] is None:
+                        known_embeddings[ident] = update_running_embedding(
+                            None, stream_embeddings[stream_idx], 0
+                        )
+                        embedding_counts[ident] += 1
                     increment_audio = streams[stream_idx][
                         increment_start : increment_start + increment_len
                     ]
