@@ -133,10 +133,32 @@ class PyannoteVoiceSeparator:
         self._model.to(device)
         self._device = device
 
-    def separate(self, audio: "np.ndarray") -> list["np.ndarray"]:
-        """Sépare `audio` (16kHz mono, doit faire au plus `PYANNOTE_CHUNK_SAMPLES` — padding
-        silence si plus court) en jusqu'à 3 flux (16kHz mono chacun, tronqués à la longueur
-        de `audio`, le padding retiré avant de retourner)."""
+    # ⚠ Seuils non calibrés empiriquement — valeurs de départ. `DIARIZATION_ACTIVITY_THRESHOLD`
+    # suppose que `self.activation[0]` (ToTaToNet.py, pyannote-audio) produit une probabilité
+    # d'activité *par locuteur indépendante* (type sigmoïde) — pas vérifié par exécution
+    # réelle si c'est plutôt une softmax (auquel cas la logique "compter les locuteurs actifs
+    # simultanément" serait fausse, une softmax à 3 sorties ne dépasse presque jamais 0.5 pour
+    # 2 locuteurs à la fois). `DIARIZATION_MIN_OVERLAP_FRAMES` : au moins ~100ms de
+    # chevauchement simultané pour compter comme un vrai chevauchement, pas juste un artefact
+    # d'un ou deux frames — à 624 frames / 5s (~125 fps, cf. fiche modèle), ~100ms ≈ 12 frames.
+    DIARIZATION_ACTIVITY_THRESHOLD = 0.5
+    DIARIZATION_MIN_OVERLAP_FRAMES = 12
+
+    def separate_and_detect_overlap(
+        self, audio: "np.ndarray"
+    ) -> tuple[list["np.ndarray"], bool]:
+        """Comme `separate`, mais retourne aussi `has_overlap` — dérivé de la diarisation
+        **native** du modèle (conjointement entraînée avec la séparation, cf. `ToTaToNet.py`
+        dans pyannote-audio), pas d'une vérification a posteriori par embedding ECAPA (cf.
+        `speaker_tracking.streams_are_distinct`, qui reste nécessaire pour SepFormer — sans
+        signal de diarisation natif — mais n'a plus de raison d'être ici, ADR-0044 Révisions
+        2026-07-18, remarque de Kevin : ECAPA doit servir uniquement au suivi d'identité dans
+        le temps, pas à juger si la séparation elle-même avait un sens).
+
+        Un seul appel au modèle pour les deux informations (diarisation et flux séparés
+        partagent le même passage encodeur+masker, cf. `ToTaToNet.forward`) — pas de coût
+        supplémentaire à calculer les deux plutôt qu'un seul.
+        """
         import numpy as np
         import torch
 
@@ -150,7 +172,26 @@ class PyannoteVoiceSeparator:
 
         waveform = torch.from_numpy(padded).float().unsqueeze(0).unsqueeze(0).to(self._device)
         with torch.inference_mode():
-            _diarization, sources = self._model(waveform)
+            diarization, sources = self._model(waveform)
         # sources : (batch=1, échantillons, locuteurs) — cf. fiche modèle HF.
+        # diarization : (batch=1, frames, locuteurs) — probabilité d'activité par locuteur.
         n_speakers = sources.shape[-1]
-        return [sources[0, : len(audio), i].detach().cpu().numpy() for i in range(n_speakers)]
+        streams = [sources[0, : len(audio), i].detach().cpu().numpy() for i in range(n_speakers)]
+
+        active_counts = (diarization[0] > self.DIARIZATION_ACTIVITY_THRESHOLD).sum(dim=-1)
+        overlap_frames = int((active_counts >= 2).sum().item())
+        has_overlap = overlap_frames >= self.DIARIZATION_MIN_OVERLAP_FRAMES
+        print(
+            f"DEBUG pyannote diarization: frames_chevauchement={overlap_frames}/"
+            f"{diarization.shape[1]} has_overlap={has_overlap}"
+        )
+        return streams, has_overlap
+
+    def separate(self, audio: "np.ndarray") -> list["np.ndarray"]:
+        """Sépare `audio` (16kHz mono, doit faire au plus `PYANNOTE_CHUNK_SAMPLES` — padding
+        silence si plus court) en jusqu'à 3 flux (16kHz mono chacun, tronqués à la longueur
+        de `audio`, le padding retiré avant de retourner). Équivalent à
+        `separate_and_detect_overlap` sans la diarisation — gardé pour compatibilité
+        d'interface avec `VoiceSeparator` (SepFormer, `harness_separation.py`)."""
+        streams, _has_overlap = self.separate_and_detect_overlap(audio)
+        return streams

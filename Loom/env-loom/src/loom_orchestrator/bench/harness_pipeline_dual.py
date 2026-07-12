@@ -448,30 +448,53 @@ async def run_benchmark(
             proposition de Kevin (2026-07-17) : pas assez de matière pour que SepFormer sépare
             utilement, autant économiser l'appel et router l'audio brut directement (même
             chemin que "un seul locuteur actif" ci-dessus, cf. `pick_active_identity`).
+
+            Décision "y a-t-il vraiment chevauchement ?" (2026-07-18, cf. Révisions ADR-0044,
+            remarque de Kevin après lecture du papier PixIT) : pour `separator_backend=
+            "pyannote"`, utilise la diarisation **native** du modèle (conjointement entraînée
+            avec la séparation, `PyannoteVoiceSeparator.separate_and_detect_overlap`) plutôt
+            que `streams_are_distinct` (vérification ECAPA a posteriori sur les flux de
+            sortie). SepFormer n'a pas d'alternative — pas de signal de diarisation natif,
+            `streams_are_distinct` reste nécessaire pour ce backend. Dans les deux cas, ECAPA
+            (`embedder.embed`) garde son rôle d'origine : suivre une identité dans le temps
+            (`assign_and_bootstrap`), jamais juger si la séparation elle-même avait un sens.
             """
             too_short_for_separation = len(window) / SAMPLE_RATE_HZ < MIN_SEPARATION_AUDIO_S
 
             t0 = time.monotonic()
-            streams = None if too_short_for_separation else await asyncio.to_thread(
-                separator.separate, window
-            )
-            if streams is not None and len(streams) > N_IDENTITIES:
-                # pyannote/separation-ami-1.0 peut retourner jusqu'à 3 flux — on ne gère que
-                # N_IDENTITIES=2 aujourd'hui (cf. ADR-0044, pas encore généralisé à N), les
-                # flux excédentaires sont ignorés plutôt que de planter assign_and_bootstrap.
-                streams = streams[:N_IDENTITIES]
+            streams = None
+            native_overlap: bool | None = None
+            if not too_short_for_separation:
+                if separator_backend == "pyannote":
+                    streams, native_overlap = await asyncio.to_thread(
+                        separator.separate_and_detect_overlap, window
+                    )
+                else:
+                    streams = await asyncio.to_thread(separator.separate, window)
+                if len(streams) > N_IDENTITIES:
+                    # pyannote/separation-ami-1.0 peut retourner jusqu'à 3 flux — on ne gère
+                    # que N_IDENTITIES=2 aujourd'hui (cf. ADR-0044, pas encore généralisé à N).
+                    streams = streams[:N_IDENTITIES]
             t_separate_s = time.monotonic() - t0
 
             t0 = time.monotonic()
             stream_embeddings = None
             if not too_short_for_separation:
+                # ECAPA calculé dans tous les cas : sert au suivi d'identité (assign_and_
+                # bootstrap) quel que soit le backend, cf. docstring ci-dessus.
                 stream_embeddings = list(
                     await asyncio.gather(*(asyncio.to_thread(embedder.embed, s) for s in streams))
                 )
             t_embed_s = time.monotonic() - t0
 
+            is_distinct = (
+                native_overlap
+                if native_overlap is not None
+                else (not too_short_for_separation and streams_are_distinct(stream_embeddings))
+            )
+
             t0 = time.monotonic()
-            if not too_short_for_separation and streams_are_distinct(stream_embeddings):
+            if not too_short_for_separation and is_distinct:
                 distinct_count[0] += 1
                 assignment = assign_and_bootstrap(known_embeddings, stream_embeddings)
                 sends = []
