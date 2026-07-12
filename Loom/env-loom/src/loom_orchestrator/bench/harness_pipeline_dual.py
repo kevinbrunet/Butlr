@@ -421,6 +421,13 @@ async def run_benchmark(
                     end = line.get("end")
                     if end is None:
                         continue
+                    # DEBUG (2026-07-19, cf. ADR-0044 §Révisions — id3 avait 505/621 réponses
+                    # WLK non vides mais 0 ligne dans le transcript, aucun WARNING
+                    # "révisé du texte déjà flushé" en cause) : `extract_updates` dédoublonne
+                    # déjà (ne renvoie que le texte quand il change) — réutilisé ici pour
+                    # afficher l'évolution réelle du texte WLK par identité, au lieu de
+                    # deviner depuis compute_flush/is_consistent en aval.
+                    print(f"DEBUG wlk-text id{ident}/line{idx}: {_text!r}")
                     segment_id = f"{corpus_key}-id{ident}-wlk-line{idx}-{len(_text)}"
                     t_in = _to_global_seconds(ident, hms_to_seconds(end))
                     t_out = time.monotonic() - replay_start_monotonic
