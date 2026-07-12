@@ -45,10 +45,9 @@ from loom_orchestrator.speaker_separation import (
     VoiceSeparator,
 )
 from loom_orchestrator.speaker_tracking import (
-    assign_and_bootstrap,
+    assign_streams_open_set,
     cosine_similarity,
-    is_confident_match,
-    pick_active_identity,
+    find_best_speaker,
     streams_are_distinct,
     update_running_embedding,
 )
@@ -59,7 +58,7 @@ from loom_orchestrator.tts_pocket import PocketTtsSynthesizer
 # harness_pipeline.py (`--translator llm`), où l'audio mélangé va directement à un seul WLK,
 # ici l'audio brut est séparé en continu AVANT WLK et routé vers l'AudioProcessor du
 # locuteur suivi correspondant — un seul TranscriptionEngine partagé (poids chargés une
-# fois, cf. ADR-0044 §Context), N_IDENTITIES AudioProcessor indépendants. Chaque processor
+# fois, cf. ADR-0044 §Context), un `AudioProcessor` par locuteur suivi. Chaque processor
 # traite ensuite sa ligne exactement comme le chemin "llm" de harness_pipeline.py
 # (commit_policy + LlmTranslator + PocketTtsSynthesizer) — cette partie est dupliquée ici
 # plutôt que factorisée avec harness_pipeline.py pour l'instant (mesurer d'abord si cette
@@ -69,8 +68,14 @@ from loom_orchestrator.tts_pocket import PocketTtsSynthesizer
 # ⚠ Premier jet (ADR-0044), pas encore validé sur la machine cible. Couvre uniquement
 # translator="llm" (ADR-0043) — la séparation en aval (ADR-0042) reste le mécanisme du
 # chemin "seamless", inchangé, cf. harness_pipeline.py.
-
-N_IDENTITIES = 2
+#
+# Référentiel de locuteurs OUVERT (2026-07-18, cf. Révisions ADR-0044 — remarque de Kevin) :
+# pas de nombre fixe d'identités à l'initialisation. PixIT sépare jusqu'à 3 voix
+# *simultanées* par fenêtre, mais la pièce peut contenir plus de 3 personnes qui parlent
+# chacune leur tour — une nouvelle session `AudioProcessor` est créée à la volée dès qu'un
+# flux ne correspond à aucun locuteur déjà connu (`_ensure_identity`), jamais rejetée
+# (`assign_streams_open_set`/`find_best_speaker`, `speaker_tracking.py`) : perdre un flux
+# entier faute de correspondance confiante était pire que se tromper occasionnellement.
 
 # Mêmes valeurs que harness_pipeline.py/ADR-0042 pour la fenêtre de séparation (zone de
 # confort mesurée de SepFormer-WHAMR). ROUTE_EVERY_S est nouveau ici : contrairement à
@@ -157,10 +162,9 @@ async def run_benchmark(
     if use_sortformer:
         engine_kwargs["diarization_backend"] = "sortformer"
     engine = TranscriptionEngine(**engine_kwargs)
-    sessions = [
-        IdentitySession(processor=AudioProcessor(transcription_engine=engine, mode="full"))
-        for _ in range(N_IDENTITIES)
-    ]
+    # Référentiel de locuteurs ouvert : commence vide, grandit à la volée via
+    # `_ensure_identity` — cf. commentaire de tête de fichier (2026-07-18).
+    sessions: list[IdentitySession] = []
     # ⚠ pyannote/separation-ami-1.0 impose une fenêtre fixe de 5s (PYANNOTE_CHUNK_SAMPLES) —
     # separation_window_s remplace localement le module-level SEPARATION_WINDOW_S (6s, réglé
     # pour SepFormer) pour ce backend, cf. Révisions ADR-0044 (2026-07-17) : premier test
@@ -180,8 +184,8 @@ async def run_benchmark(
     llm_translator = LlmTranslator()
     synth = PocketTtsSynthesizer()
 
-    known_embeddings: list[list[float] | None] = [None] * N_IDENTITIES
-    embedding_counts: list[int] = [0] * N_IDENTITIES
+    known_embeddings: list[list[float] | None] = []
+    embedding_counts: list[int] = []
 
     # ⚠ Identifié seulement après un run réel qui restait à p95=9s malgré le découplage
     # ci-dessus (cf. Révisions ADR-0044) : `AudioProcessor.process_audio` ne reçoit que des
@@ -196,14 +200,12 @@ async def run_benchmark(
     # échantillon_fin_processor, échantillon_début_global)` par incrément envoyé — permet de
     # retraduire un timestamp interne à un processor vers sa position réelle dans le flux
     # source global avant de mesurer quoi que ce soit.
-    identity_timeline: list[list[tuple[int, int, int]]] = [[] for _ in range(N_IDENTITIES)]
+    identity_timeline: list[list[tuple[int, int, int]]] = []
 
-    # DEBUG (diagnostic ADR-0044, à retirer une fois la cause de l'écart id0/id1 confirmée) :
-    # volume total réel vs silence envoyé par identité, et compte des décisions de routage
-    # distinct/non-distinct — pour savoir si l'écart de latence vient de la branche silence
-    # (peu de contenu réel) ou de la branche "chevauchement" (contenu réel des deux côtés).
-    content_seconds = [0.0] * N_IDENTITIES
-    silence_seconds = [0.0] * N_IDENTITIES
+    # DEBUG (diagnostic ADR-0044) : volume total réel vs silence envoyé par identité, et
+    # compte des décisions de routage distinct/non-distinct.
+    content_seconds: list[float] = []
+    silence_seconds: list[float] = []
     distinct_count = [0]
     non_distinct_count = [0]
     too_short_count = [0]
@@ -240,10 +242,11 @@ async def run_benchmark(
             if state.voice_state is None:
                 state.voice_state = synth.new_line_state()
 
-            # ⚠ Pas de lock ici : LlmTranslator/PocketTtsSynthesizer sont partagés entre les
-            # N_IDENTITIES sessions, mais `commit_worker` (cf. plus bas) est l'unique tâche
-            # qui les appelle — la sérialisation vient de la structure (un seul consommateur),
-            # pas d'un verrou explicite. Historique : un premier jet appelait ceci directement
+            # ⚠ Pas de lock ici : LlmTranslator/PocketTtsSynthesizer sont partagés entre toutes
+            # les sessions du référentiel ouvert (cf. `_ensure_identity`), mais `commit_worker`
+            # (cf. plus bas) est l'unique tâche qui les appelle — la sérialisation vient de la
+            # structure (un seul consommateur), pas d'un verrou explicite. Historique : un
+            # premier jet appelait ceci directement
             # depuis `consume()` (une tâche par identité, donc 2 appelantes concurrentes) et a
             # provoqué un crash CUDA dur dans llama.cpp (GGML_ASSERT(buffer) failed) — corrigé
             # une première fois avec des `asyncio.Lock`, puis remplacé par ce découplage qui
@@ -332,7 +335,8 @@ async def run_benchmark(
         # captures sont des préfixes de la nouvelle, cf. "le passé est immuable"). `final_queue`
         # (illimitée en pratique — bornée par le nombre total de lignes d'un run, jamais
         # coalescée : chaque scellement de ligne doit être traité, aucun n'est remplaçable).
-        partial_queues: list[asyncio.Queue] = [asyncio.Queue(maxsize=1) for _ in sessions]
+        partial_queues: list[asyncio.Queue] = []
+        consumer_tasks: list[asyncio.Task] = []
         final_queue: asyncio.Queue = asyncio.Queue()
 
         def _queue_latest(queue: asyncio.Queue, item: tuple) -> None:
@@ -415,6 +419,28 @@ async def run_benchmark(
                 active_idx = len(lines) - 1
                 _queue_latest(partial_queues[ident], (active_idx, lines[active_idx]))
 
+        def _ensure_identity(ident: int) -> None:
+            """Crée à la volée toute nouvelle identité jusqu'à `ident` inclus — session
+            `AudioProcessor` (sur le `TranscriptionEngine` partagé), embedding roulant, file
+            de commit partiel, tâche `consume()` (2026-07-18, cf. commentaire de tête de
+            fichier : référentiel de locuteurs ouvert, pas de nombre fixe à l'initialisation).
+            Ne fait rien si l'identité existe déjà (`sessions` assez long)."""
+            while len(sessions) <= ident:
+                new_ident = len(sessions)
+                sessions.append(
+                    IdentitySession(
+                        processor=AudioProcessor(transcription_engine=engine, mode="full")
+                    )
+                )
+                known_embeddings.append(None)
+                embedding_counts.append(0)
+                identity_timeline.append([])
+                content_seconds.append(0.0)
+                silence_seconds.append(0.0)
+                partial_queues.append(asyncio.Queue(maxsize=1))
+                consumer_tasks.append(asyncio.create_task(consume(new_ident)))
+                print(f"DEBUG nouvelle identité enregistrée : id{new_ident}")
+
         async def route_window(
             window: "np.ndarray",
             increment_start: int,
@@ -435,29 +461,26 @@ async def run_benchmark(
             temps réel dès que ce traitement dépasse le débit d'arrivée de l'audio, ce que le
             premier run réel a confirmé (étage `wlk` p95=9s, largement hors budget).
 
-            Quand un seul locuteur est actif (`streams_are_distinct` faux), les identités
-            inactives reçoivent du silence (zéros) plutôt qu'aucun chunk du tout — constaté
-            empiriquement (cf. Révisions ADR-0044) : ne rien envoyer pendant de longues
-            secondes à une session WLK fait grimper sa latence de ~4x par rapport à une
-            identité alimentée en continu, probablement parce que WLK suppose un flux
-            continu. Le silence garde l'horloge interne de la session alignée sur l'horloge
-            murale sans lui faire "entendre" du contenu qu'elle n'a pas.
+            Référentiel de locuteurs OUVERT (2026-07-18, cf. Révisions ADR-0044 — remarque de
+            Kevin) : `assign_streams_open_set`/`find_best_speaker` (`speaker_tracking.py`)
+            associent chaque flux à un locuteur déjà connu **ou** en enregistrent un nouveau
+            à la volée (`_ensure_identity`) — jamais de rejet qui ferait perdre un flux
+            entier. ECAPA (`embedder.embed`) sert uniquement à ce suivi d'identité dans le
+            temps, jamais à juger si la séparation elle-même avait un sens.
 
             Sous `MIN_SEPARATION_AUDIO_S` de contexte accumulé (tout début de flux, avant que
             `window` atteigne une taille utile), `separator.separate` n'est même pas appelé —
             proposition de Kevin (2026-07-17) : pas assez de matière pour que SepFormer sépare
             utilement, autant économiser l'appel et router l'audio brut directement (même
-            chemin que "un seul locuteur actif" ci-dessus, cf. `pick_active_identity`).
+            chemin que "un seul locuteur actif" ci-dessous).
 
-            Décision "y a-t-il vraiment chevauchement ?" (2026-07-18, cf. Révisions ADR-0044,
-            remarque de Kevin après lecture du papier PixIT) : pour `separator_backend=
-            "pyannote"`, utilise la diarisation **native** du modèle (conjointement entraînée
-            avec la séparation, `PyannoteVoiceSeparator.separate_and_detect_overlap`) plutôt
-            que `streams_are_distinct` (vérification ECAPA a posteriori sur les flux de
-            sortie). SepFormer n'a pas d'alternative — pas de signal de diarisation natif,
-            `streams_are_distinct` reste nécessaire pour ce backend. Dans les deux cas, ECAPA
-            (`embedder.embed`) garde son rôle d'origine : suivre une identité dans le temps
-            (`assign_and_bootstrap`), jamais juger si la séparation elle-même avait un sens.
+            Décision "y a-t-il vraiment chevauchement ?" (2026-07-18, remarque de Kevin après
+            lecture du papier PixIT) : pour `separator_backend="pyannote"`, utilise la
+            diarisation **native** du modèle (conjointement entraînée avec la séparation,
+            `PyannoteVoiceSeparator.separate_and_detect_overlap`) plutôt que
+            `streams_are_distinct` (vérification ECAPA a posteriori sur les flux de sortie).
+            SepFormer n'a pas d'alternative — pas de signal de diarisation natif,
+            `streams_are_distinct` reste nécessaire pour ce backend.
             """
             too_short_for_separation = len(window) / SAMPLE_RATE_HZ < MIN_SEPARATION_AUDIO_S
 
@@ -471,17 +494,13 @@ async def run_benchmark(
                     )
                 else:
                     streams = await asyncio.to_thread(separator.separate, window)
-                if len(streams) > N_IDENTITIES:
-                    # pyannote/separation-ami-1.0 peut retourner jusqu'à 3 flux — on ne gère
-                    # que N_IDENTITIES=2 aujourd'hui (cf. ADR-0044, pas encore généralisé à N).
-                    streams = streams[:N_IDENTITIES]
             t_separate_s = time.monotonic() - t0
 
             t0 = time.monotonic()
             stream_embeddings = None
             if not too_short_for_separation:
-                # ECAPA calculé dans tous les cas : sert au suivi d'identité (assign_and_
-                # bootstrap) quel que soit le backend, cf. docstring ci-dessus.
+                # ECAPA calculé dans tous les cas : sert au suivi d'identité
+                # (assign_streams_open_set) quel que soit le backend, cf. docstring ci-dessus.
                 stream_embeddings = list(
                     await asyncio.gather(*(asyncio.to_thread(embedder.embed, s) for s in streams))
                 )
@@ -496,29 +515,19 @@ async def run_benchmark(
             t0 = time.monotonic()
             if not too_short_for_separation and is_distinct:
                 distinct_count[0] += 1
-                assignment = assign_and_bootstrap(known_embeddings, stream_embeddings)
+                assignment = assign_streams_open_set(known_embeddings, stream_embeddings)
+                if assignment:
+                    _ensure_identity(max(assignment))
+
                 sends = []
                 assignment_debug = []
-                for ident in range(N_IDENTITIES):
-                    stream_idx = assignment[ident]
+                for stream_idx, ident in enumerate(assignment):
                     prior = known_embeddings[ident]
                     similarity = (
                         cosine_similarity(prior, stream_embeddings[stream_idx])
                         if prior is not None
                         else float("nan")
                     )
-                    # `assign_and_bootstrap` choisit toujours la MEILLEURE paire disponible,
-                    # même mauvaise dans l'absolu — sans ce garde-fou, une identité peut
-                    # dériver silencieusement vers le mauvais locuteur (constaté en pratique,
-                    # 2026-07-17 : une identité a mélangé le contenu des deux locuteurs
-                    # originaux d'un run, similarité 0,45, sous le seuil). Correspondance
-                    # incertaine → incrément ignoré (ni routage, ni mise à jour de
-                    # l'embedding roulant) plutôt que de corrompre le suivi d'identité.
-                    if not is_confident_match(prior, stream_embeddings[stream_idx]):
-                        assignment_debug.append(
-                            f"id{ident}<-stream{stream_idx}(sim={similarity:.2f}, REJETÉ)"
-                        )
-                        continue
                     assignment_debug.append(f"id{ident}<-stream{stream_idx}(sim={similarity:.2f})")
                     known_embeddings[ident] = update_running_embedding(
                         known_embeddings[ident],
@@ -541,7 +550,10 @@ async def run_benchmark(
                 else:
                     non_distinct_count[0] += 1
                 mixture_embedding = await asyncio.to_thread(embedder.embed, window)
-                active_ident = pick_active_identity(known_embeddings, mixture_embedding)
+                active_ident, _similarity = find_best_speaker(known_embeddings, mixture_embedding)
+                if active_ident is None:
+                    active_ident = len(known_embeddings)
+                _ensure_identity(active_ident)
                 known_embeddings[active_ident] = update_running_embedding(
                     known_embeddings[active_ident],
                     mixture_embedding,
@@ -550,13 +562,9 @@ async def run_benchmark(
                 embedding_counts[active_ident] += 1
                 increment_audio = window[increment_start : increment_start + increment_len]
                 _record_send(active_ident, len(increment_audio), global_start_sample)
-                # ⚠ Retour à "rien envoyé" aux identités inactives (2026-07-17) : le silence-fill
-                # (cf. Révisions ADR-0044) n'a montré aucun effet mesuré sur la latence lors de
-                # son propre test, et une dégradation sévère de qualité est apparue après son
-                # ajout (une identité quasi entièrement "[inaudible]" alors qu'elle recevait
-                # pourtant du contenu réel) — retiré le temps de confirmer/infirmer via
-                # l'instrumentation de stabilité d'assignation ci-dessus plutôt que de garder
-                # deux changements non isolés en même temps.
+                # ⚠ "Rien envoyé" aux identités inactives (2026-07-17) : le silence-fill (cf.
+                # Révisions ADR-0044) n'a montré aucun effet mesuré sur la latence à son propre
+                # test, et une dégradation sévère de qualité est apparue après son ajout.
                 await sessions[active_ident].processor.process_audio(
                     _pcm16_bytes(increment_audio)
                 )
@@ -567,7 +575,7 @@ async def run_benchmark(
                 f"separate={t_separate_s * 1000:.0f}ms embed={t_embed_s * 1000:.0f}ms "
                 f"route={t_route_s * 1000:.0f}ms total={(t_separate_s + t_embed_s + t_route_s) * 1000:.0f}ms "
                 f"distinct={distinct_count[0]} non_distinct={non_distinct_count[0]} "
-                f"too_short={too_short_count[0]} "
+                f"too_short={too_short_count[0]} locuteurs_connus={len(sessions)} "
                 f"content_s={[round(c, 1) for c in content_seconds]} "
                 f"silence_s={[round(s, 1) for s in silence_seconds]}"
             )
@@ -666,7 +674,9 @@ async def run_benchmark(
         route_queue: asyncio.Queue = asyncio.Queue(maxsize=ROUTE_QUEUE_MAXSIZE)
         route_consumer_task = asyncio.create_task(route_consumer(route_queue))
         commit_worker_task = asyncio.create_task(commit_worker())
-        consumer_tasks = [asyncio.create_task(consume(ident)) for ident in range(N_IDENTITIES)]
+        # `consumer_tasks` démarre vide — chaque tâche `consume(ident)` est créée à la volée
+        # par `_ensure_identity`, dès que `route_window` (via `route_consumer_task`, déjà
+        # lancé ci-dessus) enregistre une nouvelle identité.
         await feed(route_queue)
         await asyncio.sleep(2.0)
 

@@ -58,92 +58,73 @@ def update_running_embedding(
     return [(o * count + n) / (count + 1) for o, n in zip(old, new)]
 
 
-def assign_streams_to_identities(
-    known_embeddings: list[list[float]], stream_embeddings: list[list[float]]
-) -> list[int]:
-    """Associe chaque identité déjà connue (`known_embeddings`, longueur 2) au flux séparé
-    (`stream_embeddings`, longueur 2) qui lui correspond le mieux (ADR-0044, séparation en
-    amont de WLK) — choisit la permutation qui maximise la similarité totale, plutôt que
-    deux appels indépendants à `pick_matching_stream` qui pourraient assigner le même flux
-    aux deux identités. Ne gère que 2 identités/2 flux (POC à 2 locuteurs) — pas généralisé
-    à N.
-
-    Retourne `[index_du_flux_pour_identité_0, index_du_flux_pour_identité_1]`.
-    """
-    straight = cosine_similarity(known_embeddings[0], stream_embeddings[0]) + cosine_similarity(
-        known_embeddings[1], stream_embeddings[1]
-    )
-    swapped = cosine_similarity(known_embeddings[0], stream_embeddings[1]) + cosine_similarity(
-        known_embeddings[1], stream_embeddings[0]
-    )
-    return [0, 1] if straight >= swapped else [1, 0]
-
-
-def assign_and_bootstrap(
-    known_embeddings: list[list[float] | None], stream_embeddings: list[list[float]]
-) -> list[int]:
-    """Associe les 2 flux séparés aux 2 identités, y compris pendant le bootstrap avant que
-    les deux identités aient un embedding sauvegardé (ADR-0044, séparation en amont de WLK —
-    contrairement à ADR-0042 où WLK avait déjà attribué le segment à un locuteur, ici rien
-    n'est connu au tout début du flux). Combine `assign_streams_to_identities` (cas normal,
-    les deux identités déjà connues) avec deux cas de bootstrap :
-    - aucune identité connue encore (chevauchement détecté avant que quiconque n'ait parlé
-      seul) : assignation arbitraire `[0, 1]`.
-    - une seule identité connue (cas le plus courant en pratique : un locuteur a parlé seul
-      avant que l'autre ne rejoigne) : le flux le plus proche de l'identité déjà connue lui
-      est assigné, l'autre flux devient la nouvelle identité.
-
-    Retourne `[index_du_flux_pour_identité_0, index_du_flux_pour_identité_1]`.
-    """
-    known_indices = [i for i, e in enumerate(known_embeddings) if e is not None]
-    if not known_indices:
-        return [0, 1]
-    if len(known_indices) == 1:
-        known_idx = known_indices[0]
-        other_idx = 1 - known_idx
-        matched_stream, _ = pick_matching_stream(known_embeddings[known_idx], stream_embeddings)
-        assignment = [0, 0]
-        assignment[known_idx] = matched_stream
-        assignment[other_idx] = 1 - matched_stream
-        return assignment
-    return assign_streams_to_identities(
-        [known_embeddings[0], known_embeddings[1]], stream_embeddings
-    )
-
-
-def is_confident_match(
-    prior_embedding: list[float] | None,
-    matched_embedding: list[float],
+def find_best_speaker(
+    known_speakers: list[list[float]],
+    stream_embedding: list[float],
     threshold: float = MATCH_CONFIDENCE_THRESHOLD,
-) -> bool:
-    """Vrai si `matched_embedding` est assez proche de `prior_embedding` pour être digne de
-    confiance — toujours vrai si `prior_embedding` est `None` (bootstrap, rien à comparer
-    encore, cf. `assign_and_bootstrap`).
-
-    `assign_and_bootstrap`/`assign_streams_to_identities` choisissent toujours la MEILLEURE
-    paire disponible, même si elle est mauvaise dans l'absolu — sans ce garde-fou, une
-    identité peut dériver silencieusement vers le mauvais locuteur (ADR-0044, constaté en
-    pratique le 2026-07-17 : une identité a mélangé du contenu des deux locuteurs originaux
-    d'un même run, à cause d'une correspondance à similarité 0,45, sous le seuil). L'appelant
-    doit ignorer l'incrément (ni router l'audio, ni mettre à jour l'embedding roulant) quand
-    ce garde-fou renvoie faux, plutôt que de corrompre le suivi d'identité avec une
-    correspondance incertaine.
+) -> tuple[int | None, float]:
+    """Cherche le locuteur déjà connu le plus proche de `stream_embedding` dans un
+    référentiel **ouvert** (pas limité à un nombre fixe d'identités, cf. ADR-0044 §Révisions
+    2026-07-18 — remarque de Kevin : rejeter une correspondance incertaine faisait perdre le
+    flux entier plutôt que de risquer une erreur ponctuelle, préférer se tromper rarement
+    qu'ignorer). Retourne `(index, similarité)` si un locuteur connu dépasse `threshold`,
+    sinon `(None, meilleure_similarité)` — l'appelant doit alors enregistrer un nouveau
+    locuteur plutôt que d'ignorer l'incrément.
     """
-    if prior_embedding is None:
-        return True
-    return cosine_similarity(prior_embedding, matched_embedding) >= threshold
+    if not known_speakers:
+        return None, 0.0
+    similarities = [cosine_similarity(k, stream_embedding) for k in known_speakers]
+    best_index = similarities.index(max(similarities))
+    best_similarity = similarities[best_index]
+    if best_similarity >= threshold:
+        return best_index, best_similarity
+    return None, best_similarity
 
 
-def pick_active_identity(
-    known_embeddings: list[list[float] | None], mixture_embedding: list[float]
-) -> int:
-    """Choisit l'identité active quand un seul locuteur parle (`streams_are_distinct` faux,
-    ADR-0044) — similarité de l'embedding du mélange brut contre chaque identité déjà connue.
-    Si aucune identité n'est encore connue (tout début de flux, avant toute détection de
-    chevauchement), retourne l'identité 0 par convention (cf. ADR-0044 §Decision, bootstrap).
+def assign_streams_open_set(
+    known_speakers: list[list[float]],
+    stream_embeddings: list[list[float]],
+    threshold: float = MATCH_CONFIDENCE_THRESHOLD,
+) -> list[int]:
+    """Assigne chaque flux séparé d'une même fenêtre à un locuteur — un locuteur déjà connu
+    (index dans `known_speakers`) ou un **nouveau** locuteur (index `>= len(known_speakers)`,
+    un par flux non reconnu, dans l'ordre des flux). Remplace `assign_and_bootstrap`
+    (2 identités fixes, ADR-0044 conception initiale) : référentiel ouvert, pas de plafond
+    sur le nombre de locuteurs distincts au fil d'une session (PixIT sépare jusqu'à 3 voix
+    *simultanées* par fenêtre, mais la pièce peut contenir plus de 3 personnes qui parlent
+    chacune leur tour) — et surtout **jamais de rejet** : un flux qui ne correspond à
+    personne devient un nouveau locuteur plutôt que d'être ignoré (cf. `find_best_speaker`).
+
+    Assignation gloutonne par similarité décroissante sur toutes les paires (flux, locuteur
+    connu) : chaque flux et chaque locuteur connu n'est utilisé qu'une fois, pour éviter que
+    deux flux distincts de la même fenêtre revendiquent le même locuteur connu.
     """
-    known = [(i, e) for i, e in enumerate(known_embeddings) if e is not None]
-    if not known:
-        return 0
-    similarities = [(i, cosine_similarity(e, mixture_embedding)) for i, e in known]
-    return max(similarities, key=lambda pair: pair[1])[0]
+    n_streams = len(stream_embeddings)
+    assignment: list[int | None] = [None] * n_streams
+
+    candidates = sorted(
+        (
+            (cosine_similarity(known_speakers[k], stream_embeddings[s]), s, k)
+            for s in range(n_streams)
+            for k in range(len(known_speakers))
+        ),
+        key=lambda c: c[0],
+        reverse=True,
+    )
+    used_streams: set[int] = set()
+    used_known: set[int] = set()
+    for similarity, s, k in candidates:
+        if similarity < threshold:
+            break
+        if s in used_streams or k in used_known:
+            continue
+        assignment[s] = k
+        used_streams.add(s)
+        used_known.add(k)
+
+    next_new = len(known_speakers)
+    for s in range(n_streams):
+        if assignment[s] is None:
+            assignment[s] = next_new
+            next_new += 1
+    return assignment  # type: ignore[return-value]

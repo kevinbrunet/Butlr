@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from loom_orchestrator.speaker_tracking import (
-    assign_and_bootstrap,
-    assign_streams_to_identities,
+    assign_streams_open_set,
     cosine_similarity,
-    is_confident_match,
-    pick_active_identity,
+    find_best_speaker,
     pick_matching_stream,
     streams_are_distinct,
     update_running_embedding,
@@ -71,80 +69,74 @@ def test_update_running_embedding_weights_by_count() -> None:
     assert result == [9.0]
 
 
-def test_assign_streams_to_identities_straight_pairing() -> None:
+def test_find_best_speaker_no_known_speakers_returns_none() -> None:
+    index, similarity = find_best_speaker([], [1.0, 0.0])
+    assert index is None
+    assert similarity == 0.0
+
+
+def test_find_best_speaker_matches_closest_above_threshold() -> None:
+    id0, id1 = [1.0, 0.0], [0.0, 1.0]
+    index, similarity = find_best_speaker([id0, id1], [0.05, 0.95])
+    assert index == 1
+    assert similarity > 0.9
+
+
+def test_find_best_speaker_returns_none_below_threshold() -> None:
+    id0 = [1.0, 0.0]
+    index, similarity = find_best_speaker([id0], [0.0, 1.0], threshold=0.5)
+    assert index is None
+    assert similarity == 0.0
+
+
+def test_find_best_speaker_respects_custom_threshold() -> None:
+    id0 = [1.0, 0.0]
+    borderline = [0.6, 0.5]
+    index, _similarity = find_best_speaker([id0], borderline, threshold=0.9)
+    assert index is None
+    index, _similarity = find_best_speaker([id0], borderline, threshold=0.5)
+    assert index == 0
+
+
+def test_assign_streams_open_set_no_known_speakers_registers_all_as_new() -> None:
+    stream0, stream1 = [0.9, 0.1], [0.1, 0.9]
+    assert assign_streams_open_set([], [stream0, stream1]) == [0, 1]
+
+
+def test_assign_streams_open_set_matches_existing_straight() -> None:
     id0, id1 = [1.0, 0.0], [0.0, 1.0]
     stream_close_to_id0, stream_close_to_id1 = [0.9, 0.1], [0.1, 0.9]
-    assert assign_streams_to_identities(
+    assert assign_streams_open_set(
         [id0, id1], [stream_close_to_id0, stream_close_to_id1]
     ) == [0, 1]
 
 
-def test_assign_streams_to_identities_swapped_pairing() -> None:
+def test_assign_streams_open_set_matches_existing_swapped() -> None:
     id0, id1 = [1.0, 0.0], [0.0, 1.0]
     stream_close_to_id1, stream_close_to_id0 = [0.1, 0.9], [0.9, 0.1]
-    assert assign_streams_to_identities(
+    assert assign_streams_open_set(
         [id0, id1], [stream_close_to_id1, stream_close_to_id0]
     ) == [1, 0]
 
 
-def test_pick_active_identity_no_known_embeddings_defaults_to_zero() -> None:
-    assert pick_active_identity([None, None], [1.0, 0.0]) == 0
-
-
-def test_pick_active_identity_matches_closest_known() -> None:
-    id0, id1 = [1.0, 0.0], [0.0, 1.0]
-    assert pick_active_identity([id0, id1], [0.05, 0.95]) == 1
-    assert pick_active_identity([id0, id1], [0.95, 0.05]) == 0
-
-
-def test_pick_active_identity_only_one_known_so_far() -> None:
-    id1 = [0.0, 1.0]
-    assert pick_active_identity([None, id1], [0.1, 0.9]) == 1
-
-
-def test_assign_and_bootstrap_no_identity_known_yet() -> None:
-    stream0, stream1 = [0.9, 0.1], [0.1, 0.9]
-    assert assign_and_bootstrap([None, None], [stream0, stream1]) == [0, 1]
-
-
-def test_assign_and_bootstrap_only_identity_zero_known() -> None:
+def test_assign_streams_open_set_unmatched_stream_becomes_new_speaker() -> None:
     id0 = [1.0, 0.0]
-    stream_close_to_id0, other_stream = [0.9, 0.1], [0.1, 0.9]
-    assert assign_and_bootstrap([id0, None], [stream_close_to_id0, other_stream]) == [0, 1]
-    assert assign_and_bootstrap([id0, None], [other_stream, stream_close_to_id0]) == [1, 0]
+    stream_close_to_id0 = [0.95, 0.05]
+    # orthogonal to id0, well below threshold — no known speaker to claim it
+    unmatched_stream = [-1.0, 0.0]
+    assert assign_streams_open_set([id0], [stream_close_to_id0, unmatched_stream]) == [0, 1]
 
 
-def test_assign_and_bootstrap_only_identity_one_known() -> None:
-    id1 = [0.0, 1.0]
-    stream_close_to_id0, stream_close_to_id1 = [0.9, 0.1], [0.1, 0.9]
-    assert assign_and_bootstrap([None, id1], [stream_close_to_id0, stream_close_to_id1]) == [0, 1]
-    assert assign_and_bootstrap([None, id1], [stream_close_to_id1, stream_close_to_id0]) == [1, 0]
+def test_assign_streams_open_set_never_drops_a_stream_even_with_contention() -> None:
+    # both streams are close to the single known speaker — only the best match claims it,
+    # the other becomes a new speaker rather than being dropped (cf. ADR-0044, jamais de rejet)
+    id0 = [1.0, 0.0]
+    stream_a, stream_b = [0.99, 0.01], [0.9, 0.1]
+    assignment = assign_streams_open_set([id0], [stream_a, stream_b])
+    assert assignment == [0, 1]
 
 
-def test_assign_and_bootstrap_both_known_delegates_to_assign_streams() -> None:
+def test_assign_streams_open_set_all_unmatched_become_sequential_new_speakers() -> None:
     id0, id1 = [1.0, 0.0], [0.0, 1.0]
-    stream0, stream1 = [0.9, 0.1], [0.1, 0.9]
-    assert assign_and_bootstrap([id0, id1], [stream0, stream1]) == [0, 1]
-
-
-def test_is_confident_match_true_without_prior_embedding() -> None:
-    assert is_confident_match(None, [1.0, 0.0]) is True
-
-
-def test_is_confident_match_true_above_threshold() -> None:
-    prior = [1.0, 0.0]
-    close_match = [0.9, 0.1]
-    assert is_confident_match(prior, close_match) is True
-
-
-def test_is_confident_match_false_below_threshold() -> None:
-    prior = [1.0, 0.0]
-    weak_match = [0.4, 0.9]
-    assert is_confident_match(prior, weak_match) is False
-
-
-def test_is_confident_match_respects_custom_threshold() -> None:
-    prior = [1.0, 0.0]
-    borderline = [0.6, 0.5]
-    assert is_confident_match(prior, borderline, threshold=0.9) is False
-    assert is_confident_match(prior, borderline, threshold=0.5) is True
+    unmatched_a, unmatched_b = [-1.0, 0.0], [0.0, -1.0]
+    assert assign_streams_open_set([id0, id1], [unmatched_a, unmatched_b]) == [2, 3]
