@@ -4,6 +4,7 @@ from loom_orchestrator.speaker_tracking import (
     assign_and_bootstrap,
     assign_streams_to_identities,
     cosine_similarity,
+    is_confident_match,
     pick_active_identity,
     pick_matching_stream,
     streams_are_distinct,
@@ -124,3 +125,26 @@ def test_assign_and_bootstrap_both_known_delegates_to_assign_streams() -> None:
     id0, id1 = [1.0, 0.0], [0.0, 1.0]
     stream0, stream1 = [0.9, 0.1], [0.1, 0.9]
     assert assign_and_bootstrap([id0, id1], [stream0, stream1]) == [0, 1]
+
+
+def test_is_confident_match_true_without_prior_embedding() -> None:
+    assert is_confident_match(None, [1.0, 0.0]) is True
+
+
+def test_is_confident_match_true_above_threshold() -> None:
+    prior = [1.0, 0.0]
+    close_match = [0.9, 0.1]
+    assert is_confident_match(prior, close_match) is True
+
+
+def test_is_confident_match_false_below_threshold() -> None:
+    prior = [1.0, 0.0]
+    weak_match = [0.4, 0.9]
+    assert is_confident_match(prior, weak_match) is False
+
+
+def test_is_confident_match_respects_custom_threshold() -> None:
+    prior = [1.0, 0.0]
+    borderline = [0.6, 0.5]
+    assert is_confident_match(prior, borderline, threshold=0.9) is False
+    assert is_confident_match(prior, borderline, threshold=0.5) is True

@@ -111,6 +111,29 @@ def assign_and_bootstrap(
     )
 
 
+def is_confident_match(
+    prior_embedding: list[float] | None,
+    matched_embedding: list[float],
+    threshold: float = MATCH_CONFIDENCE_THRESHOLD,
+) -> bool:
+    """Vrai si `matched_embedding` est assez proche de `prior_embedding` pour être digne de
+    confiance — toujours vrai si `prior_embedding` est `None` (bootstrap, rien à comparer
+    encore, cf. `assign_and_bootstrap`).
+
+    `assign_and_bootstrap`/`assign_streams_to_identities` choisissent toujours la MEILLEURE
+    paire disponible, même si elle est mauvaise dans l'absolu — sans ce garde-fou, une
+    identité peut dériver silencieusement vers le mauvais locuteur (ADR-0044, constaté en
+    pratique le 2026-07-17 : une identité a mélangé du contenu des deux locuteurs originaux
+    d'un même run, à cause d'une correspondance à similarité 0,45, sous le seuil). L'appelant
+    doit ignorer l'incrément (ni router l'audio, ni mettre à jour l'embedding roulant) quand
+    ce garde-fou renvoie faux, plutôt que de corrompre le suivi d'identité avec une
+    correspondance incertaine.
+    """
+    if prior_embedding is None:
+        return True
+    return cosine_similarity(prior_embedding, matched_embedding) >= threshold
+
+
 def pick_active_identity(
     known_embeddings: list[list[float] | None], mixture_embedding: list[float]
 ) -> int:

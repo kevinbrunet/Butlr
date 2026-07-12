@@ -47,6 +47,7 @@ from loom_orchestrator.speaker_separation import (
 from loom_orchestrator.speaker_tracking import (
     assign_and_bootstrap,
     cosine_similarity,
+    is_confident_match,
     pick_active_identity,
     streams_are_distinct,
     update_running_embedding,
@@ -477,19 +478,24 @@ async def run_benchmark(
                 assignment_debug = []
                 for ident in range(N_IDENTITIES):
                     stream_idx = assignment[ident]
-                    # DEBUG (diagnostic ADR-0044, 2026-07-17) : similarité entre le flux choisi
-                    # et l'embedding "roulant" déjà connu de cette identité, calculée AVANT la
-                    # mise à jour — si cette valeur est basse/erratique d'un appel à l'autre,
-                    # l'assignation flotte (mélange des deux locuteurs sur une même identité au
-                    # lieu de rester stable), hypothèse à distinguer du silence-fill (retiré
-                    # ci-dessous, aucun effet mesuré sur la latence) comme cause de la
-                    # transcription "[inaudible]" massive observée sur une identité.
                     prior = known_embeddings[ident]
                     similarity = (
                         cosine_similarity(prior, stream_embeddings[stream_idx])
                         if prior is not None
                         else float("nan")
                     )
+                    # `assign_and_bootstrap` choisit toujours la MEILLEURE paire disponible,
+                    # même mauvaise dans l'absolu — sans ce garde-fou, une identité peut
+                    # dériver silencieusement vers le mauvais locuteur (constaté en pratique,
+                    # 2026-07-17 : une identité a mélangé le contenu des deux locuteurs
+                    # originaux d'un run, similarité 0,45, sous le seuil). Correspondance
+                    # incertaine → incrément ignoré (ni routage, ni mise à jour de
+                    # l'embedding roulant) plutôt que de corrompre le suivi d'identité.
+                    if not is_confident_match(prior, stream_embeddings[stream_idx]):
+                        assignment_debug.append(
+                            f"id{ident}<-stream{stream_idx}(sim={similarity:.2f}, REJETÉ)"
+                        )
+                        continue
                     assignment_debug.append(f"id{ident}<-stream{stream_idx}(sim={similarity:.2f})")
                     known_embeddings[ident] = update_running_embedding(
                         known_embeddings[ident],
