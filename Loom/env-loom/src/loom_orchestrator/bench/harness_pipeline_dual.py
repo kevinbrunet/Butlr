@@ -210,6 +210,19 @@ async def run_benchmark(
     non_distinct_count = [0]
     too_short_count = [0]
 
+    # DEBUG (2026-07-19, cf. ADR-0044 §Révisions — id3 recevait 38s de contenu sur le run
+    # pyannote/référentiel ouvert sans produire une seule ligne, malgré un suivi d'identité
+    # raisonnable) : deux diagnostics complémentaires pour trancher entre "l'audio séparé
+    # routé vers cette identité est du bruit/du résidu de séparation" (écoutable directement)
+    # et "l'audio est correct mais WLK ne produit jamais de ligne finale dessus" (compte de
+    # réponses vides). `raw_audio_chunks[ident]` : copie de chaque incrément réellement
+    # envoyé à `process_audio` pour cette identité — jamais utilisé par le pipeline lui-même,
+    # uniquement écrit en wav à la fin pour écoute manuelle. `wlk_response_counts[ident]` :
+    # `[total, vides]`, incrémenté dans `consume()` à chaque réponse de
+    # `results_generator`, `lines` vide ou non.
+    raw_audio_chunks: list[list["np.ndarray"]] = []
+    wlk_response_counts: list[list[int]] = []
+
     def _record_send(
         ident: int, n_samples: int, global_start_sample: int, is_silence: bool = False
     ) -> None:
@@ -399,6 +412,11 @@ async def run_benchmark(
                 lines = data.get("lines", [])
                 session.last_lines = lines
 
+                counts = wlk_response_counts[ident]
+                counts[0] += 1
+                if not lines:
+                    counts[1] += 1
+
                 for idx, line, _text in extract_updates(lines, session.known_texts):
                     end = line.get("end")
                     if end is None:
@@ -437,6 +455,8 @@ async def run_benchmark(
                 identity_timeline.append([])
                 content_seconds.append(0.0)
                 silence_seconds.append(0.0)
+                raw_audio_chunks.append([])
+                wlk_response_counts.append([0, 0])
                 partial_queues.append(asyncio.Queue(maxsize=1))
                 consumer_tasks.append(asyncio.create_task(consume(new_ident)))
                 print(f"DEBUG nouvelle identité enregistrée : id{new_ident}")
@@ -539,6 +559,7 @@ async def run_benchmark(
                         increment_start : increment_start + increment_len
                     ]
                     _record_send(ident, len(increment_audio), global_start_sample)
+                    raw_audio_chunks[ident].append(increment_audio.copy())
                     sends.append(
                         sessions[ident].processor.process_audio(_pcm16_bytes(increment_audio))
                     )
@@ -562,6 +583,7 @@ async def run_benchmark(
                 embedding_counts[active_ident] += 1
                 increment_audio = window[increment_start : increment_start + increment_len]
                 _record_send(active_ident, len(increment_audio), global_start_sample)
+                raw_audio_chunks[active_ident].append(increment_audio.copy())
                 # ⚠ "Rien envoyé" aux identités inactives (2026-07-17) : le silence-fill (cf.
                 # Révisions ADR-0044) n'a montré aucun effet mesuré sur la latence à son propre
                 # test, et une dégradation sévère de qualité est apparue après son ajout.
@@ -695,6 +717,20 @@ async def run_benchmark(
             for idx, line in enumerate(session.last_lines):
                 if idx not in session.sealed:
                     await force_final_commit_llm(ident, idx, line)
+
+        # DEBUG (2026-07-19, cf. ADR-0044 §Révisions) : dump de l'audio brut réellement reçu
+        # par chaque identité, pour écoute manuelle indépendante du transcript — distingue
+        # "l'audio séparé routé ici est du bruit/résidu" de "l'audio est correct mais WLK ne
+        # committe jamais de ligne dessus" (cf. compteur `wlk_response_counts` ci-dessous).
+        import numpy as np
+
+        for ident, chunks in enumerate(raw_audio_chunks):
+            if not chunks:
+                continue
+            _write_wav(audio_dir / f"id{ident}-raw-input.wav", np.concatenate(chunks), SAMPLE_RATE_HZ)
+
+        for ident, (total, empty) in enumerate(wlk_response_counts):
+            print(f"DEBUG id{ident}: réponses WLK={total} dont vides={empty}")
 
     return PipelineDualBenchmarkResult(
         log_path=log_path, transcript_path=transcript_path, audio_dir=audio_dir
