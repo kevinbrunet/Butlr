@@ -101,6 +101,14 @@ MIN_SEPARATION_AUDIO_S = 2.0
 # taille de départ, quelques secondes de retard tolérées avant de perdre de l'audio.
 ROUTE_QUEUE_MAXSIZE = 5
 
+# ⚠ Pas calibré empiriquement (2026-07-19, cf. Révisions ADR-0044) — filet de sécurité pour
+# attendre la fin naturelle de consume() à l'arrêt (WLK ferme son results_generator après le
+# flush b"" envoyé par feed()) plutôt qu'un délai fixe suivi d'une annulation inconditionnelle,
+# qui a perdu la toute fin d'une transcription sous charge (plusieurs sessions WLK actives en
+# même temps que commit_worker/LlmTranslator/PocketTtsSynthesizer). Généreux exprès : au pire
+# on attend inutilement quelques secondes de plus en fin de run.
+CONSUME_SHUTDOWN_TIMEOUT_S = 20.0
+
 
 @dataclass
 class PipelineDualBenchmarkResult:
@@ -750,7 +758,26 @@ async def run_benchmark(
         # par `_ensure_identity`, dès que `route_window` (via `route_consumer_task`, déjà
         # lancé ci-dessus) enregistre une nouvelle identité.
         await feed(route_queue)
-        await asyncio.sleep(2.0)
+
+        # Attend que chaque consume(ident) se termine de lui-même (WLK ferme son
+        # results_generator après avoir traité le flush b"" envoyé par feed() ci-dessus, cf.
+        # logs "Results formatter: ... Terminating.") plutôt qu'un délai fixe suivi d'une
+        # annulation inconditionnelle — un délai de 2s s'est révélé insuffisant sous charge
+        # (2026-07-19, cf. ADR-0044 §Révisions) : la toute dernière phrase produite par WLK
+        # pour une identité n'apparaissait jamais dans session.last_lines au moment du commit
+        # final, silencieusement perdue par l'annulation de la tâche avant qu'elle ait pu la
+        # lire. CONSUME_SHUTDOWN_TIMEOUT_S reste un filet de sécurité si une session ne se
+        # termine jamais (WLK bloqué) — au-delà, retour à l'ancien comportement (annulation).
+        if consumer_tasks:
+            _done, pending = await asyncio.wait(
+                consumer_tasks, timeout=CONSUME_SHUTDOWN_TIMEOUT_S
+            )
+            if pending:
+                print(
+                    f"WARNING: {len(pending)} session(s) consume() pas terminées après "
+                    f"{CONSUME_SHUTDOWN_TIMEOUT_S}s — annulées, fin de contenu potentiellement "
+                    "perdue."
+                )
 
         # Laisse commit_worker vider ce qui reste avant de tout couper — un backlog éventuel
         # (cf. Révisions ADR-0044) doit finir de se traiter, pas être tronqué silencieusement.
