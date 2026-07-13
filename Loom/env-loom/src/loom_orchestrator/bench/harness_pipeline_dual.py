@@ -528,9 +528,10 @@ async def run_benchmark(
             t0 = time.monotonic()
             streams = None
             native_overlap: bool | None = None
+            active_slots: list[bool] | None = None
             if not too_short_for_separation:
                 if separator_backend == "pyannote":
-                    streams, native_overlap = await asyncio.to_thread(
+                    streams, native_overlap, active_slots = await asyncio.to_thread(
                         separator.separate_and_detect_overlap, window
                     )
                 else:
@@ -556,13 +557,29 @@ async def run_benchmark(
             t0 = time.monotonic()
             if not too_short_for_separation and is_distinct:
                 distinct_count[0] += 1
-                assignment = assign_streams_open_set(known_embeddings, stream_embeddings)
+                # Filtre par activité de diarisation native (2026-07-19, cf. ADR-0044
+                # §Révisions) : PixIT sort toujours jusqu'à 3 flux, même quand moins de
+                # locuteurs réels sont présents dans la fenêtre — un flux dont le slot de
+                # diarisation ne dépasse jamais le seuil d'activité est un résidu de
+                # reconstruction, pas une voix (confirmé à l'oreille, "totalement
+                # inaudible"). Router ce genre de flux comme un nouveau locuteur pollue le
+                # référentiel ouvert pour rien — `active_slots` (None pour SepFormer, qui n'a
+                # pas de diarisation native, cf. docstring ci-dessus) filtre les flux avant
+                # assignation plutôt qu'après coup.
+                if active_slots is not None:
+                    active_indices = [i for i, active in enumerate(active_slots) if active]
+                else:
+                    active_indices = list(range(len(streams)))
+                filtered_embeddings = [stream_embeddings[i] for i in active_indices]
+
+                assignment = assign_streams_open_set(known_embeddings, filtered_embeddings)
                 if assignment:
                     _ensure_identity(max(assignment))
 
                 sends = []
                 assignment_debug = []
-                for stream_idx, ident in enumerate(assignment):
+                for local_idx, ident in enumerate(assignment):
+                    stream_idx = active_indices[local_idx]
                     prior = known_embeddings[ident]
                     similarity = (
                         cosine_similarity(prior, stream_embeddings[stream_idx])

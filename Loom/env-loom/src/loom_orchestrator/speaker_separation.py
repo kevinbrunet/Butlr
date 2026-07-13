@@ -146,18 +146,27 @@ class PyannoteVoiceSeparator:
 
     def separate_and_detect_overlap(
         self, audio: "np.ndarray"
-    ) -> tuple[list["np.ndarray"], bool]:
-        """Comme `separate`, mais retourne aussi `has_overlap` — dérivé de la diarisation
-        **native** du modèle (conjointement entraînée avec la séparation, cf. `ToTaToNet.py`
-        dans pyannote-audio), pas d'une vérification a posteriori par embedding ECAPA (cf.
-        `speaker_tracking.streams_are_distinct`, qui reste nécessaire pour SepFormer — sans
-        signal de diarisation natif — mais n'a plus de raison d'être ici, ADR-0044 Révisions
-        2026-07-18, remarque de Kevin : ECAPA doit servir uniquement au suivi d'identité dans
-        le temps, pas à juger si la séparation elle-même avait un sens).
+    ) -> tuple[list["np.ndarray"], bool, list[bool]]:
+        """Comme `separate`, mais retourne aussi `has_overlap` et `active_slots` — dérivés de
+        la diarisation **native** du modèle (conjointement entraînée avec la séparation, cf.
+        `ToTaToNet.py` dans pyannote-audio), pas d'une vérification a posteriori par embedding
+        ECAPA (cf. `speaker_tracking.streams_are_distinct`, qui reste nécessaire pour SepFormer
+        — sans signal de diarisation natif — mais n'a plus de raison d'être ici, ADR-0044
+        Révisions 2026-07-18, remarque de Kevin : ECAPA doit servir uniquement au suivi
+        d'identité dans le temps, pas à juger si la séparation elle-même avait un sens).
 
-        Un seul appel au modèle pour les deux informations (diarisation et flux séparés
+        `active_slots[i]` : le modèle sort toujours `n_speakers` flux (jusqu'à 3), même quand
+        moins de locuteurs réels sont présents dans la fenêtre — un flux dont le slot de
+        diarisation ne dépasse jamais le seuil d'activité sur la fenêtre ne correspond à aucune
+        voix détectée par le modèle lui-même, juste un résidu de reconstruction (constaté,
+        2026-07-19, cf. ADR-0044 §Révisions : un flux ainsi filtré, écouté directement via le
+        dump `idN-raw-input.wav`, s'est révélé "totalement inaudible" — confirmé par Kevin).
+        Un appelant qui route ce genre de flux comme s'il s'agissait d'un nouveau locuteur
+        pollue le référentiel de locuteurs ouvert pour rien.
+
+        Un seul appel au modèle pour toutes ces informations (diarisation et flux séparés
         partagent le même passage encodeur+masker, cf. `ToTaToNet.forward`) — pas de coût
-        supplémentaire à calculer les deux plutôt qu'un seul.
+        supplémentaire à calculer plutôt qu'un seul flux.
         """
         import numpy as np
         import torch
@@ -178,14 +187,20 @@ class PyannoteVoiceSeparator:
         n_speakers = sources.shape[-1]
         streams = [sources[0, : len(audio), i].detach().cpu().numpy() for i in range(n_speakers)]
 
-        active_counts = (diarization[0] > self.DIARIZATION_ACTIVITY_THRESHOLD).sum(dim=-1)
+        active_mask = diarization[0] > self.DIARIZATION_ACTIVITY_THRESHOLD  # (frames, locuteurs)
+        active_counts = active_mask.sum(dim=-1)
         overlap_frames = int((active_counts >= 2).sum().item())
         has_overlap = overlap_frames >= self.DIARIZATION_MIN_OVERLAP_FRAMES
+        per_slot_active_frames = active_mask.sum(dim=0)  # (locuteurs,)
+        active_slots = [
+            bool(count >= self.DIARIZATION_MIN_OVERLAP_FRAMES) for count in per_slot_active_frames
+        ]
         print(
             f"DEBUG pyannote diarization: frames_chevauchement={overlap_frames}/"
-            f"{diarization.shape[1]} has_overlap={has_overlap}"
+            f"{diarization.shape[1]} has_overlap={has_overlap} "
+            f"active_slots={active_slots} (frames actifs/slot={per_slot_active_frames.tolist()})"
         )
-        return streams, has_overlap
+        return streams, has_overlap, active_slots
 
     def separate(self, audio: "np.ndarray") -> list["np.ndarray"]:
         """Sépare `audio` (16kHz mono, doit faire au plus `PYANNOTE_CHUNK_SAMPLES` — padding
@@ -193,5 +208,5 @@ class PyannoteVoiceSeparator:
         de `audio`, le padding retiré avant de retourner). Équivalent à
         `separate_and_detect_overlap` sans la diarisation — gardé pour compatibilité
         d'interface avec `VoiceSeparator` (SepFormer, `harness_separation.py`)."""
-        streams, _has_overlap = self.separate_and_detect_overlap(audio)
+        streams, _has_overlap, _active_slots = self.separate_and_detect_overlap(audio)
         return streams
