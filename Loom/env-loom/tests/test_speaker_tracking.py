@@ -6,6 +6,7 @@ from loom_orchestrator.speaker_tracking import (
     find_best_speaker,
     pick_matching_stream,
     streams_are_distinct,
+    update_ema_embedding,
     update_running_embedding,
 )
 
@@ -67,6 +68,32 @@ def test_update_running_embedding_weights_by_count() -> None:
     new = [0.0]
     result = update_running_embedding(old, new, count=9)
     assert result == [9.0]
+
+
+def test_update_ema_embedding_no_prior_returns_new() -> None:
+    assert update_ema_embedding(None, [1.0, 2.0]) == [1.0, 2.0]
+
+
+def test_update_ema_embedding_weights_fixed_alpha() -> None:
+    old = [0.0, 10.0]
+    new = [10.0, 0.0]
+    result = update_ema_embedding(old, new, alpha=0.3)
+    assert result == [3.0, 7.0]
+
+
+def test_update_ema_embedding_recent_samples_outweigh_long_history() -> None:
+    # Contrairement à update_running_embedding (poids 1/(n+1), qui tend vers 0 avec un
+    # historique long — quelques observations récentes ne peuvent presque plus corriger une
+    # moyenne cumulative après 200 échantillons), l'EMA garde un poids fixe par observation :
+    # quelques échantillons récents suffisent à déplacer nettement la référence, même après un
+    # long historique dans l'autre direction (ADR-0044, corrige la dérive id1->id9 sans
+    # retomber dans le gel total qui causait la fragmentation id17->id8/id11/id3).
+    old = [0.0]
+    for _ in range(200):
+        old = update_ema_embedding(old, [0.0], alpha=0.3)
+    for _ in range(3):
+        old = update_ema_embedding(old, [1.0], alpha=0.3)
+    assert old[0] > 0.6
 
 
 def test_find_best_speaker_no_known_speakers_returns_none() -> None:

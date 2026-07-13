@@ -49,6 +49,7 @@ from loom_orchestrator.speaker_tracking import (
     cosine_similarity,
     find_best_speaker,
     streams_are_distinct,
+    update_ema_embedding,
     update_running_embedding,
 )
 from loom_orchestrator.translation_llm import LlmTranslator
@@ -495,19 +496,23 @@ async def run_benchmark(
             entier. ECAPA (`embedder.embed`) sert uniquement à ce suivi d'identité dans le
             temps, jamais à juger si la séparation elle-même avait un sens.
 
-            Référence bâtie uniquement sur les passages sans chevauchement (2026-07-19,
-            remarque de Kevin) : la voix issue d'un flux séparé/masqué est altérée par rapport
-            à l'originale — la comparer à la référence connue reste le seul signal disponible
-            pour l'assignation pendant un chevauchement, mais la réutiliser pour **rafraîchir**
-            cette référence la dilue progressivement avec des échantillons dégradés (cause
-            identifiée de la dérive id1→id9, cf. Révisions ADR-0044 2026-07-18). Une identité
-            déjà connue (`known_embeddings[ident] is not None`) n'est donc plus mise à jour
-            depuis un flux masqué — seule la branche "un seul locuteur actif" ci-dessous (audio
-            brut de la fenêtre, jamais masqué puisqu'aucune séparation n'a eu lieu) l'affine.
-            Une identité tout juste créée pendant un chevauchement (jamais vue en dehors)
-            garde son tout premier embedding masqué comme référence tant qu'un passage sans
-            chevauchement ne l'a pas encore recalée —⚠ dégradé mais strictement pas pire que
-            l'ancien comportement (qui continuait de diluer indéfiniment).
+            Référence mise à jour par EMA à poids fixe pendant un chevauchement (2026-07-19,
+            remarque de Kevin) : la voix issue d'un flux séparé/masqué est altérée par rapport à
+            l'originale — la comparer à la référence connue reste le seul signal disponible
+            pour l'assignation, et deux stratégies extrêmes de mise à jour ont chacune échoué
+            différemment (cf. Révisions ADR-0044) : la réutiliser telle quelle dans une moyenne
+            cumulative (`update_running_embedding`) dilue la référence avec des échantillons
+            dégradés jusqu'à ne plus matcher le vrai locuteur (dérive id1→id9, 2026-07-18) ;
+            geler la référence après le premier échantillon masqué (essayé juste après)
+            supprime cette dérive mais élimine toute tolérance à la variance normale d'un flux
+            masqué d'une fenêtre à l'autre — un même locuteur redevient un nouveau locuteur dès
+            qu'un échantillon dévie un peu (fragmentation id17→id8/id11/id3, 2026-07-19). EMA à
+            poids fixe (`update_ema_embedding`) : chaque nouvelle observation masquée garde un
+            poids constant (tolère la variance), sans jamais permettre à un unique échantillon
+            de dominer la référence comme le ferait un gel. La branche "un seul locuteur actif"
+            ci-dessous (audio brut, jamais masqué) continue d'utiliser la moyenne cumulative
+            (`update_running_embedding`) — pas de raison suspectée de biais systématique sur de
+            l'audio jamais masqué.
 
             Sous `MIN_SEPARATION_AUDIO_S` de contexte accumulé (tout début de flux, avant que
             `window` atteigne une taille utile), `separator.separate` n'est même pas appelé —
@@ -587,19 +592,19 @@ async def run_benchmark(
                         else float("nan")
                     )
                     assignment_debug.append(f"id{ident}<-stream{stream_idx}(sim={similarity:.2f})")
-                    # Référence mise à jour seulement au tout premier passage (bootstrap
-                    # d'une identité jamais vue ailleurs) — sinon la voix vient d'un flux
-                    # séparé/masqué, altéré par rapport à l'original (remarque de Kevin,
-                    # 2026-07-19) : la rafraîchir à chaque chevauchement dilue la référence
-                    # avec des échantillons dégradés, cf. ADR-0044 §Révisions (dérive
-                    # id1→id9 sur le run du 2026-07-18). Seule la branche "un seul locuteur
-                    # actif" ci-dessous (audio brut, jamais masqué) affine la référence après
-                    # ce premier enregistrement.
-                    if known_embeddings[ident] is None:
-                        known_embeddings[ident] = update_running_embedding(
-                            None, stream_embeddings[stream_idx], 0
-                        )
-                        embedding_counts[ident] += 1
+                    # EMA à poids fixe, pas la moyenne cumulative `update_running_embedding`
+                    # (remarque de Kevin, 2026-07-19 — voix issue d'un flux séparé/masqué,
+                    # altérée par rapport à l'originale) : geler la référence après le premier
+                    # échantillon masqué (essayé sur le run précédent, cf. ADR-0044
+                    # §Révisions) supprimait la dérive id1→id9 mais causait une nouvelle
+                    # fragmentation (id17→id8/id11/id3, un même locuteur redevenant nouveau
+                    # dès qu'un échantillon dévie un peu de la référence figée) — l'EMA tolère
+                    # cette variance sans jamais se laisser diluer indéfiniment comme la
+                    # moyenne cumulative (cf. `update_ema_embedding`).
+                    known_embeddings[ident] = update_ema_embedding(
+                        known_embeddings[ident], stream_embeddings[stream_idx]
+                    )
+                    embedding_counts[ident] += 1
                     increment_audio = streams[stream_idx][
                         increment_start : increment_start + increment_len
                     ]
