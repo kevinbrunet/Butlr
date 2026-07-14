@@ -346,10 +346,22 @@ async def run_benchmark(
                     state.flushed_source = new_flushed
                     if segment:
                         end_s = _to_global_seconds(ident, hms_to_seconds(end))
+                        # Même diagnostic que try_llm_commit (2026-07-19, cf. ADR-0044
+                        # §Révisions) — angle mort identifié : le premier passage de ce print
+                        # ne couvrait que les commits partiels, pas le commit final, alors que
+                        # l'arrêt du run (plusieurs sessions WLK qui se terminent + commit_
+                        # worker qui vide encore ses files + asyncio.wait jusqu'à 20s) est
+                        # justement le moment de plus forte contention.
+                        t_call_start = time.monotonic() - replay_start_monotonic
                         translated = await asyncio.to_thread(
                             llm_translator.translate, segment, source_lang, target_lang
                         )
                         t_translate_end = time.monotonic() - replay_start_monotonic
+                        print(
+                            f"DEBUG traduction id{ident} (final): "
+                            f"appel_llm={(t_translate_end - t_call_start) * 1000:.0f}ms "
+                            f"avant_appel(file+wlk)={(t_call_start - end_s) * 1000:.0f}ms"
+                        )
                         # Même format que emit_increment (chunk{state.chunk_count}, pas
                         # "-final") — sinon ce commit final ne se chaîne jamais avec son propre
                         # événement TTS dans aggregate_end_to_end (2026-07-19, cf. ADR-0044
