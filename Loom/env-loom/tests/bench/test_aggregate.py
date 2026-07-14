@@ -7,7 +7,12 @@ from loom_orchestrator.bench.aggregate import (
     aggregate_end_to_end,
     load_events,
 )
-from loom_orchestrator.bench.instrumentation import STAGE_TTS, STAGE_WLK, LatencyEvent
+from loom_orchestrator.bench.instrumentation import (
+    STAGE_TRANSLATE_LLM,
+    STAGE_TTS,
+    STAGE_WLK,
+    LatencyEvent,
+)
 
 
 def _as_dict(event: LatencyEvent) -> dict:
@@ -49,7 +54,7 @@ def test_aggregate_by_stage_computes_p50_p95_per_stage() -> None:
 
 def test_aggregate_end_to_end_spans_first_t_in_to_last_t_out() -> None:
     events = [
-        _as_dict(LatencyEvent.create("seg-1", STAGE_WLK, 0.0, 0.8)),
+        _as_dict(LatencyEvent.create("seg-1", STAGE_TRANSLATE_LLM, 0.0, 0.8)),
         _as_dict(LatencyEvent.create("seg-1", STAGE_TTS, 0.8, 1.0)),
     ]
 
@@ -60,5 +65,28 @@ def test_aggregate_end_to_end_spans_first_t_in_to_last_t_out() -> None:
     assert report.p50_ms == 1000.0  # 0.0 -> 1.0s de bout en bout
 
 
+def test_aggregate_end_to_end_excludes_wlk_pseudo_segments() -> None:
+    # WLK a son propre format de segment_id (change à chaque poll), jamais partagé avec
+    # traduction/TTS en usage réel — un WLK isolé sous un segment_id partagé ne doit plus
+    # jamais entrer dans le calcul bout-en-bout (2026-07-19, cf. ADR-0044 §Révisions, bug
+    # trouvé par Kevin : traduction-llm p95=16s incohérent avec bout-en-bout p95=2,5s).
+    events = [
+        _as_dict(LatencyEvent.create("seg-wlk-only", STAGE_WLK, 0.0, 0.5)),
+        _as_dict(LatencyEvent.create("seg-2", STAGE_TRANSLATE_LLM, 10.0, 16.0)),
+        _as_dict(LatencyEvent.create("seg-2", STAGE_TTS, 16.0, 16.4)),
+    ]
+
+    report = aggregate_end_to_end(events)
+
+    assert report is not None
+    assert report.count == 1  # le pseudo-segment WLK isolé ne compte pas
+    assert abs(report.p50_ms - 6400.0) < 1e-6  # 10.0 -> 16.4s, pas dilué par le WLK rapide
+
+
 def test_aggregate_end_to_end_returns_none_when_no_events() -> None:
     assert aggregate_end_to_end([]) is None
+
+
+def test_aggregate_end_to_end_returns_none_when_only_wlk_events() -> None:
+    events = [_as_dict(LatencyEvent.create("seg-1", STAGE_WLK, 0.0, 0.5))]
+    assert aggregate_end_to_end(events) is None

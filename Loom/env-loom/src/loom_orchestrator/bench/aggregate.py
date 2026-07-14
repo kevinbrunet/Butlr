@@ -7,7 +7,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-from loom_orchestrator.bench.instrumentation import BUDGET_MS
+from loom_orchestrator.bench.instrumentation import BUDGET_MS, STAGE_WLK
 
 
 @dataclass(frozen=True)
@@ -72,9 +72,23 @@ def aggregate_end_to_end(events: list[dict]) -> StageReport | None:
     Le budget bout-en-bout est la somme des budgets des étages réellement présents dans le
     log — tant que seul WLK tourne (Phase 0/1), c'est juste le budget WLK, pas les 1600ms
     du budget complet à 4 étages.
+
+    ⚠ STAGE_WLK exclu du regroupement (2026-07-19, cf. ADR-0044 §Révisions — bug de mesure
+    trouvé par Kevin en comparant `traduction-llm` p95=16s à `bout-en-bout` p95=2,5s sur le
+    même run, incohérence impossible si les deux mesuraient vraiment le même chemin). Cause :
+    `segment_id` de WLK (`...-wlk-line{idx}-{len(texte)}`, change à chaque poll) ne partage
+    jamais son format avec traduction/TTS (`...-line{idx}-chunk{N}`) — chaque poll WLK
+    formait donc son propre "segment" à une seule mesure, jamais chaîné à rien d'autre. Ces
+    pseudo-segments (nombreux, rapides — juste la durée d'un poll WLK) noyaient les vrais
+    segments traduction+TTS chaînés (peu nombreux, lents) dans le même calcul de percentile,
+    rendant `bout-en-bout` artificiellement optimiste. WLK reste mesuré seul (`aggregate_by_
+    stage`, ligne `wlk` du rapport) — ce n'était de toute façon pas un vrai relais de chaîne
+    bout-en-bout, juste une sonde de fraîcheur de la transcription.
     """
     by_segment: dict[str, list[dict]] = defaultdict(list)
     for event in events:
+        if event["stage"] == STAGE_WLK:
+            continue
         by_segment[event["segment_id"]].append(event)
 
     durations_ms = []
@@ -86,7 +100,9 @@ def aggregate_end_to_end(events: list[dict]) -> StageReport | None:
     if not durations_ms:
         return None
 
-    stages_present = {e["stage"] for e in events}
+    # Budget cohérent avec les étages réellement chaînés ci-dessus (WLK exclu, cf. docstring)
+    # — sinon le budget compterait le temps WLK sans que la durée mesurée l'inclue jamais.
+    stages_present = {e["stage"] for e in events if e["stage"] != STAGE_WLK}
     total_budget_ms = sum(BUDGET_MS[s] for s in stages_present)
 
     p50, p95 = _percentiles_ms(durations_ms)

@@ -338,7 +338,12 @@ async def run_benchmark(
                             llm_translator.translate, segment, source_lang, target_lang
                         )
                         t_translate_end = time.monotonic() - replay_start_monotonic
-                        segment_id = f"{corpus_key}-id{ident}-line{idx}-final"
+                        # Même format que emit_increment (chunk{state.chunk_count}, pas
+                        # "-final") — sinon ce commit final ne se chaîne jamais avec son propre
+                        # événement TTS dans aggregate_end_to_end (2026-07-19, cf. ADR-0044
+                        # §Révisions, bug trouvé par Kevin en comparant traduction-llm p95=16s
+                        # à bout-en-bout p95=2,5s sur le même run).
+                        segment_id = f"{corpus_key}-id{ident}-line{idx}-chunk{state.chunk_count}"
                         logger.log(
                             LatencyEvent.create(
                                 segment_id, STAGE_TRANSLATE_LLM, end_s, t_translate_end

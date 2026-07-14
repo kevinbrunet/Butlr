@@ -424,7 +424,10 @@ async def run_benchmark(
             )
             t_translate_end = time.monotonic() - replay_start_monotonic
             state = commit_state.setdefault(idx, LineCommitState())
-            segment_id = f"{corpus_key}-line{idx}-final"
+            # Même format que emit_increment (chunk{state.chunk_count}, pas "-final") — sinon
+            # ce commit final ne se chaîne jamais avec son propre événement TTS dans
+            # aggregate_end_to_end (2026-07-19, cf. ADR-0044 §Révisions, bug trouvé par Kevin).
+            segment_id = f"{corpus_key}-line{idx}-chunk{state.chunk_count}"
             logger.log(LatencyEvent.create(segment_id, STAGE_SEAMLESS, end_s, t_translate_end))
 
             increment, is_consistent = compute_increment(state.committed_fr, final_fr)
@@ -499,7 +502,9 @@ async def run_benchmark(
                             llm_translator.translate, segment, source_lang, target_lang
                         )
                         t_translate_end = time.monotonic() - replay_start_monotonic
-                        segment_id = f"{corpus_key}-line{idx}-final"
+                        # Même format que emit_increment (chunk{state.chunk_count}, pas
+                        # "-final") — cf. force_final_commit ci-dessus, même correctif.
+                        segment_id = f"{corpus_key}-line{idx}-chunk{state.chunk_count}"
                         logger.log(
                             LatencyEvent.create(
                                 segment_id, STAGE_TRANSLATE_LLM, end_s, t_translate_end
