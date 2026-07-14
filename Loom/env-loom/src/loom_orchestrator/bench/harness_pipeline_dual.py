@@ -308,10 +308,22 @@ async def run_benchmark(
                 return
 
             end_s = _to_global_seconds(ident, hms_to_seconds(end))
+            # DEBUG (2026-07-19, cf. ADR-0044 §Révisions — bout-en-bout corrigé révèle
+            # traduction-llm p95=8,8s, très loin des 572ms mesurés en isolation par
+            # harness_llm_translate.py, ADR-0043) : sépare le temps d'appel LLM réel du reste
+            # (attente dans partial_queues derrière d'autres identités, commit_worker étant un
+            # unique consommateur séquentiel — cf. docstring de commit_worker, plus bas — +
+            # délai propre de WLK avant que ce segment soit disponible) pour trancher entre
+            # "coût GPU réel sous contention" et "effet de file d'attente".
+            t_call_start = time.monotonic() - replay_start_monotonic
             translated = await asyncio.to_thread(
                 llm_translator.translate, segment, source_lang, target_lang
             )
             t_translate_end = time.monotonic() - replay_start_monotonic
+            print(
+                f"DEBUG traduction id{ident}: appel_llm={( t_translate_end - t_call_start) * 1000:.0f}ms "
+                f"avant_appel(file+wlk)={(t_call_start - end_s) * 1000:.0f}ms"
+            )
             segment_id = f"{corpus_key}-id{ident}-line{idx}-chunk{state.chunk_count}"
             logger.log(LatencyEvent.create(segment_id, STAGE_TRANSLATE_LLM, end_s, t_translate_end))
 
