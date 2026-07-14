@@ -20,12 +20,7 @@ from loom_orchestrator.bench.aggregate import (
     format_report,
     load_events,
 )
-from loom_orchestrator.bench.harness_pipeline import (
-    LineCommitState,
-    _consume_continuation,
-    _release_gpu_state,
-    _write_wav,
-)
+from loom_orchestrator.bench.harness_pipeline import _write_wav
 from loom_orchestrator.bench.instrumentation import (
     STAGE_TRANSLATE_LLM,
     STAGE_TTS,
@@ -37,6 +32,11 @@ from loom_orchestrator.bench.line_tracking import extract_updates
 from loom_orchestrator.bench.replay import replay_realtime
 from loom_orchestrator.bench.timestamps import hms_to_seconds
 from loom_orchestrator.commit_policy import compute_flush, force_flush
+from loom_orchestrator.commit_state import (
+    LineCommitState,
+    _consume_continuation,
+    _release_gpu_state,
+)
 from loom_orchestrator.speaker_separation import (
     PYANNOTE_CHUNK_SAMPLES,
     SAMPLE_RATE_HZ,

@@ -44,6 +44,12 @@ dependencies = [
     "huggingface-hub>=0.24",
     "pyannote.audio[separation]",
     "setuptools<81",
+    # ⚠ sounddevice (bindings PortAudio) : entrée micro + sortie mixée de l'orchestrateur live
+    # (T2.3, ADR-0045) — jamais installée/testée sur la machine cible. Choix repris du
+    # précédent déjà en place dans carson/ (même dépôt, carson/pyproject.toml) plutôt
+    # qu'évalué indépendamment : API numpy-friendly (tableaux directs, pas de struct.pack
+    # manuel comme PyAudio), callbacks entrée/sortie natifs.
+    "sounddevice>=0.4",
 ]
 
 [project.optional-dependencies]

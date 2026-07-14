@@ -37,6 +37,12 @@ from loom_orchestrator.bench.line_tracking import extract_updates
 from loom_orchestrator.bench.replay import replay_realtime
 from loom_orchestrator.bench.timestamps import hms_to_seconds
 from loom_orchestrator.commit_policy import compute_flush, force_flush
+from loom_orchestrator.commit_state import (
+    MIN_NEW_AUDIO_S,
+    LineCommitState,
+    _consume_continuation,
+    _release_gpu_state,
+)
 from loom_orchestrator.speaker_separation import SAMPLE_RATE_HZ, SpeakerEmbedder, VoiceSeparator
 from loom_orchestrator.speaker_tracking import (
     MATCH_CONFIDENCE_THRESHOLD,
@@ -47,12 +53,6 @@ from loom_orchestrator.speaker_tracking import (
 from loom_orchestrator.translation_llm import LlmTranslator
 from loom_orchestrator.translation_seamless import AlignAttSeamlessTranslator, SeamlessTranslator
 from loom_orchestrator.tts_pocket import PocketTtsSynthesizer
-
-# ⚠ Pas encore benchmarké (ADR-0041) : évite de ré-encoder l'intégralité de l'audio d'une
-# ligne à chaque mise à jour WLK (plusieurs fois par seconde, cf. logs des runs précédents) —
-# n'appelle AlignAtt à nouveau pour une ligne que si son audio a grandi d'au moins cette durée
-# depuis le dernier appel pour cette même ligne.
-MIN_NEW_AUDIO_S = 1.0
 
 # ⚠ Pas calibrées empiriquement (ADR-0042). SEPARATION_WINDOW_S ~ zone de confort mesurée de
 # SepFormer-WHAMR (moyenne d'entraînement WHAMR ~5,6s, saturation des performances ~5,8s) —
@@ -70,21 +70,6 @@ class PipelineBenchmarkResult:
     transcript_path: Path
     audio_dir: Path
     final_fr_by_line: dict = field(default_factory=dict)
-
-
-@dataclass
-class LineCommitState:
-    """État de commit AlignAtt + continuation TTS + suivi d'identité par embedding pour une
-    ligne WLK — cf. ADR-0041 (commit) et ADR-0042 (embedding)."""
-
-    committed_fr: str = ""
-    last_alignatt_end_s: float = -MIN_NEW_AUDIO_S
-    chunk_count: int = 0
-    voice_state: object | None = None
-    audio_chunks: list = field(default_factory=list)
-    embedding: list | None = None
-    embedding_count: int = 0
-    flushed_source: str = ""
 
 
 def _write_wav(path: Path, audio: "np.ndarray", sample_rate_hz: int) -> None:
@@ -129,46 +114,6 @@ def _separate_and_track(
     if similarity < MATCH_CONFIDENCE_THRESHOLD:
         return None, reference
     return streams[matched_idx], stream_embeddings[matched_idx]
-
-
-def _release_gpu_state(state: LineCommitState) -> None:
-    """Libère l'état de continuation TTS (`voice_state`, cf. `tts_pocket.
-    synthesize_continuation`) une fois une ligne définitivement scellée — plus jamais
-    réutilisé après ce point, donc pas de raison de le garder en mémoire.
-
-    ⚠ Constaté par exécution réelle (2026-07-15, cf. Révisions ADR-0042) : fuite mémoire GPU
-    observée sur un run réel — 13,9 Go → 29,85 Go de VRAM utilisée en 30s (`nvidia-smi`),
-    utilisation GPU restée basse (17-21%) pendant ce temps, signe d'une accumulation plutôt
-    que d'un calcul intense. `state.voice_state` restait vivant pour toute la durée du run
-    (jamais nettoyé après scellement d'une ligne) — suspect le plus probable, faute d'accès
-    au contenu interne de cet objet (opaque, cf. `tts_pocket.PocketTtsSynthesizer`).
-    """
-    state.voice_state = None
-    state.audio_chunks = []
-
-    import torch
-
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-
-def _consume_continuation(
-    synth: PocketTtsSynthesizer, state: object, text: str
-) -> tuple[list, float]:
-    """Épuise `synthesize_continuation` en thread (bloquant/CPU, cf. règle transverse) et
-    mesure le délai jusqu'au premier chunk (TTFC, la métrique de budget de ADR-0036) — pas
-    le temps total de synthèse de l'increment.
-    """
-    t0 = time.monotonic()
-    chunks = []
-    ttfc_s: float | None = None
-    for chunk in synth.synthesize_continuation(state, text):
-        if ttfc_s is None:
-            ttfc_s = time.monotonic() - t0
-        chunks.append(chunk)
-    if ttfc_s is None:
-        ttfc_s = time.monotonic() - t0
-    return chunks, ttfc_s
 
 
 async def run_benchmark(
