@@ -256,7 +256,12 @@ async def run_benchmark(
         replay_start_monotonic = time.monotonic()
 
         async def emit_increment(
-            ident: int, idx: int, speaker: str, increment: str, event_stage_t_in: float
+            ident: int,
+            idx: int,
+            speaker: str,
+            increment: str,
+            event_stage_t_in: float,
+            is_final: bool = False,
         ) -> None:
             if not increment:
                 return
@@ -278,7 +283,11 @@ async def run_benchmark(
             )
             t_first_chunk = event_stage_t_in + ttfc_s
             segment_id = f"{corpus_key}-id{ident}-line{idx}-chunk{state.chunk_count}"
-            logger.log(LatencyEvent.create(segment_id, STAGE_TTS, event_stage_t_in, t_first_chunk))
+            logger.log(
+                LatencyEvent.create(
+                    segment_id, STAGE_TTS, event_stage_t_in, t_first_chunk, is_final=is_final
+                )
+            )
 
             state.audio_chunks.extend(new_chunks)
             import numpy as np
@@ -370,12 +379,18 @@ async def run_benchmark(
                         segment_id = f"{corpus_key}-id{ident}-line{idx}-chunk{state.chunk_count}"
                         logger.log(
                             LatencyEvent.create(
-                                segment_id, STAGE_TRANSLATE_LLM, end_s, t_translate_end
+                                segment_id,
+                                STAGE_TRANSLATE_LLM,
+                                end_s,
+                                t_translate_end,
+                                is_final=True,
                             )
                         )
                         state.committed_fr = f"{state.committed_fr} {translated}".strip()
                         speaker = line.get("speaker", "?")
-                        await emit_increment(ident, idx, speaker, translated, t_translate_end)
+                        await emit_increment(
+                            ident, idx, speaker, translated, t_translate_end, is_final=True
+                        )
             _release_gpu_state(state)
 
         # Une seule tâche de fond (commit_worker, plus bas) traite try_llm_commit/
@@ -874,13 +889,33 @@ def main() -> None:
         )
     )
 
+    # Rapports séparés "en direct" / "flush final" (2026-07-19, cf. ADR-0044 §Révisions) : un
+    # flush final de fin de fichier (`force_final_commit_llm`) n'a pas d'équivalent en usage
+    # réel (le flux ne s'arrête jamais) et sa latence dépend de l'ordre de traitement
+    # séquentiel de la boucle d'arrêt, pas d'une contention vécue en direct — les mélanger
+    # dans le même percentile a déjà produit un p95 bout-en-bout trompeur (64s sur une
+    # identité-bruit traitée en fin de boucle). `.get(..., False)` : rétrocompatible avec
+    # d'anciens logs sans le champ `is_final`.
     events = load_events(result.log_path)
-    reports = aggregate_by_stage(events)
-    end_to_end = aggregate_end_to_end(events)
+    live_events = [e for e in events if not e.get("is_final", False)]
+    final_events = [e for e in events if e.get("is_final", False)]
+
+    reports = aggregate_by_stage(live_events)
+    end_to_end = aggregate_end_to_end(live_events)
     if end_to_end is not None:
         reports.append(end_to_end)
 
+    print("=== En direct (ce qu'un auditeur entendrait pendant le run) ===")
     print(format_report(reports))
+
+    if final_events:
+        final_reports = aggregate_by_stage(final_events)
+        final_end_to_end = aggregate_end_to_end(final_events)
+        if final_end_to_end is not None:
+            final_reports.append(final_end_to_end)
+        print("\n=== Flush final de fin de run (pas d'équivalent en usage réel, cf. ADR-0044) ===")
+        print(format_report(final_reports))
+
     print(f"\nLog : {result.log_path}")
     print(f"Transcript : {result.transcript_path}")
     print(f"Audio FR par identité/ligne : {result.audio_dir}")

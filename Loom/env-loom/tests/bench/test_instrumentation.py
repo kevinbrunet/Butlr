@@ -34,6 +34,16 @@ def test_create_rejects_t_out_before_t_in() -> None:
         LatencyEvent.create("seg-1", STAGE_WLK, t_in=1.0, t_out=0.5)
 
 
+def test_create_defaults_is_final_to_false() -> None:
+    event = LatencyEvent.create("seg-1", STAGE_TTS, t_in=0.0, t_out=0.1)
+    assert event.is_final is False
+
+
+def test_create_accepts_is_final_true() -> None:
+    event = LatencyEvent.create("seg-1", STAGE_TTS, t_in=0.0, t_out=0.1, is_final=True)
+    assert event.is_final is True
+
+
 def test_event_logger_writes_one_json_line_per_event(tmp_path) -> None:
     log_path = tmp_path / "run" / "events.jsonl"
     events = [

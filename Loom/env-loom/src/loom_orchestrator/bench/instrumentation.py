@@ -40,9 +40,24 @@ class LatencyEvent:
     t_out: float
     budget_ms: int
     exceeded: bool
+    # ⚠ Ajouté 2026-07-19 (ADR-0044 §Révisions) : distingue un commit "en direct" (ce qu'un
+    # auditeur réel entendrait pendant le run) d'un flush final de fin de fichier — ce dernier
+    # n'a pas d'équivalent dans un usage réel (le flux ne s'arrête jamais) et sa latence
+    # mesurée dépend de l'ordre de traitement séquentiel de la boucle d'arrêt (`for ident,
+    # session in enumerate(sessions)`, `harness_pipeline_dual.py`/`harness_pipeline.py`), pas
+    # d'une vraie contention vécue en direct — les mélanger dans le même percentile a produit
+    # un p95 bout-en-bout trompeur (64s sur une identité-bruit traitée en fin de boucle).
+    is_final: bool = False
 
     @classmethod
-    def create(cls, segment_id: str, stage: str, t_in: float, t_out: float) -> LatencyEvent:
+    def create(
+        cls,
+        segment_id: str,
+        stage: str,
+        t_in: float,
+        t_out: float,
+        is_final: bool = False,
+    ) -> LatencyEvent:
         if stage not in BUDGET_MS:
             raise ValueError(f"étage inconnu : {stage!r} — attendu un de {sorted(BUDGET_MS)}")
         if t_out < t_in:
@@ -57,6 +72,7 @@ class LatencyEvent:
             t_out=t_out,
             budget_ms=budget_ms,
             exceeded=duration_ms > budget_ms,
+            is_final=is_final,
         )
 
 
