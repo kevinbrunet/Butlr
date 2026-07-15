@@ -4,8 +4,11 @@ import wave
 from dataclasses import dataclass
 from pathlib import Path
 
-# Les scripts de bench sont prévus pour être lancés depuis la racine Loom/ — cf. Loom/CLAUDE.md.
-CORPUS_DIR = Path("corpus")
+# Résolu relativement à ce fichier (pas au CWD) : `env-loom/src/loom_orchestrator/bench/` ->
+# `Loom/corpus/` — un chemin nu (`Path("corpus")`) supposait un lancement depuis la racine
+# Loom/, systématiquement oublié en pratique (les commandes sont lancées depuis `env-loom/`,
+# où `uv run` doit s'exécuter) et source récurrente de `FileNotFoundError`.
+CORPUS_DIR = Path(__file__).resolve().parents[4] / "corpus"
 
 EXPECTED_SAMPLE_RATE_HZ = 16_000
 # ✓ whisperlivekit/audio_processor.py hardcode bytes_per_sample=2 (PCM 16 bits) pour le mode
