@@ -533,12 +533,18 @@ async def run_benchmark(
         await asyncio.sleep(2.0)
         consumer_task.cancel()
 
+        # `sealed_committed` ne doit jamais conditionner ce dernier appel : `lines` n'est
+        # pas append-only (cf. Loom/CLAUDE.md, ADR-0039) — un idx peut être scellé par
+        # erreur si WLK a transitoirement eu plus de lignes avant de fusionner/rewinder, ce
+        # qui bloquait alors ce idx pour toujours (bug trouvé par Kevin sur `main.py`, même
+        # code ici — tail final jamais commis malgré du contenu réel restant).
+        # `force_final_commit`/`force_final_commit_llm` sont idempotents (segment/increment
+        # vide si rien de neuf) — les appeler sans condition est donc toujours sûr.
         for idx, line in enumerate(last_lines):
-            if idx not in sealed_committed:
-                if translator == "llm":
-                    await force_final_commit_llm(idx, line)
-                else:
-                    await force_final_commit(idx, line)
+            if translator == "llm":
+                await force_final_commit_llm(idx, line)
+            else:
+                await force_final_commit(idx, line)
 
     return PipelineBenchmarkResult(
         log_path=log_path,

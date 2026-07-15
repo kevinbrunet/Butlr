@@ -852,8 +852,15 @@ async def run_benchmark(
 
         for ident, session in enumerate(sessions):
             for idx, line in enumerate(session.last_lines):
-                if idx not in session.sealed:
-                    await force_final_commit_llm(ident, idx, line)
+                # `sealed` ne doit jamais conditionner ce dernier appel : `lines` n'est pas
+                # append-only (cf. Loom/CLAUDE.md, ADR-0039) — un idx peut être scellé par
+                # erreur si WLK a transitoirement eu plus de lignes avant de fusionner/
+                # rewinder, ce qui bloquait alors ce idx pour toujours (bug trouvé par
+                # Kevin sur `main.py`, même code ici — tail final jamais commis malgré du
+                # contenu réel restant). `force_final_commit_llm` est idempotent via
+                # `force_flush` (segment vide si rien de neuf) — l'appeler sans condition
+                # est donc toujours sûr.
+                await force_final_commit_llm(ident, idx, line)
 
         # DEBUG (2026-07-19, cf. ADR-0044 §Révisions) : dump de l'audio brut réellement reçu
         # par chaque identité, pour écoute manuelle indépendante du transcript — distingue

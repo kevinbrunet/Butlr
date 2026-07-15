@@ -213,14 +213,6 @@ async def run_live(
             new_chunks, ttfc_s = await asyncio.to_thread(
                 _consume_continuation, synth, state.voice_state, increment
             )
-            # DEBUG temporaire (2026-07-19) — investigation "répétition audio" signalée par
-            # Kevin : `harness_tts.py` avait déjà noté un warning "Maximum generation length
-            # reached without EOS" et un nombre de chunks très variable sur la même phrase
-            # (cf. Loom/CLAUDE.md, jamais investigué faute de reproduction en usage réel).
-            print(
-                f"DEBUG tts id{ident}/line{idx}/chunk{state.chunk_count}: "
-                f"n_chunks={len(new_chunks)} ttfc={ttfc_s * 1000:.0f}ms texte={increment!r}"
-            )
             t_first_chunk = event_stage_t_in + ttfc_s
             segment_id = f"{session_id}-id{ident}-line{idx}-chunk{state.chunk_count}"
             logger.log(
@@ -387,15 +379,6 @@ async def run_live(
 
                 active_idx = len(lines) - 1
                 _queue_latest(partial_queues[ident], (active_idx, lines[active_idx]))
-
-            # DEBUG temporaire (2026-07-19) — investigation perte de fin de transcript à
-            # l'arrêt : confirme si `results_generator` s'épuise avec le texte final déjà
-            # présent dans `session.last_lines`, ou si consume() est coupé avant de le voir.
-            tails = [
-                (i, l.get("end"), (l.get("text") or "")[-60:])
-                for i, l in enumerate(session.last_lines)
-            ]
-            print(f"DEBUG consume(id{ident}) épuisé — last_lines={tails!r}")
 
         def _ensure_identity(ident: int) -> None:
             """Crée à la volée toute nouvelle identité jusqu'à `ident` inclus — référentiel
@@ -643,15 +626,15 @@ async def run_live(
 
         for ident, identity_session in enumerate(sessions):
             for idx, line in enumerate(identity_session.last_lines):
-                # DEBUG temporaire (2026-07-19) — même investigation que dans consume() :
-                # confirme si le texte vu ici correspond bien au dernier `wlk-text` observé.
-                print(
-                    f"DEBUG shutdown final id{ident}/line{idx}: sealed="
-                    f"{idx in identity_session.sealed} end={line.get('end')!r} "
-                    f"text_tail={(line.get('text') or '')[-80:]!r}"
-                )
-                if idx not in identity_session.sealed:
-                    await force_final_commit_llm(ident, idx, line)
+                # `sealed` ne doit jamais conditionner ce dernier appel : `lines` n'est pas
+                # append-only (cf. Loom/CLAUDE.md, ADR-0039) — un idx peut être scellé par
+                # erreur si WLK a transitoirement eu plus de lignes avant de fusionner/
+                # rewinder (`[SimulStreaming guard] ... resetting current segment`), ce qui
+                # bloquait alors ce idx pour toujours (bug trouvé par Kevin, tail final
+                # d'id3 jamais commis malgré du contenu réel restant). `force_final_commit_llm`
+                # est idempotent via `force_flush` (segment vide si rien de neuf) — l'appeler
+                # sans condition est donc toujours sûr.
+                await force_final_commit_llm(ident, idx, line)
 
     sink.close()
     if log_path is not None:
@@ -666,7 +649,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Orchestrateur live Loom (T2.3, ADR-0045) : capture audio (micro ou "
         "rejeu de corpus), séparation multi-locuteurs, traduction, TTS, mixage de sortie "
-        "synchronisé au fil de l'eau. Premier jet, pas encore testé sur la machine cible."
+        "synchronisé au fil de l'eau."
     )
     parser.add_argument(
         "--source",
