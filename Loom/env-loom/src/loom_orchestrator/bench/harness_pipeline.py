@@ -443,7 +443,13 @@ async def run_benchmark(
             l'audio de cette ligne ne grandira plus) puis traduit."""
             text, end = line.get("text"), line.get("end")
             state = commit_state.setdefault(idx, LineCommitState())
-            if text and end is not None:
+            # `end` sert seulement à ancrer le log de latence — ne jamais en faire une
+            # condition pour flush le texte lui-même : c'est le dernier appel jamais fait
+            # pour cet idx, un `end` manquant (WLK n'a pas calculé de timestamp final sur
+            # une coupure en plein milieu de phrase) ne doit pas faire disparaître du
+            # contenu déjà transcrit sans aucun WARNING (bug trouvé par Kevin, cf. ADR-0044
+            # §Révisions).
+            if text:
                 segment, new_flushed, is_consistent = force_flush(text, state.flushed_source)
                 if not is_consistent:
                     print(
@@ -454,7 +460,6 @@ async def run_benchmark(
                 else:
                     state.flushed_source = new_flushed
                     if segment:
-                        end_s = hms_to_seconds(end)
                         translated = await asyncio.to_thread(
                             llm_translator.translate, segment, source_lang, target_lang
                         )
@@ -462,15 +467,17 @@ async def run_benchmark(
                         # Même format que emit_increment (chunk{state.chunk_count}, pas
                         # "-final") — cf. force_final_commit ci-dessus, même correctif.
                         segment_id = f"{corpus_key}-line{idx}-chunk{state.chunk_count}"
-                        logger.log(
-                            LatencyEvent.create(
-                                segment_id,
-                                STAGE_TRANSLATE_LLM,
-                                end_s,
-                                t_translate_end,
-                                is_final=True,
+                        if end is not None:
+                            end_s = hms_to_seconds(end)
+                            logger.log(
+                                LatencyEvent.create(
+                                    segment_id,
+                                    STAGE_TRANSLATE_LLM,
+                                    end_s,
+                                    t_translate_end,
+                                    is_final=True,
+                                )
                             )
-                        )
                         state.committed_fr = f"{state.committed_fr} {translated}".strip()
                         speaker = line.get("speaker", "?")
                         await emit_increment(idx, speaker, translated, t_translate_end, is_final=True)

@@ -213,6 +213,14 @@ async def run_live(
             new_chunks, ttfc_s = await asyncio.to_thread(
                 _consume_continuation, synth, state.voice_state, increment
             )
+            # DEBUG temporaire (2026-07-19) — investigation "répétition audio" signalée par
+            # Kevin : `harness_tts.py` avait déjà noté un warning "Maximum generation length
+            # reached without EOS" et un nombre de chunks très variable sur la même phrase
+            # (cf. Loom/CLAUDE.md, jamais investigué faute de reproduction en usage réel).
+            print(
+                f"DEBUG tts id{ident}/line{idx}/chunk{state.chunk_count}: "
+                f"n_chunks={len(new_chunks)} ttfc={ttfc_s * 1000:.0f}ms texte={increment!r}"
+            )
             t_first_chunk = event_stage_t_in + ttfc_s
             segment_id = f"{session_id}-id{ident}-line{idx}-chunk{state.chunk_count}"
             logger.log(
@@ -262,7 +270,13 @@ async def run_live(
             text, end = line.get("text"), line.get("end")
             session = sessions[ident]
             state = session.commit_state.setdefault(idx, LineCommitState())
-            if text and end is not None:
+            # `end` sert seulement à ancrer le log de latence — ne jamais en faire une
+            # condition pour flush le texte lui-même : c'est le dernier appel jamais fait
+            # pour cet idx, un `end` manquant (WLK n'a pas calculé de timestamp final sur
+            # une coupure en plein milieu de phrase) ne doit pas faire disparaître du
+            # contenu déjà transcrit sans aucun WARNING (bug trouvé par Kevin, tail final
+            # "prevent me from deliberately" perdu silencieusement, cf. ADR-0044 §Révisions).
+            if text:
                 segment, new_flushed, is_consistent = force_flush(text, state.flushed_source)
                 if not is_consistent:
                     print(
@@ -272,21 +286,22 @@ async def run_live(
                 else:
                     state.flushed_source = new_flushed
                     if segment:
-                        end_s = _to_global_seconds(ident, hms_to_seconds(end))
                         translated = await asyncio.to_thread(
                             llm_translator.translate, segment, source_lang, target_lang
                         )
                         t_translate_end = time.monotonic() - session_start_monotonic
                         segment_id = f"{session_id}-id{ident}-line{idx}-chunk{state.chunk_count}"
-                        logger.log(
-                            LatencyEvent.create(
-                                segment_id,
-                                STAGE_TRANSLATE_LLM,
-                                end_s,
-                                t_translate_end,
-                                is_final=True,
+                        if end is not None:
+                            end_s = _to_global_seconds(ident, hms_to_seconds(end))
+                            logger.log(
+                                LatencyEvent.create(
+                                    segment_id,
+                                    STAGE_TRANSLATE_LLM,
+                                    end_s,
+                                    t_translate_end,
+                                    is_final=True,
+                                )
                             )
-                        )
                         state.committed_fr = f"{state.committed_fr} {translated}".strip()
                         speaker = line.get("speaker", "?")
                         await emit_increment(
@@ -372,6 +387,15 @@ async def run_live(
 
                 active_idx = len(lines) - 1
                 _queue_latest(partial_queues[ident], (active_idx, lines[active_idx]))
+
+            # DEBUG temporaire (2026-07-19) — investigation perte de fin de transcript à
+            # l'arrêt : confirme si `results_generator` s'épuise avec le texte final déjà
+            # présent dans `session.last_lines`, ou si consume() est coupé avant de le voir.
+            tails = [
+                (i, l.get("end"), (l.get("text") or "")[-60:])
+                for i, l in enumerate(session.last_lines)
+            ]
+            print(f"DEBUG consume(id{ident}) épuisé — last_lines={tails!r}")
 
         def _ensure_identity(ident: int) -> None:
             """Crée à la volée toute nouvelle identité jusqu'à `ident` inclus — référentiel
@@ -619,6 +643,13 @@ async def run_live(
 
         for ident, identity_session in enumerate(sessions):
             for idx, line in enumerate(identity_session.last_lines):
+                # DEBUG temporaire (2026-07-19) — même investigation que dans consume() :
+                # confirme si le texte vu ici correspond bien au dernier `wlk-text` observé.
+                print(
+                    f"DEBUG shutdown final id{ident}/line{idx}: sealed="
+                    f"{idx in identity_session.sealed} end={line.get('end')!r} "
+                    f"text_tail={(line.get('text') or '')[-80:]!r}"
+                )
                 if idx not in identity_session.sealed:
                     await force_final_commit_llm(ident, idx, line)
 

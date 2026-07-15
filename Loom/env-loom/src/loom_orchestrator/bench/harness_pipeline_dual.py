@@ -344,7 +344,13 @@ async def run_benchmark(
             text, end = line.get("text"), line.get("end")
             session = sessions[ident]
             state = session.commit_state.setdefault(idx, LineCommitState())
-            if text and end is not None:
+            # `end` sert seulement à ancrer le log de latence — ne jamais en faire une
+            # condition pour flush le texte lui-même : c'est le dernier appel jamais fait
+            # pour cet idx, un `end` manquant (WLK n'a pas calculé de timestamp final sur
+            # une coupure en plein milieu de phrase) ne doit pas faire disparaître du
+            # contenu déjà transcrit sans aucun WARNING (bug trouvé par Kevin, tail final
+            # "prevent me from deliberately" perdu silencieusement, cf. ADR-0044 §Révisions).
+            if text:
                 segment, new_flushed, is_consistent = force_flush(text, state.flushed_source)
                 if not is_consistent:
                     print(
@@ -354,7 +360,11 @@ async def run_benchmark(
                 else:
                     state.flushed_source = new_flushed
                     if segment:
-                        end_s = _to_global_seconds(ident, hms_to_seconds(end))
+                        end_s = (
+                            _to_global_seconds(ident, hms_to_seconds(end))
+                            if end is not None
+                            else None
+                        )
                         # Même diagnostic que try_llm_commit (2026-07-19, cf. ADR-0044
                         # §Révisions) — angle mort identifié : le premier passage de ce print
                         # ne couvrait que les commits partiels, pas le commit final, alors que
@@ -366,10 +376,15 @@ async def run_benchmark(
                             llm_translator.translate, segment, source_lang, target_lang
                         )
                         t_translate_end = time.monotonic() - replay_start_monotonic
+                        avant_appel = (
+                            f"{(t_call_start - end_s) * 1000:.0f}ms"
+                            if end_s is not None
+                            else "?ms (end manquant)"
+                        )
                         print(
                             f"DEBUG traduction id{ident} (final): "
                             f"appel_llm={(t_translate_end - t_call_start) * 1000:.0f}ms "
-                            f"avant_appel(file+wlk)={(t_call_start - end_s) * 1000:.0f}ms"
+                            f"avant_appel(file+wlk)={avant_appel}"
                         )
                         # Même format que emit_increment (chunk{state.chunk_count}, pas
                         # "-final") — sinon ce commit final ne se chaîne jamais avec son propre
@@ -377,15 +392,16 @@ async def run_benchmark(
                         # §Révisions, bug trouvé par Kevin en comparant traduction-llm p95=16s
                         # à bout-en-bout p95=2,5s sur le même run).
                         segment_id = f"{corpus_key}-id{ident}-line{idx}-chunk{state.chunk_count}"
-                        logger.log(
-                            LatencyEvent.create(
-                                segment_id,
-                                STAGE_TRANSLATE_LLM,
-                                end_s,
-                                t_translate_end,
-                                is_final=True,
+                        if end_s is not None:
+                            logger.log(
+                                LatencyEvent.create(
+                                    segment_id,
+                                    STAGE_TRANSLATE_LLM,
+                                    end_s,
+                                    t_translate_end,
+                                    is_final=True,
+                                )
                             )
-                        )
                         state.committed_fr = f"{state.committed_fr} {translated}".strip()
                         speaker = line.get("speaker", "?")
                         await emit_increment(
