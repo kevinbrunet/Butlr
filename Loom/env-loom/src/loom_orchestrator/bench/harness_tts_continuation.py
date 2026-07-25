@@ -1,11 +1,35 @@
 from __future__ import annotations
 
 import argparse
+import threading
 import time
 from pathlib import Path
 
 from loom_orchestrator.commit_state import _consume_continuation
 from loom_orchestrator.tts_pocket import PocketTtsSynthesizer
+
+# ✓ Texte de charge arbitraire pour le thread de contention GPU (--gpu-contention) — son
+# contenu n'a aucune importance, seul le fait de faire tourner le LLM en continu compte.
+GPU_CONTENTION_TEXT = (
+    "The quick brown fox jumps over the lazy dog. This sentence is repeated only to keep "
+    "the translation model busy on the GPU while the TTS probe runs."
+)
+
+
+def _run_gpu_contention(stop_event: threading.Event) -> None:
+    """Fait tourner `LlmTranslator` (llama.cpp, ADR-0043) en boucle sur un thread séparé
+    jusqu'à `stop_event.set()` — simule la charge GPU concurrente du run réel (`main.py`
+    charge WLK/Sortformer, le LLM de traduction, la séparation de voix et Pocket TTS en
+    même temps ; la sonde isolée seule ne charge que Pocket TTS). Isole la question : la
+    répétition en boucle observée en usage réel vient-elle d'une contention GPU entre
+    modèles concurrents, plutôt que de Pocket TTS lui-même sur un contexte long (déjà écarté
+    par `run_probe` sans contention, cf. sa docstring) ?
+    """
+    from loom_orchestrator.translation_llm import LlmTranslator
+
+    translator = LlmTranslator()
+    while not stop_event.is_set():
+        translator.translate(GPU_CONTENTION_TEXT, source_lang="en", target_lang="fr")
 
 # ✓ Increments FR réels, copiés tels quels du transcript produit par `main.py` sur
 # `corpus a` (run live-1784662066, 2026-07-21) — pas un texte de test synthétique. Chaque
@@ -129,12 +153,34 @@ def main() -> None:
         "la ligne sur un seul état continu (défaut : pas de reset, comportement actuel de "
         "production).",
     )
+    parser.add_argument(
+        "--gpu-contention",
+        action="store_true",
+        help="Fait tourner le LLM de traduction (llama.cpp) en boucle sur un thread séparé "
+        "pendant la sonde TTS, pour simuler la charge GPU concurrente du run réel (défaut : "
+        "pas de contention, Pocket TTS seul sur le GPU).",
+    )
     args = parser.parse_args()
 
     increments = REAL_INCREMENTS[: args.n_increments]
     synth = PocketTtsSynthesizer()
 
-    _, _, all_chunks = run_probe(synth, increments, reset_every=args.reset_every)
+    stop_event = threading.Event()
+    contention_thread = None
+    if args.gpu_contention:
+        contention_thread = threading.Thread(
+            target=_run_gpu_contention, args=(stop_event,), daemon=True
+        )
+        contention_thread.start()
+        print("DEBUG contention GPU démarrée (LLM de traduction en boucle)")
+
+    try:
+        _, _, all_chunks = run_probe(synth, increments, reset_every=args.reset_every)
+    finally:
+        if contention_thread is not None:
+            stop_event.set()
+            contention_thread.join(timeout=10.0)
+
     _write_wav(args.out_wav, all_chunks, synth.sample_rate_hz)
     print(f"\nWAV écrit : {args.out_wav}")
 
