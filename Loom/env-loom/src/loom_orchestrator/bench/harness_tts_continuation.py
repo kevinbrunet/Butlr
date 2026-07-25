@@ -55,11 +55,18 @@ REAL_INCREMENTS = [
 
 
 def run_probe(
-    synth: PocketTtsSynthesizer, increments: list[str]
+    synth: PocketTtsSynthesizer, increments: list[str], reset_every: int | None = None
 ) -> tuple[list[float], list[int], list]:
-    """Rejoue `increments` sur un seul `voice_state` continu (`new_line_state()` une fois,
-    puis `synthesize_continuation()` en boucle) — même schéma d'appel que `emit_increment`
-    dans `main.py`/`bench/harness_pipeline.py`, sans WLK/traduction/mixeur.
+    """Rejoue `increments` sur un `voice_state` (`new_line_state()`, puis
+    `synthesize_continuation()` en boucle) — même schéma d'appel que `emit_increment` dans
+    `main.py`/`bench/harness_pipeline.py`, sans WLK/traduction/mixeur.
+
+    `reset_every` : si posé, réinitialise `state` (nouveau `new_line_state()`) toutes les
+    `reset_every` increments au lieu de chaîner l'intégralité de la ligne sur un seul état —
+    hypothèse à tester : la répétition en boucle observée sur un contexte de continuation
+    long (cf. maintainers Pocket TTS, issue #151 — les chunks longs sont généralement générés
+    indépendamment, pas chaînés indéfiniment via `copy_state=False`) disparaît si on borne la
+    longueur de chaînage. `None` (défaut) = comportement actuel de production, sans reset.
 
     Retourne `(ttfc_ms_par_appel, n_chunks_par_appel, tous_les_chunks_concatenés)`.
     """
@@ -68,7 +75,10 @@ def run_probe(
     ttfc_ms_list: list[float] = []
     n_chunks_list: list[int] = []
     all_chunks = []
-    for text in increments:
+    for i, text in enumerate(increments):
+        if reset_every is not None and i > 0 and i % reset_every == 0:
+            state = synth.new_line_state()
+            print(f"DEBUG increment {i + 1}: reset du voice_state (reset_every={reset_every})")
         t0 = time.monotonic()
         chunks, ttfc_s = _consume_continuation(synth, state, text)
         ttfc_ms_list.append(ttfc_s * 1000)
@@ -76,7 +86,7 @@ def run_probe(
         all_chunks.extend(chunks)
         wall_ms = (time.monotonic() - t0) * 1000
         print(
-            f"DEBUG increment {len(ttfc_ms_list)}: n_chunks={len(chunks)} "
+            f"DEBUG increment {i + 1}: n_chunks={len(chunks)} "
             f"ttfc={ttfc_s * 1000:.0f}ms wall={wall_ms:.0f}ms texte={text!r}"
         )
 
@@ -111,12 +121,20 @@ def main() -> None:
         default=len(REAL_INCREMENTS),
         help="Nombre d'increments à rejouer (par défaut tous, %(default)s).",
     )
+    parser.add_argument(
+        "--reset-every",
+        type=int,
+        default=None,
+        help="Réinitialise le voice_state toutes les N increments au lieu de chaîner toute "
+        "la ligne sur un seul état continu (défaut : pas de reset, comportement actuel de "
+        "production).",
+    )
     args = parser.parse_args()
 
     increments = REAL_INCREMENTS[: args.n_increments]
     synth = PocketTtsSynthesizer()
 
-    _, _, all_chunks = run_probe(synth, increments)
+    _, _, all_chunks = run_probe(synth, increments, reset_every=args.reset_every)
     _write_wav(args.out_wav, all_chunks, synth.sample_rate_hz)
     print(f"\nWAV écrit : {args.out_wav}")
 
