@@ -35,7 +35,7 @@ from loom_orchestrator.bench.timestamps import hms_to_seconds
 from loom_orchestrator.commit_policy import compute_flush, force_flush
 from loom_orchestrator.commit_state import (
     LineCommitState,
-    _consume_continuation,
+    _consume_stream,
     _release_gpu_state,
 )
 from loom_orchestrator.speaker_separation import (
@@ -200,8 +200,6 @@ async def run_live(
             if not increment:
                 return
             state = sessions[ident].commit_state[idx]
-            if state.voice_state is None:
-                state.voice_state = synth.new_line_state()
 
             # ⚠ Pas de lock ici : LlmTranslator/PocketTtsSynthesizer sont partagés entre
             # toutes les sessions du référentiel ouvert, mais commit_worker (plus bas) est
@@ -210,9 +208,7 @@ async def run_live(
             # premier jet appelait ceci depuis plusieurs tâches concurrentes et a provoqué un
             # crash CUDA dur dans llama.cpp — ne jamais paralléliser ces appels entre
             # identités, cf. docstring de `commit_worker`).
-            new_chunks, ttfc_s = await asyncio.to_thread(
-                _consume_continuation, synth, state.voice_state, increment
-            )
+            new_chunks, ttfc_s = await asyncio.to_thread(_consume_stream, synth, increment)
             t_first_chunk = event_stage_t_in + ttfc_s
             segment_id = f"{session_id}-id{ident}-line{idx}-chunk{state.chunk_count}"
             logger.log(
@@ -317,7 +313,7 @@ async def run_live(
             queue.put_nowait(item)
 
         async def commit_worker() -> None:
-            """Tâche de fond unique — sérialise `translate`/`synthesize_continuation` entre
+            """Tâche de fond unique — sérialise `translate`/`synthesize_stream` entre
             toutes les identités par construction (un seul appelant). Ne jamais paralléliser
             ces appels entre identités : un premier jet du projet qui le faisait a provoqué
             un crash CUDA dur dans llama.cpp (`GGML_ASSERT(buffer) failed`, cf. ADR-0044

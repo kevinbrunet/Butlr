@@ -5,8 +5,27 @@ import threading
 import time
 from pathlib import Path
 
-from loom_orchestrator.commit_state import _consume_continuation
 from loom_orchestrator.tts_pocket import PocketTtsSynthesizer
+
+
+def _consume_continuation(
+    synth: PocketTtsSynthesizer, state: object, text: str
+) -> tuple[list, float]:
+    """Épuise `synthesize_continuation` (⚠ plus utilisé en production depuis le 2026-07-25,
+    cf. Révisions ADR-0041 — conservé ici uniquement comme sonde de régression) et mesure le
+    délai jusqu'au premier chunk.
+    """
+    t0 = time.monotonic()
+    chunks = []
+    ttfc_s: float | None = None
+    for chunk in synth.synthesize_continuation(state, text):
+        if ttfc_s is None:
+            ttfc_s = time.monotonic() - t0
+        chunks.append(chunk)
+    if ttfc_s is None:
+        ttfc_s = time.monotonic() - t0
+    return chunks, ttfc_s
+
 
 # ✓ Texte de charge arbitraire pour le thread de contention GPU (--gpu-contention) — son
 # contenu n'a aucune importance, seul le fait de faire tourner le LLM en continu compte.

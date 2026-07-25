@@ -14,7 +14,7 @@ DEFAULT_MAX_BUFFER_S = 5.0
 
 class IdentityAudioBuffer:
     """Tampon audio d'une seule identité — un `push(chunk)` par le thread qui exécute
-    `_consume_continuation` (TTS), des `pull(n_frames)` répétés par le callback de sortie
+    `_consume_stream` (TTS), des `pull(n_frames)` répétés par le callback de sortie
     audio (thread PortAudio). Les chunks TTS ne s'alignent jamais sur `n_frames` (taille de
     bloc du callback, fixée par le device) — stocker un tableau concaténé plutôt qu'une file
     de chunks distincts fait porter le report du reliquat par la simple troncature du

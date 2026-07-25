@@ -40,7 +40,7 @@ from loom_orchestrator.commit_policy import compute_flush, force_flush
 from loom_orchestrator.commit_state import (
     MIN_NEW_AUDIO_S,
     LineCommitState,
-    _consume_continuation,
+    _consume_stream,
     _release_gpu_state,
 )
 from loom_orchestrator.speaker_separation import SAMPLE_RATE_HZ, SpeakerEmbedder, VoiceSeparator
@@ -163,12 +163,14 @@ async def run_benchmark(
     plafond explicite ici — c'est le travail de l'orchestrateur final (T2.3).
 
     Le chunking côté Seamless (dicté par AlignAtt, cf. ci-dessus) et le chunking audio côté
-    TTS sont découplés (2026-07-15, suite à une question de Kevin) : chaque ligne a son
-    propre état vocal Pocket TTS (`PocketTtsSynthesizer.new_line_state`), réutilisé avec
-    `copy_state=False` (`synthesize_continuation`) à travers tous ses increments successifs
-    — l'audio s'enchaîne comme un seul énoncé continu, pas des extraits disjoints malgré des
-    increments de texte séparés. Un seul fichier `line{idx}.wav` par ligne (pas un par
-    increment), réécrit à chaque nouvel increment.
+    TTS sont découplés (2026-07-15, suite à une question de Kevin) : chaque increment
+    déclenche son propre appel TTS, tous accumulés dans `line{idx}.wav` (un seul fichier par
+    ligne, pas un par increment, réécrit à chaque nouvel increment). ⚠ Chaque appel repart de
+    l'état vocal de base (`synthesize_stream`, `copy_state=True`) depuis le 2026-07-25 (cf.
+    Révisions ADR-0041) — l'enchaînement continu par `copy_state=False`
+    (`new_line_state`/`synthesize_continuation`) essayé initialement fait dégénérer Pocket
+    TTS en boucle audio (constaté par exécution réelle, reproduit 5/5 en isolation). Rupture
+    de prosodie/débit à chaque frontière d'increment assumée pour l'instant.
 
     Séparation de voix + suivi d'identité par embedding (ADR-0042, `separation=True` par
     défaut, désactivable via `--no-separation`) : avant chaque traduction (partielle ou
@@ -281,12 +283,8 @@ async def run_benchmark(
             if not increment:
                 return
             state = commit_state[idx]
-            if state.voice_state is None:
-                state.voice_state = synth.new_line_state()
 
-            new_chunks, ttfc_s = await asyncio.to_thread(
-                _consume_continuation, synth, state.voice_state, increment
-            )
+            new_chunks, ttfc_s = await asyncio.to_thread(_consume_stream, synth, increment)
             t_first_chunk = event_stage_t_in + ttfc_s
             segment_id = f"{corpus_key}-line{idx}-chunk{state.chunk_count}"
             logger.log(
@@ -484,7 +482,8 @@ async def run_benchmark(
 
             # Ligne définitivement scellée à ce point — même nettoyage GPU que le chemin
             # Seamless (cf. `force_final_commit`), même si `translator="llm"` ne charge pas
-            # les mêmes modèles : `voice_state` (Pocket TTS) reste commun aux deux chemins.
+            # les mêmes modèles : `audio_chunks` (accumulé pour `line{idx}.wav`) reste commun
+            # aux deux chemins.
             _release_gpu_state(state)
 
         async def consume() -> None:

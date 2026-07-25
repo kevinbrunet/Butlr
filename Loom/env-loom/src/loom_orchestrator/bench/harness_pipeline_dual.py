@@ -34,7 +34,7 @@ from loom_orchestrator.bench.timestamps import hms_to_seconds
 from loom_orchestrator.commit_policy import compute_flush, force_flush
 from loom_orchestrator.commit_state import (
     LineCommitState,
-    _consume_continuation,
+    _consume_stream,
     _release_gpu_state,
 )
 from loom_orchestrator.speaker_separation import (
@@ -266,8 +266,6 @@ async def run_benchmark(
             if not increment:
                 return
             state = sessions[ident].commit_state[idx]
-            if state.voice_state is None:
-                state.voice_state = synth.new_line_state()
 
             # ⚠ Pas de lock ici : LlmTranslator/PocketTtsSynthesizer sont partagés entre toutes
             # les sessions du référentiel ouvert (cf. `_ensure_identity`), mais `commit_worker`
@@ -278,9 +276,7 @@ async def run_benchmark(
             # provoqué un crash CUDA dur dans llama.cpp (GGML_ASSERT(buffer) failed) — corrigé
             # une première fois avec des `asyncio.Lock`, puis remplacé par ce découplage qui
             # résout aussi le vrai problème sous-jacent (cf. docstring de `commit_worker`).
-            new_chunks, ttfc_s = await asyncio.to_thread(
-                _consume_continuation, synth, state.voice_state, increment
-            )
+            new_chunks, ttfc_s = await asyncio.to_thread(_consume_stream, synth, increment)
             t_first_chunk = event_stage_t_in + ttfc_s
             segment_id = f"{corpus_key}-id{ident}-line{idx}-chunk{state.chunk_count}"
             logger.log(
@@ -435,13 +431,13 @@ async def run_benchmark(
             Révisions ADR-0044 : un premier jet appelait ces fonctions directement depuis
             `consume(ident)`, dans la même boucle qui lit les résultats WLK. Une fois
             LlmTranslator/PocketTtsSynthesizer partagés entre 2 identités réellement
-            concurrentes, chaque appel bloquant à `translate`/`synthesize_continuation`
+            concurrentes, chaque appel bloquant à `translate`/`synthesize_stream`
             retardait d'autant la lecture du résultat WLK suivant — exactement la
             "backpressure vers WLK" interdite par `Loom/CLAUDE.md`, mesurée comme une
             explosion de la latence de l'étage `wlk` alors que WLK lui-même (et le routage
             audio en amont, `route_window`) n'y étaient pour rien. Ce worker unique découple
             `consume()` (jamais bloqué au-delà de la lecture WLK) du travail GPU réel, et
-            sérialise `translate`/`synthesize_continuation` par construction (un seul
+            sérialise `translate`/`synthesize_stream` par construction (un seul
             appelant) — plus besoin des `asyncio.Lock` du premier correctif.
             """
             while True:

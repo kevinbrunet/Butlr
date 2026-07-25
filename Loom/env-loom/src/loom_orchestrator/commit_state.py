@@ -13,8 +13,8 @@ MIN_NEW_AUDIO_S = 1.0
 
 @dataclass
 class LineCommitState:
-    """État de commit AlignAtt + continuation TTS + suivi d'identité par embedding pour une
-    ligne WLK — cf. ADR-0041 (commit) et ADR-0042 (embedding).
+    """État de commit AlignAtt + suivi d'identité par embedding pour une ligne WLK — cf.
+    ADR-0041 (commit) et ADR-0042 (embedding).
 
     Relocalisé depuis `bench/harness_pipeline.py` (2026-07-19, ADR-0045) : `main.py`
     (orchestrateur réel) a besoin de ce même état, et du code de production important depuis
@@ -26,7 +26,6 @@ class LineCommitState:
     committed_fr: str = ""
     last_alignatt_end_s: float = -MIN_NEW_AUDIO_S
     chunk_count: int = 0
-    voice_state: object | None = None
     audio_chunks: list = field(default_factory=list)
     embedding: list | None = None
     embedding_count: int = 0
@@ -34,18 +33,17 @@ class LineCommitState:
 
 
 def _release_gpu_state(state: LineCommitState) -> None:
-    """Libère l'état de continuation TTS (`voice_state`, cf. `tts_pocket.
-    synthesize_continuation`) une fois une ligne définitivement scellée — plus jamais
-    réutilisé après ce point, donc pas de raison de le garder en mémoire.
+    """Vide `audio_chunks` une fois une ligne définitivement scellée — plus jamais réutilisé
+    après ce point, donc pas de raison de le garder en mémoire.
 
     ⚠ Constaté par exécution réelle (2026-07-15, cf. Révisions ADR-0042) : fuite mémoire GPU
     observée sur un run réel — 13,9 Go → 29,85 Go de VRAM utilisée en 30s (`nvidia-smi`),
     utilisation GPU restée basse (17-21%) pendant ce temps, signe d'une accumulation plutôt
-    que d'un calcul intense. `state.voice_state` restait vivant pour toute la durée du run
-    (jamais nettoyé après scellement d'une ligne) — suspect le plus probable, faute d'accès
-    au contenu interne de cet objet (opaque, cf. `tts_pocket.PocketTtsSynthesizer`).
+    que d'un calcul intense. À l'époque imputé à `state.voice_state` (état de continuation
+    TTS, jamais nettoyé après scellement d'une ligne) — ce champ a disparu depuis (cf.
+    Révisions ADR-0041, 2026-07-25 : abandon de `synthesize_continuation`) ; `empty_cache()`
+    conservé par hygiène générale, pas revérifié comme suffisant seul.
     """
-    state.voice_state = None
     state.audio_chunks = []
 
     import torch
@@ -54,17 +52,22 @@ def _release_gpu_state(state: LineCommitState) -> None:
         torch.cuda.empty_cache()
 
 
-def _consume_continuation(
-    synth: PocketTtsSynthesizer, state: object, text: str
-) -> tuple[list, float]:
-    """Épuise `synthesize_continuation` en thread (bloquant/CPU, cf. règle transverse) et
-    mesure le délai jusqu'au premier chunk (TTFC, la métrique de budget de ADR-0036) — pas
-    le temps total de synthèse de l'increment.
+def _consume_stream(synth: PocketTtsSynthesizer, text: str) -> tuple[list, float]:
+    """Épuise `synthesize_stream` en thread (bloquant/CPU, cf. règle transverse) et mesure le
+    délai jusqu'au premier chunk (TTFC, la métrique de budget de ADR-0036) — pas le temps
+    total de synthèse de l'increment.
+
+    ⚠ Chaque appel repart de l'état vocal de base (`copy_state=True`, le défaut Pocket TTS) —
+    pas de continuité prosodique entre les increments d'une même ligne (cf. Révisions
+    ADR-0041, 2026-07-25 : `synthesize_continuation`/`copy_state=False` abandonné, fait
+    dégénérer Pocket TTS en boucle audio). Rupture de prosodie/débit à chaque frontière
+    d'increment assumée pour l'instant — pas encore de mitigation (crossfade au mixage,
+    increments plus longs) mise en place.
     """
     t0 = time.monotonic()
     chunks = []
     ttfc_s: float | None = None
-    for chunk in synth.synthesize_continuation(state, text):
+    for chunk in synth.synthesize_stream(text):
         if ttfc_s is None:
             ttfc_s = time.monotonic() - t0
         chunks.append(chunk)

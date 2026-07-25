@@ -66,15 +66,29 @@ class PocketTtsSynthesizer:
 
         Chaque appel repart de l'état vocal initial (`copy_state` par défaut à `True` côté
         Pocket TTS) : deux appels successifs ne s'enchaînent pas naturellement (silence/rupture
-        de prosodie entre les deux). Pour une ligne qui reçoit plusieurs increments successifs
-        (cf. ADR-0041, `bench/harness_pipeline.py`), utiliser `new_line_state()` +
-        `synthesize_continuation()` à la place.
+        de prosodie entre les deux) — c'est délibéré depuis 2026-07-25 (cf. Révisions
+        ADR-0041) : `new_line_state()`/`synthesize_continuation()` (`copy_state=False`,
+        ci-dessous) chaînaient les increments d'une même ligne pour éviter cette rupture, mais
+        ✓ constaté par exécution réelle sur la machine cible que ce chemin fait dégénérer
+        Pocket TTS en boucle audio (un mot/une courte phrase répété des dizaines de secondes)
+        — reproduit de façon quasi systématique en isolation (5/5 essais), y compris juste
+        après un reset de l'état, et absent à 100% en rejouant la même séquence via
+        `synthesize_stream()` (`copy_state=True`). Aucun usage de `copy_state=False` trouvé
+        ailleurs dans l'écosystème Pocket TTS (ni les mainteneurs — issue
+        kyutai-labs/pocket-tts#151, ni zeropointnine/tts-audiobook-tool) — chemin de code
+        manifestement peu exercé. `new_line_state()`/`synthesize_continuation()` restent pour
+        `bench/harness_tts_continuation.py` (sonde de régression) — ne plus les utiliser en
+        production.
         """
         for chunk in self._model.generate_audio_stream(self._voice_state, text):
             yield chunk.numpy()
 
     def new_line_state(self) -> object:
-        """Retourne une copie indépendante de l'état vocal initial, à réutiliser pour tous
+        """⚠ Ne plus utiliser en production (cf. Révisions ADR-0041, 2026-07-25) — conservée
+        pour `bench/harness_tts_continuation.py` (sonde de régression sur le bug de boucle
+        audio ci-dessous).
+
+        Retourne une copie indépendante de l'état vocal initial, à réutiliser pour tous
         les increments d'une même ligne (cf. `synthesize_continuation`) — jamais partagée
         entre deux lignes/tours de parole différents.
 
@@ -92,7 +106,10 @@ class PocketTtsSynthesizer:
         return copy.deepcopy(self._voice_state)
 
     def synthesize_continuation(self, state: object, text: str) -> "Iterator[np.ndarray]":
-        """Synthétise `text` (FR) en continuant l'état vocal `state` (muté en place,
+        """⚠ Ne plus utiliser en production (cf. `new_line_state`) — fait dégénérer Pocket
+        TTS en boucle audio, cf. Révisions ADR-0041.
+
+        Synthétise `text` (FR) en continuant l'état vocal `state` (muté en place,
         `copy_state=False`) — l'audio s'enchaîne naturellement avec les increments
         précédents générés sur ce même `state` (cf. `new_line_state`). `state` doit venir de
         `new_line_state()`, jamais de l'état interne partagé de ce synthesizer.
