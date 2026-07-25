@@ -31,6 +31,7 @@ def _run_gpu_contention(stop_event: threading.Event) -> None:
     while not stop_event.is_set():
         translator.translate(GPU_CONTENTION_TEXT, source_lang="en", target_lang="fr")
 
+
 # ✓ Increments FR réels, copiés tels quels du transcript produit par `main.py` sur
 # `corpus a` (run live-1784662066, 2026-07-21) — pas un texte de test synthétique. Chaque
 # élément correspond à un appel `synthesize_continuation` réel dans ce run, sur le même
@@ -117,6 +118,46 @@ def run_probe(
     return ttfc_ms_list, n_chunks_list, all_chunks
 
 
+def run_probe_no_continuation(
+    synth: PocketTtsSynthesizer, increments: list[str]
+) -> tuple[list[float], list[int], list]:
+    """Rejoue `increments` sans jamais chaîner : chaque appel repart de l'état de voix de
+    base (`synthesize_stream`, `copy_state=True` par défaut côté Pocket TTS — pas de mutation
+    en place). C'est le pattern utilisé par tout le monde ailleurs : les mainteneurs Pocket
+    TTS eux-mêmes (issue kyutai-labs/pocket-tts#151, chunks générés indépendamment) et
+    zeropointnine/tts-audiobook-tool (jamais `copy_state=False`) — personne d'autre n'a été
+    trouvé utilisant le chemin `copy_state=False`/`synthesize_continuation` que Loom utilise.
+    Hypothèse : c'est ce chemin de mutation en place, moins exercé en pratique, qui est
+    responsable de la boucle — pas la longueur de continuation ni la contention GPU (les deux
+    écartées par les runs précédents, cf. `run_probe`/`--reset-every`/`--gpu-contention`).
+
+    Retourne `(ttfc_ms_par_appel, n_chunks_par_appel, tous_les_chunks_concatenés)`.
+    """
+    ttfc_ms_list: list[float] = []
+    n_chunks_list: list[int] = []
+    all_chunks = []
+    for i, text in enumerate(increments):
+        t0 = time.monotonic()
+        chunks = []
+        ttfc_s: float | None = None
+        for chunk in synth.synthesize_stream(text):
+            if ttfc_s is None:
+                ttfc_s = time.monotonic() - t0
+            chunks.append(chunk)
+        if ttfc_s is None:
+            ttfc_s = time.monotonic() - t0
+        ttfc_ms_list.append(ttfc_s * 1000)
+        n_chunks_list.append(len(chunks))
+        all_chunks.extend(chunks)
+        wall_ms = (time.monotonic() - t0) * 1000
+        print(
+            f"DEBUG increment {i + 1}: n_chunks={len(chunks)} "
+            f"ttfc={ttfc_s * 1000:.0f}ms wall={wall_ms:.0f}ms texte={text!r}"
+        )
+
+    return ttfc_ms_list, n_chunks_list, all_chunks
+
+
 def _write_wav(path: Path, chunks: list, sample_rate_hz: int) -> None:
     import wave
 
@@ -160,7 +201,17 @@ def main() -> None:
         "pendant la sonde TTS, pour simuler la charge GPU concurrente du run réel (défaut : "
         "pas de contention, Pocket TTS seul sur le GPU).",
     )
+    parser.add_argument(
+        "--no-continuation",
+        action="store_true",
+        help="N'utilise jamais synthesize_continuation (copy_state=False) — chaque increment "
+        "repart de l'état de voix de base via synthesize_stream (copy_state=True, le pattern "
+        "utilisé partout ailleurs). Incompatible avec --reset-every.",
+    )
     args = parser.parse_args()
+
+    if args.no_continuation and args.reset_every is not None:
+        parser.error("--no-continuation et --reset-every sont incompatibles")
 
     increments = REAL_INCREMENTS[: args.n_increments]
     synth = PocketTtsSynthesizer()
@@ -175,7 +226,10 @@ def main() -> None:
         print("DEBUG contention GPU démarrée (LLM de traduction en boucle)")
 
     try:
-        _, _, all_chunks = run_probe(synth, increments, reset_every=args.reset_every)
+        if args.no_continuation:
+            _, _, all_chunks = run_probe_no_continuation(synth, increments)
+        else:
+            _, _, all_chunks = run_probe(synth, increments, reset_every=args.reset_every)
     finally:
         if contention_thread is not None:
             stop_event.set()
