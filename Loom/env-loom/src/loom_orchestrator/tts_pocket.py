@@ -98,18 +98,19 @@ class PocketTtsSynthesizer:
         """Construit un état vocal à partir d'un clip audio brut (mono, `sample_rate_hz`) —
         clonage de voix (ADR-0046), pas un des presets nommés du constructeur.
 
-        ⚠ Non vérifié par exécution réelle (pas la machine cible) : `get_state_for_audio_prompt`
-        accepte `Path | str | torch.Tensor` d'après la doc officielle (README
-        kyutai-labs/pocket-tts, lu le 2026-07-25) — on lui passe donc un tenseur torch converti
-        depuis `audio`, sans écrire de fichier intermédiaire. Format/plage de valeurs attendus
-        (float32 [-1, 1], comme le reste de ce module) supposés identiques à `generate_audio`,
-        pas confirmés spécifiquement pour ce chemin. Opération lente (cf. doc officielle,
+        ✓ Constaté par exécution réelle sur la machine cible (2026-07-26, cf. Révisions
+        ADR-0046) : `get_state_for_audio_prompt` accepte un `torch.Tensor` (confirmé par la
+        doc officielle) mais le codec interne (`CompressionModel._encode_to_unquantized_latent`)
+        attend `[batch, canal, temps]` (3D), pas un tenseur brut 1D — corrige la première
+        version de cette méthode (`AssertionError: expects audio of shape [B, C, T] but got
+        torch.Size([1, 192000])`, `on_clean_audio` capturait l'erreur sans planter, mais
+        aucun profil n'était jamais construit). Opération lente (cf. doc officielle,
         "relatively slow") — l'appelant doit passer par `asyncio.to_thread`, jamais depuis la
         boucle événementielle (même règle que `synthesize`/`synthesize_stream`).
         """
         import torch
 
-        audio_tensor = torch.from_numpy(audio)
+        audio_tensor = torch.from_numpy(audio).float().unsqueeze(0).unsqueeze(0)
         return self._model.get_state_for_audio_prompt(audio_tensor)
 
     def export_voice_state(self, state: object, path: "Path") -> None:

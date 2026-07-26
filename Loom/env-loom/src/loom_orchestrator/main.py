@@ -316,23 +316,15 @@ async def run_live(
         consumer_tasks: list[asyncio.Task] = []
         final_queue: asyncio.Queue = asyncio.Queue()
 
-        # Tâches "tire et oublie" pour la personnalisation de voix (ADR-0046) : une par
-        # increment routé vers la branche audio propre de `route_window`, jamais sur le
-        # chemin critique STT/traduction (cf. "TTS en retard = dégradation contrôlée, jamais
-        # de blocage amont", `Loom/CLAUDE.md`). Références gardées explicitement (retirées à
-        # la fin via le callback) : sans ça, l'event loop peut garbage-collecter une tâche en
-        # cours d'exécution (mise en garde documentée d'`asyncio.create_task`).
-        voice_personalization_tasks: set[asyncio.Task] = set()
-
-        async def _update_voice_personalization(
-            ident: int, embedding: list[float], audio: "np.ndarray"
-        ) -> None:
-            try:
-                await asyncio.to_thread(voice_manager.on_clean_audio, ident, embedding, audio)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # noqa: BLE001 — isole une erreur de personnalisation
-                print(f"WARNING: on_clean_audio(id{ident}) a échoué ({exc!r}).")
+        # File pour la personnalisation de voix (ADR-0046) — un item par increment routé
+        # vers la branche audio propre de `route_window`, drainée par `commit_worker`
+        # (cf. docstring plus bas). ⚠ Une première version dispatchait ceci via
+        # `asyncio.create_task` en parallèle du reste — a provoqué un segfault (exit 139) sur
+        # la machine cible, cf. Révisions ADR-0046 : ce projet a déjà un précédent documenté
+        # (ADR-0044 §Révisions, `GGML_ASSERT` dans llama.cpp) pour paralléliser des appels GPU
+        # entre tâches. Tout appel touchant Pocket TTS passe maintenant par le même
+        # consommateur unique que `translate`/`synthesize_stream`, sans exception.
+        voice_personalization_queue: asyncio.Queue = asyncio.Queue(maxsize=8)
 
         def _queue_latest(queue: asyncio.Queue, item: tuple) -> None:
             if queue.full():
@@ -344,11 +336,14 @@ async def run_live(
             queue.put_nowait(item)
 
         async def commit_worker() -> None:
-            """Tâche de fond unique — sérialise `translate`/`synthesize_stream` entre
-            toutes les identités par construction (un seul appelant). Ne jamais paralléliser
-            ces appels entre identités : un premier jet du projet qui le faisait a provoqué
-            un crash CUDA dur dans llama.cpp (`GGML_ASSERT(buffer) failed`, cf. ADR-0044
-            §Révisions)."""
+            """Tâche de fond unique — sérialise `translate`/`synthesize_stream`/
+            `on_clean_audio` (ADR-0046) entre toutes les identités par construction (un seul
+            appelant). Ne jamais paralléliser ces appels entre identités : un premier jet du
+            projet qui le faisait a provoqué un crash CUDA dur dans llama.cpp
+            (`GGML_ASSERT(buffer) failed`, cf. ADR-0044 §Révisions) — et une première version
+            de la personnalisation de voix, dispatchée en tâche parallèle plutôt que par ce
+            worker, a provoqué un segfault (exit 139) pour la même raison (cf. Révisions
+            ADR-0046)."""
             while True:
                 if not final_queue.empty():
                     ident, idx, line = await final_queue.get()
@@ -375,6 +370,21 @@ async def run_live(
                         raise
                     except Exception as exc:  # noqa: BLE001 — isole une erreur de commit partiel
                         print(f"WARNING: try_llm_commit(id{ident}) a échoué ({exc!r}).")
+
+                # Priorité la plus basse — jamais sur le chemin critique STT/traduction (cf.
+                # "TTS en retard = dégradation contrôlée, jamais de blocage amont",
+                # `Loom/CLAUDE.md`), donc traité seulement quand rien d'autre n'attend.
+                if not did_work and not voice_personalization_queue.empty():
+                    ident, embedding, audio = voice_personalization_queue.get_nowait()
+                    voice_personalization_queue.task_done()
+                    did_work = True
+                    try:
+                        await asyncio.to_thread(voice_manager.on_clean_audio, ident, embedding, audio)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 — isole une erreur de personnalisation
+                        print(f"WARNING: on_clean_audio(id{ident}) a échoué ({exc!r}).")
+
                 if not did_work:
                     await asyncio.sleep(0.02)
 
@@ -510,13 +520,10 @@ async def run_live(
                 embedding_counts[active_ident] += 1
                 increment_audio = window[increment_start : increment_start + increment_len]
                 _record_send(active_ident, len(increment_audio), global_start_sample)
-                task = asyncio.create_task(
-                    _update_voice_personalization(
-                        active_ident, known_embeddings[active_ident], increment_audio
-                    )
+                _queue_latest(
+                    voice_personalization_queue,
+                    (active_ident, known_embeddings[active_ident], increment_audio),
                 )
-                voice_personalization_tasks.add(task)
-                task.add_done_callback(voice_personalization_tasks.discard)
                 await sessions[active_ident].processor.process_audio(
                     _pcm16_bytes(increment_audio)
                 )

@@ -54,3 +54,18 @@ Garde-fou mémoire GPU : `MAX_LOADED_PERSONALIZED_VOICES` (8) — au-delà, les 
 ## Révisions
 
 - 2026-07-26 — création.
+- 2026-07-26 — deux correctifs suite au premier run réel sur `corpus b` (fedora2) :
+  1. ✓ `clone_voice_state` passait un tenseur audio 1D à `get_state_for_audio_prompt` ; le
+     codec interne (`CompressionModel._encode_to_unquantized_latent`) attend `[batch, canal,
+     temps]` (3D) — `AssertionError: expects audio of shape [B, C, T] but got
+     torch.Size([1, 192000])`, capturée sans planter (aucun profil jamais construit).
+     Corrigé (`.unsqueeze(0).unsqueeze(0)`).
+  2. ✓ La première version dispatchait `on_clean_audio` via `asyncio.create_task` en
+     parallèle du reste des appels GPU (traduction, synthèse, séparation) — a provoqué un
+     segfault dur (exit 139, pas de traceback Python) sur la machine cible. Même classe de
+     bug déjà rencontrée et documentée dans ce projet (ADR-0044 §Révisions, crash CUDA dans
+     llama.cpp pour la même raison — paralléliser des appels GPU entre tâches). Corrigé :
+     `on_clean_audio` passe maintenant par une file (`voice_personalization_queue`) drainée
+     par `commit_worker`, le même consommateur unique qui sérialise déjà
+     `translate`/`synthesize_stream` — priorité la plus basse (traité seulement quand aucun
+     commit de traduction n'attend).
