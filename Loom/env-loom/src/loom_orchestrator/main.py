@@ -676,7 +676,22 @@ async def run_live(
                 # d'id3 jamais commis malgré du contenu réel restant). `force_final_commit_llm`
                 # est idempotent via `force_flush` (segment vide si rien de neuf) — l'appeler
                 # sans condition est donc toujours sûr.
-                await force_final_commit_llm(ident, idx, line)
+                #
+                # ⚠ Constaté par exécution réelle (2026-07-26) : cet appel n'était pas protégé
+                # contrairement à tous les autres appels de `force_final_commit_llm`/
+                # `try_llm_commit` dans `commit_worker` — une erreur llama.cpp
+                # (`RuntimeError: llama_decode returned -1`) ici faisait planter tout le run
+                # avant `sink.close()`, perdant le WAV de sortie (dry-run) entier pour un seul
+                # commit final raté. Même filet de sécurité qu'ailleurs désormais.
+                try:
+                    await force_final_commit_llm(ident, idx, line)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 — isole une erreur de commit final
+                    print(
+                        f"WARNING: force_final_commit_llm(id{ident}) a échoué en fin de run "
+                        f"({exc!r})."
+                    )
 
     sink.close()
     if log_path is not None:
