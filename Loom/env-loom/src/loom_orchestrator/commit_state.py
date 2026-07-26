@@ -52,12 +52,18 @@ def _release_gpu_state(state: LineCommitState) -> None:
         torch.cuda.empty_cache()
 
 
-def _consume_stream(synth: PocketTtsSynthesizer, text: str) -> tuple[list, float]:
+def _consume_stream(
+    synth: PocketTtsSynthesizer, text: str, voice_state: object | None = None
+) -> tuple[list, float]:
     """Épuise `synthesize_stream` en thread (bloquant/CPU, cf. règle transverse) et mesure le
     délai jusqu'au premier chunk (TTFC, la métrique de budget de ADR-0036) — pas le temps
     total de synthèse de l'increment.
 
-    ⚠ Chaque appel repart de l'état vocal de base (`copy_state=True`, le défaut Pocket TTS) —
+    `voice_state` : voix à utiliser pour cet increment (pool de repli ou profil personnalisé
+    résolu par `voice_personalization.PersonalizedVoiceManager.get_voice_state`, ADR-0046) —
+    `None` retombe sur la voix de repli du constructeur (cf. `synthesize_stream`).
+
+    ⚠ Chaque appel repart de l'état vocal fourni (`copy_state=True`, le défaut Pocket TTS) —
     pas de continuité prosodique entre les increments d'une même ligne (cf. Révisions
     ADR-0041, 2026-07-25 : `synthesize_continuation`/`copy_state=False` abandonné, fait
     dégénérer Pocket TTS en boucle audio). Rupture de prosodie/débit à chaque frontière
@@ -67,7 +73,7 @@ def _consume_stream(synth: PocketTtsSynthesizer, text: str) -> tuple[list, float
     t0 = time.monotonic()
     chunks = []
     ttfc_s: float | None = None
-    for chunk in synth.synthesize_stream(text):
+    for chunk in synth.synthesize_stream(text, voice_state):
         if ttfc_s is None:
             ttfc_s = time.monotonic() - t0
         chunks.append(chunk)

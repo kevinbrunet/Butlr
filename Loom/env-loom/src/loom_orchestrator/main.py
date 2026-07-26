@@ -55,6 +55,8 @@ from loom_orchestrator.speaker_tracking import (
 )
 from loom_orchestrator.translation_llm import LlmTranslator
 from loom_orchestrator.tts_pocket import PocketTtsSynthesizer
+from loom_orchestrator.voice_personalization import PersonalizedVoiceManager
+from loom_orchestrator.voice_registry import VoiceRegistry
 
 # Orchestrateur réel (T2.3, ADR-0045) — adapte le flux de `bench/harness_pipeline_dual.py`
 # (séparation PixIT/SepFormer, référentiel de locuteurs ouvert avec EMA, WLK par identité,
@@ -69,10 +71,16 @@ from loom_orchestrator.tts_pocket import PocketTtsSynthesizer
 #
 # Hors scope (cf. ADR-0044 §"Extension cible", ADR-0045 §Consequences) : canal dédié
 # Bluetooth pour la voix de Kevin — cette version gère N locuteurs sur un seul périphérique
-# d'entrée partagé, le référentiel ouvert n'a de toute façon pas de nombre fixe. Toutes les
-# identités partagent la même voix Pocket TTS de repli (`estelle`, T3.1-T3.3 pas commencés) —
-# deux locuteurs qui se chevauchent sonneront comme la même voix qui se parle dessus, à ne
-# pas confondre avec un bug de mixage.
+# d'entrée partagé, le référentiel ouvert n'a de toute façon pas de nombre fixe.
+#
+# Personnalisation de voix par locuteur (ADR-0046, T3.1-T3.3) : chaque identité reçoit une
+# voix de pool distincte à la création (`PersonalizedVoiceManager.assign_fallback`), puis un
+# profil cloné personnalisé une fois assez d'audio source propre (sans chevauchement)
+# accumulé — reconnu automatiquement d'une session à l'autre via l'embedding de suivi
+# d'identité déjà calculé (ADR-0042/0044). ⚠ Qualité de synthèse FR non vérifiée pour les
+# presets de pool non-FR (clonage cross-lingue), et pas d'éviction si plus de
+# `MAX_LOADED_PERSONALIZED_VOICES` locuteurs personnalisés simultanés (reste sur la voix de
+# pool au-delà) — cf. ADR-0046.
 
 SEPARATION_WINDOW_S = 6.0
 ROUTE_EVERY_S = 1.0
@@ -159,6 +167,8 @@ async def run_live(
     embedder = SpeakerEmbedder()
     llm_translator = LlmTranslator()
     synth = PocketTtsSynthesizer()
+    voice_registry = VoiceRegistry.load()
+    voice_manager = PersonalizedVoiceManager(synth, voice_registry)
 
     if dry_run_wav is not None:
         sink = DryRunWavSink(dry_run_wav, synth.sample_rate_hz)
@@ -208,7 +218,10 @@ async def run_live(
             # premier jet appelait ceci depuis plusieurs tâches concurrentes et a provoqué un
             # crash CUDA dur dans llama.cpp — ne jamais paralléliser ces appels entre
             # identités, cf. docstring de `commit_worker`).
-            new_chunks, ttfc_s = await asyncio.to_thread(_consume_stream, synth, increment)
+            voice_state = voice_manager.get_voice_state(ident)
+            new_chunks, ttfc_s = await asyncio.to_thread(
+                _consume_stream, synth, increment, voice_state
+            )
             t_first_chunk = event_stage_t_in + ttfc_s
             segment_id = f"{session_id}-id{ident}-line{idx}-chunk{state.chunk_count}"
             logger.log(
@@ -303,6 +316,24 @@ async def run_live(
         consumer_tasks: list[asyncio.Task] = []
         final_queue: asyncio.Queue = asyncio.Queue()
 
+        # Tâches "tire et oublie" pour la personnalisation de voix (ADR-0046) : une par
+        # increment routé vers la branche audio propre de `route_window`, jamais sur le
+        # chemin critique STT/traduction (cf. "TTS en retard = dégradation contrôlée, jamais
+        # de blocage amont", `Loom/CLAUDE.md`). Références gardées explicitement (retirées à
+        # la fin via le callback) : sans ça, l'event loop peut garbage-collecter une tâche en
+        # cours d'exécution (mise en garde documentée d'`asyncio.create_task`).
+        voice_personalization_tasks: set[asyncio.Task] = set()
+
+        async def _update_voice_personalization(
+            ident: int, embedding: list[float], audio: "np.ndarray"
+        ) -> None:
+            try:
+                await asyncio.to_thread(voice_manager.on_clean_audio, ident, embedding, audio)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — isole une erreur de personnalisation
+                print(f"WARNING: on_clean_audio(id{ident}) a échoué ({exc!r}).")
+
         def _queue_latest(queue: asyncio.Queue, item: tuple) -> None:
             if queue.full():
                 try:
@@ -391,6 +422,7 @@ async def run_live(
                 identity_timeline.append([])
                 partial_queues.append(asyncio.Queue(maxsize=1))
                 consumer_tasks.append(asyncio.create_task(consume(new_ident)))
+                voice_manager.assign_fallback(new_ident)
                 print(f"Nouveau locuteur détecté : id{new_ident}")
 
         async def route_window(
@@ -478,6 +510,13 @@ async def run_live(
                 embedding_counts[active_ident] += 1
                 increment_audio = window[increment_start : increment_start + increment_len]
                 _record_send(active_ident, len(increment_audio), global_start_sample)
+                task = asyncio.create_task(
+                    _update_voice_personalization(
+                        active_ident, known_embeddings[active_ident], increment_audio
+                    )
+                )
+                voice_personalization_tasks.add(task)
+                task.add_done_callback(voice_personalization_tasks.discard)
                 await sessions[active_ident].processor.process_audio(
                     _pcm16_bytes(increment_audio)
                 )

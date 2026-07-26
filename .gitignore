@@ -42,3 +42,8 @@ carlson/fr_FR-gilles-low.onnx
 carlson/fr_FR-gilles-low.onnx.json
 carlson/fr_FR-siwis-medium.onnx
 carlson/fr_FR-siwis-medium.onnx.json
+
+# --- Loom (registre de voix personnalisées, ADR-0046) ---
+# Contient de l'audio vocal identifiable de vraies personnes (clips propres accumulés par
+# locuteur) + les états vocaux Pocket TTS clonés dérivés — jamais commité.
+Loom/env-loom/voice_profiles/

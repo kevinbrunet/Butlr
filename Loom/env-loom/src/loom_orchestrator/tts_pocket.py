@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
 
     import numpy as np
 
@@ -12,10 +13,11 @@ FALLBACK_VOICE = "estelle"
 
 
 class PocketTtsSynthesizer:
-    """Synthèse FR via Pocket TTS (ADR-0036) — Phase 1 : une seule voix FR de repli
-    (`estelle`), pas de clonage par locuteur (T3.1-T3.3 pas commencés, aucun `.safetensors`
-    exporté à ce jour). Le vrai registre de voix par `speaker_id` est un travail
-    d'orchestrateur (T2.3/T3.x), pas de ce composant.
+    """Synthèse FR via Pocket TTS (ADR-0036). Ce composant reste un client fin autour de
+    `TTSModel` — le registre de voix par locuteur (pool de repli + profils personnalisés
+    clonés, ADR-0046) est un travail d'orchestrateur (`voice_personalization.py`), pas de ce
+    composant : il expose seulement les primitives (cloner/exporter/charger un état vocal),
+    ne décide jamais lui-même quelle voix utiliser pour quel locuteur.
 
     ✓ Constaté par exécution réelle (premier run T2.3-préliminaire, 2026-07-15) : il n'existe
     pas de variante FR plus petite que 24 couches — `TTSModel.load_model(language="french")`
@@ -44,7 +46,9 @@ class PocketTtsSynthesizer:
         from pocket_tts import TTSModel
 
         self._model = TTSModel.load_model(language=language)
+        self._voice = voice
         self._voice_state = self._model.get_state_for_audio_prompt(voice)
+        self._named_voice_cache: dict[str, object] = {}
 
     @property
     def sample_rate_hz(self) -> int:
@@ -58,13 +62,19 @@ class PocketTtsSynthesizer:
         audio_tensor = self._model.generate_audio(self._voice_state, text)
         return audio_tensor.numpy()
 
-    def synthesize_stream(self, text: str) -> "Iterator[np.ndarray]":
+    def synthesize_stream(
+        self, text: str, voice_state: object | None = None
+    ) -> "Iterator[np.ndarray]":
         """Synthétise `text` (FR) en streaming : générateur de chunks audio (24kHz, cf.
         `sample_rate_hz`), pas un tenseur complet. Le délai avant le premier chunk produit
         (mesuré par l'appelant) est la métrique de budget réelle de ADR-0036 (p95 < 400ms),
         pas le temps total pour épuiser le générateur.
 
-        Chaque appel repart de l'état vocal initial (`copy_state` par défaut à `True` côté
+        `voice_state` : état vocal à utiliser pour cet appel (voix de pool ou profil
+        personnalisé, cf. `voice_personalization.py`, ADR-0046) — `None` (défaut) retombe sur
+        l'état de repli du constructeur (`self._voice_state`, historiquement `estelle`).
+
+        Chaque appel repart de l'état vocal fourni (`copy_state` par défaut à `True` côté
         Pocket TTS) : deux appels successifs ne s'enchaînent pas naturellement (silence/rupture
         de prosodie entre les deux) — c'est délibéré depuis 2026-07-25 (cf. Révisions
         ADR-0041) : `new_line_state()`/`synthesize_continuation()` (`copy_state=False`,
@@ -80,8 +90,56 @@ class PocketTtsSynthesizer:
         `bench/harness_tts_continuation.py` (sonde de régression) — ne plus les utiliser en
         production.
         """
-        for chunk in self._model.generate_audio_stream(self._voice_state, text):
+        state = voice_state if voice_state is not None else self._voice_state
+        for chunk in self._model.generate_audio_stream(state, text):
             yield chunk.numpy()
+
+    def clone_voice_state(self, audio: "np.ndarray") -> object:
+        """Construit un état vocal à partir d'un clip audio brut (mono, `sample_rate_hz`) —
+        clonage de voix (ADR-0046), pas un des presets nommés du constructeur.
+
+        ⚠ Non vérifié par exécution réelle (pas la machine cible) : `get_state_for_audio_prompt`
+        accepte `Path | str | torch.Tensor` d'après la doc officielle (README
+        kyutai-labs/pocket-tts, lu le 2026-07-25) — on lui passe donc un tenseur torch converti
+        depuis `audio`, sans écrire de fichier intermédiaire. Format/plage de valeurs attendus
+        (float32 [-1, 1], comme le reste de ce module) supposés identiques à `generate_audio`,
+        pas confirmés spécifiquement pour ce chemin. Opération lente (cf. doc officielle,
+        "relatively slow") — l'appelant doit passer par `asyncio.to_thread`, jamais depuis la
+        boucle événementielle (même règle que `synthesize`/`synthesize_stream`).
+        """
+        import torch
+
+        audio_tensor = torch.from_numpy(audio)
+        return self._model.get_state_for_audio_prompt(audio_tensor)
+
+    def export_voice_state(self, state: object, path: "Path") -> None:
+        """Exporte `state` en `.safetensors` (`export_model_state`, ADR-0036) pour un
+        rechargement rapide ultérieur via `load_voice_state`. ⚠ Non vérifié par exécution
+        réelle.
+        """
+        from pocket_tts import export_model_state
+
+        export_model_state(state, str(path))
+
+    def load_voice_state(self, path: "Path") -> object:
+        """Recharge un état vocal exporté par `export_voice_state`. ⚠ Non vérifié par
+        exécution réelle."""
+        return self._model.get_state_for_audio_prompt(str(path))
+
+    def get_named_voice_state(self, name: str) -> object:
+        """État vocal pour un preset nommé de Pocket TTS (ex. `alba`, `giovanni`... cf.
+        `voice_personalization.FALLBACK_VOICE_POOL`) — mis en cache par nom, `estelle` (le nom
+        du constructeur) n'a pas besoin d'un second chargement. `get_state_for_audio_prompt`
+        est documenté comme une opération relativement lente (README officiel) — d'où le
+        cache, chaque nom n'est chargé qu'une fois par process.
+        """
+        if name == self._voice:
+            return self._voice_state
+        cached = self._named_voice_cache.get(name)
+        if cached is None:
+            cached = self._model.get_state_for_audio_prompt(name)
+            self._named_voice_cache[name] = cached
+        return cached
 
     def new_line_state(self) -> object:
         """⚠ Ne plus utiliser en production (cf. Révisions ADR-0041, 2026-07-25) — conservée
