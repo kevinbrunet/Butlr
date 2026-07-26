@@ -41,7 +41,7 @@ Garde-fou mémoire GPU : `MAX_LOADED_PERSONALIZED_VOICES` (8) — au-delà, les 
 - Le registre persiste de l'audio vocal identifiable de vraies personnes (`voice_profiles/.raw.wav`) — jamais commité (`.gitignore`), rétention/suppression long terme pas tranchée (hors scope POC).
 - Pas d'éviction si `MAX_LOADED_PERSONALIZED_VOICES` est dépassé — un run avec plus de 8 locuteurs personnalisés simultanés dégrade silencieusement vers la voix de pool pour les identités en trop, sans erreur explicite au-delà du plafond lui-même.
 - `bench/harness_pipeline.py`/`bench/harness_pipeline_dual.py` ne bénéficient pas de la personnalisation (scope limité à `main.py`) — à étendre plus tard si utile pour valider en isolation.
-- `clone_voice_state`/`export_voice_state`/`load_voice_state` (`tts_pocket.py`) sont ⚠ non vérifiés par exécution réelle (pas la machine cible) — signature `torch.Tensor` confirmée par la doc officielle, mais format/plage de valeurs exacts attendus pas testés pour ce chemin spécifiquement.
+- `clone_voice_state` a nécessité deux itérations sur la machine cible pour trouver la bonne forme de tenseur (cf. Révisions) — ⚠ `export_voice_state`/`load_voice_state` restent non exercés par un run complet réussi au moment d'écrire ceci (aucun profil encore construit de bout en bout sans erreur).
 
 ## Alternatives considérées
 
@@ -59,7 +59,8 @@ Garde-fou mémoire GPU : `MAX_LOADED_PERSONALIZED_VOICES` (8) — au-delà, les 
      codec interne (`CompressionModel._encode_to_unquantized_latent`) attend `[batch, canal,
      temps]` (3D) — `AssertionError: expects audio of shape [B, C, T] but got
      torch.Size([1, 192000])`, capturée sans planter (aucun profil jamais construit).
-     Corrigé (`.unsqueeze(0).unsqueeze(0)`).
+     Corrigé (`.unsqueeze(0).unsqueeze(0)`) — ⚠ **corrigé une seconde fois ci-dessous, ce
+     premier correctif était encore faux.**
   2. ✓ La première version dispatchait `on_clean_audio` via `asyncio.create_task` en
      parallèle du reste des appels GPU (traduction, synthèse, séparation) — a provoqué un
      segfault dur (exit 139, pas de traceback Python) sur la machine cible. Même classe de
@@ -69,3 +70,20 @@ Garde-fou mémoire GPU : `MAX_LOADED_PERSONALIZED_VOICES` (8) — au-delà, les 
      par `commit_worker`, le même consommateur unique qui sérialise déjà
      `translate`/`synthesize_stream` — priorité la plus basse (traité seulement quand aucun
      commit de traduction n'attend).
+- 2026-07-26 — deux correctifs supplémentaires suite au second run réel sur `corpus b` :
+  1. ✓ Le correctif précédent (`.unsqueeze(0).unsqueeze(0)`, 2 dims ajoutées) était encore
+     faux : `AssertionError: ... got torch.Size([1, 1, 1, 192000])` (4D). Cause identifiée :
+     `get_state_for_audio_prompt` ajoute **lui-même** la dimension batch en interne — il
+     attend un tenseur `[canal, temps]` (2D) en entrée, pas `[temps]` (1D, premier essai, un
+     seul dim ajouté en interne → 2D observé) ni `[batch, canal, temps]` (3D, second essai,
+     un dim ajouté par-dessus → 4D observé). Un seul `unsqueeze(0)` (canal) est correct.
+  2. ✓ L'audio accumulé par `route_window` est à 16kHz (`speaker_separation.SAMPLE_RATE_HZ`),
+     jamais rééchantillonné vers la fréquence native de Pocket TTS (24kHz) avant clonage, et
+     `voice_personalization.py` utilisait `PocketTtsSynthesizer.sample_rate_hz` (24kHz) pour
+     calculer la durée d'audio accumulée — les deux bugs se combinaient pour faire franchir
+     un palier ~1,5x trop tôt (192000 échantillons à 16kHz = 12s réelles, comptées comme 8,0s
+     exactement, coïncidence qui a d'abord masqué le problème). Corrigé : `clone_voice_state`
+     prend désormais `source_sample_rate_hz` en paramètre et rééchantillonne en interne
+     (`torchaudio.functional.resample`) ; toute la durée/lecture/écriture WAV de
+     `voice_personalization.py` utilise `speaker_separation.SAMPLE_RATE_HZ`, jamais la
+     fréquence Pocket TTS.

@@ -94,23 +94,37 @@ class PocketTtsSynthesizer:
         for chunk in self._model.generate_audio_stream(state, text):
             yield chunk.numpy()
 
-    def clone_voice_state(self, audio: "np.ndarray") -> object:
-        """Construit un état vocal à partir d'un clip audio brut (mono, `sample_rate_hz`) —
-        clonage de voix (ADR-0046), pas un des presets nommés du constructeur.
+    def clone_voice_state(self, audio: "np.ndarray", source_sample_rate_hz: int) -> object:
+        """Construit un état vocal à partir d'un clip audio brut mono (à
+        `source_sample_rate_hz`, pas forcément `sample_rate_hz` — cf. rééchantillonnage
+        ci-dessous) — clonage de voix (ADR-0046), pas un des presets nommés du constructeur.
 
         ✓ Constaté par exécution réelle sur la machine cible (2026-07-26, cf. Révisions
-        ADR-0046) : `get_state_for_audio_prompt` accepte un `torch.Tensor` (confirmé par la
-        doc officielle) mais le codec interne (`CompressionModel._encode_to_unquantized_latent`)
-        attend `[batch, canal, temps]` (3D), pas un tenseur brut 1D — corrige la première
-        version de cette méthode (`AssertionError: expects audio of shape [B, C, T] but got
-        torch.Size([1, 192000])`, `on_clean_audio` capturait l'erreur sans planter, mais
-        aucun profil n'était jamais construit). Opération lente (cf. doc officielle,
-        "relatively slow") — l'appelant doit passer par `asyncio.to_thread`, jamais depuis la
-        boucle événementielle (même règle que `synthesize`/`synthesize_stream`).
+        ADR-0046, deux essais) : `get_state_for_audio_prompt` ajoute **lui-même** la dimension
+        batch en interne — il attend un tenseur `[canal, temps]` (2D) en entrée, pas `[temps]`
+        (1D, `AssertionError: ... got torch.Size([1, 192000])`, un seul dim ajouté en
+        interne) ni `[batch, canal, temps]` (3D, `... got torch.Size([1, 1, 1, 192000])`, un
+        dim ajouté par-dessus les 3 déjà présents). Un seul `unsqueeze(0)` (canal) est donc
+        correct ici.
+
+        Rééchantillonne vers `sample_rate_hz` (24kHz, la fréquence native de Pocket TTS) si
+        `source_sample_rate_hz` diffère — l'audio source accumulé par
+        `voice_personalization.py` est à 16kHz (fréquence WLK/séparation,
+        `speaker_separation.SAMPLE_RATE_HZ`), jamais la fréquence native de Pocket TTS.
+        Format/plage de valeurs (float32 `[-1, 1]`) supposés identiques à `generate_audio`.
+        Opération lente (cf. doc officielle, "relatively slow") — l'appelant doit passer par
+        `asyncio.to_thread`, jamais depuis la boucle événementielle (même règle que
+        `synthesize`/`synthesize_stream`).
         """
         import torch
+        import torchaudio
 
-        audio_tensor = torch.from_numpy(audio).float().unsqueeze(0).unsqueeze(0)
+        audio_tensor = torch.from_numpy(audio).float()
+        if source_sample_rate_hz != self._model.sample_rate:
+            audio_tensor = torchaudio.functional.resample(
+                audio_tensor, source_sample_rate_hz, self._model.sample_rate
+            )
+        audio_tensor = audio_tensor.unsqueeze(0)
         return self._model.get_state_for_audio_prompt(audio_tensor)
 
     def export_voice_state(self, state: object, path: "Path") -> None:

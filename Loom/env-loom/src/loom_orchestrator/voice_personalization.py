@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from loom_orchestrator.speaker_separation import SAMPLE_RATE_HZ as SOURCE_SAMPLE_RATE_HZ
 from loom_orchestrator.tts_pocket import PocketTtsSynthesizer
 from loom_orchestrator.voice_registry import (
     VoiceProfileRecord,
@@ -17,6 +18,14 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     import numpy as np
+
+# ⚠ Constaté par exécution réelle sur la machine cible (2026-07-26, cf. Révisions ADR-0046) :
+# l'audio accumulé ici vient de `route_window` (16kHz, `SOURCE_SAMPLE_RATE_HZ` ci-dessus),
+# jamais de `PocketTtsSynthesizer.sample_rate_hz` (24kHz, natif Pocket TTS) — utiliser la
+# mauvaise fréquence faussait la durée calculée (palier franchi ~1,5x trop tôt) et le
+# `.raw.wav` écrit/relu avec un framerate erroné. Toute durée/lecture/écriture WAV dans ce
+# module utilise `SOURCE_SAMPLE_RATE_HZ` ; seul `clone_voice_state` (tts_pocket.py) rééchantillonne
+# vers la fréquence native de Pocket TTS, juste avant l'appel à Pocket TTS lui-même.
 
 # Liste complète des voix prédéfinies Pocket TTS (README officiel kyutai-labs/pocket-tts, lu
 # le 2026-07-25) — `estelle` en premier (seule confirmée FR), le reste couvre EN/IT/ES/DE/PT.
@@ -188,9 +197,7 @@ class PersonalizedVoiceManager:
                 state.audio_seconds = match.audio_seconds
                 raw_path = self._registry.raw_audio_path(match.speaker_key)
                 if raw_path.exists():
-                    state.audio_chunks = [
-                        _read_wav_mono(raw_path, self._synth.sample_rate_hz)
-                    ]
+                    state.audio_chunks = [_read_wav_mono(raw_path, SOURCE_SAMPLE_RATE_HZ)]
                 if not at_capacity:
                     self._load_personal_state(ident, match.speaker_key)
                 return
@@ -199,7 +206,7 @@ class PersonalizedVoiceManager:
             return  # palier maximal déjà atteint, pas besoin de plus d'audio
 
         state.audio_chunks.append(audio)
-        state.audio_seconds += len(audio) / self._synth.sample_rate_hz
+        state.audio_seconds += len(audio) / SOURCE_SAMPLE_RATE_HZ
 
         new_tier = compute_tier(state.audio_seconds)
         if new_tier is state.tier:
@@ -222,7 +229,7 @@ class PersonalizedVoiceManager:
         import numpy as np
 
         full_audio = np.concatenate(state.audio_chunks)
-        voice_state = self._synth.clone_voice_state(full_audio)
+        voice_state = self._synth.clone_voice_state(full_audio, SOURCE_SAMPLE_RATE_HZ)
         self._personal_states[ident] = voice_state
 
         self._registry.directory.mkdir(parents=True, exist_ok=True)
@@ -232,7 +239,7 @@ class PersonalizedVoiceManager:
         _write_wav_mono(
             self._registry.raw_audio_path(state.speaker_key),
             full_audio,
-            self._synth.sample_rate_hz,
+            SOURCE_SAMPLE_RATE_HZ,
         )
         self._registry.upsert(
             VoiceProfileRecord(
