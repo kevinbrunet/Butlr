@@ -231,6 +231,11 @@ class PersonalizedVoiceManager:
         full_audio = np.concatenate(state.audio_chunks)
         voice_state = self._synth.clone_voice_state(full_audio, SOURCE_SAMPLE_RATE_HZ)
         self._personal_states[ident] = voice_state
+        print(
+            f"DEBUG voice_personalization: id{ident} -> voix personnalisée reconstruite "
+            f"(palier={state.tier.name}, {state.audio_seconds:.1f}s d'audio propre) — la "
+            f"voix active pour cette identité change à partir du prochain increment."
+        )
 
         self._registry.directory.mkdir(parents=True, exist_ok=True)
         self._synth.export_voice_state(
