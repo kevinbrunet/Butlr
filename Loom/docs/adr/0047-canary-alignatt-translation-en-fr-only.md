@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted
+Rejected (2026-08-15, cf. Révisions) — testé sur la machine cible, qualité EN→FR insuffisante. La
+traduction reste sur ADR-0043 (Qwen3-4B/`commit_policy.py`) sans changement. Chinois jamais resté hors
+périmètre au-delà de la durée de cette expérimentation.
 
 ## Context
 
@@ -199,3 +201,35 @@ le chinois si Kevin décide de le réactiver plus tard.
   sur l'alternative AlignAtt4LLM appliquée à Qwen3-4B (cf. Alternatives) plutôt que continuer à
   investiguer Canary — latence comparable au repli déjà validé, sans le gain de qualité espéré, et
   sans même avoir testé le vrai compromis streaming faute d'un harnais chunk-par-chunk.
+- 2026-08-15 — Kevin choisit l'alternative AlignAtt4LLM (arxiv 2606.03967) appliquée à Qwen3-4B
+  plutôt que de continuer à investiguer Canary. Recherche du dépôt de référence
+  (`QuentinFuxa/AlignAtt4LLM`) : l'implémentation publiée ne fait **pas** la stratégie légère
+  "span source explicite dans le prompt" (compatible n'importe quel framework, y compris
+  `llama-cpp-python`) — elle implémente la stratégie "capture Q/K en temps réel", en **patchant
+  directement l'implémentation d'attention de vLLM**. Pas portable vers `llama-cpp-python`. Et
+  vLLM a déjà été explicitement rejeté dans ce projet (cf. ADR-0043 §Context : backend `alignatt`
+  de WLK, Gemma+vLLM, ~40 Go de VRAM). Deux options posées à Kevin : réimplémenter la stratégie
+  "span dans le prompt" nous-mêmes sans code de référence (comme `alignatt.py` l'a été pour
+  Seamless), ou rouvrir la décision vLLM. **Question posée en retour par Kevin — "on gagne quoi
+  avec AlignAtt4LLM ?"** — analyse : `commit_policy.py` (ponctuation/pause, ADR-0043) est déjà
+  dans la cible de latence (p95=1313ms, 0 dépassement sur 365 mesures, `corpus a`) et n'a aucun
+  échec de qualité mesuré à ce jour ; le seul cas de qualité dégradée connu (`corpus b`,
+  chevauchement) est causé par la contamination STT en amont (ADR-0042/0044), un problème
+  qu'**aucune politique de commit ne peut résoudre**, AlignAtt inclus — la traduction, aussi bonne
+  soit la politique de commit, ne peut être meilleure que le texte WLK qu'elle reçoit. **Décision
+  finale : abandon complet de cette ADR.** Aucun gain identifié qui justifie le risque
+  (dépendance vLLM rejetée une fois, ou réimplémentation sans validation empirique) face au
+  problème réel non résolu. Code retiré (`translation_canary.py`, `bench/harness_canary.py`,
+  `STAGE_CANARY`) ; `Loom/CLAUDE.md` revenu au périmètre EN/ZH→FR sans restriction. Le chemin de
+  traduction actif reste ADR-0043 tel quel, inchangé. Prochaine piste à explorer si "traduire
+  correctement" reste l'objectif : re-tester ADR-0044 (séparation en amont de WLK) sur le chemin
+  `llm`, pas une nouvelle politique de commit.
+- 2026-08-15 — décision sur `[tool.uv] override-dependencies = ["pytorch-lightning>=2.0"]`
+  (`pyproject.toml`), seul changement de cette ADR qui **survit** à son abandon : Kevin choisit de
+  le garder (probablement une amélioration en soi — `pytorch-lightning==1.4.9` est une relique
+  imposée par `asteroid`, pas un choix délibéré) plutôt que de revenir au conflit initial, mais
+  demande une vérification avant de faire de nouveau confiance à ADR-0042/0044 tel quel :
+  `harness_separation.py` doit être re-passé sur `corpus g` (ou `b`) pour confirmer que la
+  séparation de voix (SepFormer/ECAPA-TDNN, `speechbrain`) et le repli pyannote fonctionnent
+  toujours avec ce `pytorch-lightning` plus récent. **Pas encore fait** — tâche de suivi ouverte,
+  indépendante du reste de cette ADR.
