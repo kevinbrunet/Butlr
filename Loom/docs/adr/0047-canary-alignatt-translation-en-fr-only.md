@@ -185,3 +185,17 @@ le chinois si Kevin décide de le réactiver plus tard.
   validé sur qualité, comparable en latence, sans le défaut de blocage `#15231` sur ce corpus. Le
   test `--no-streaming-policy` tranchera si c'est réparable (config de politique à ajuster) ou
   fondamental (pivoter vers AlignAtt4LLM/Qwen3-4B, cf. Alternatives).
+- 2026-08-15 — run `--no-streaming-policy` (décodage par défaut, sans AlignAtt) sur `corpus a` :
+  ✓ transcript **identique au caractère près** au run avec politique AlignAtt. Explication : le
+  harnais donne le segment de 10s **déjà complet** à `.transcribe()` avant tout décodage — il n'y
+  a donc jamais de "futur" audio que la politique streaming pourrait retenir, la contrainte
+  qu'AlignAtt est censée imposer ne s'applique pas dans ce mode de test (limite du harnais, pas
+  seulement du modèle — un vrai test du compromis latence/qualité demanderait de streamer l'audio
+  chunk par chunk en dessous de la durée du segment, pas encore fait). **Conclusion tranchée** :
+  le code-switching systématique n'est donc pas un artefact de la politique AlignAtt ni un réglage
+  à corriger — c'est la qualité de traduction EN→FR de `canary-1b-v2` lui-même sur ce contenu,
+  même à contexte complet, et elle est en dessous de Qwen3-4B déjà validé (ADR-0043). **Décision
+  proposée à Kevin, pas encore tranchée** : abandonner cette piste pour la traduction et basculer
+  sur l'alternative AlignAtt4LLM appliquée à Qwen3-4B (cf. Alternatives) plutôt que continuer à
+  investiguer Canary — latence comparable au repli déjà validé, sans le gain de qualité espéré, et
+  sans même avoir testé le vrai compromis streaming faute d'un harnais chunk-par-chunk.
