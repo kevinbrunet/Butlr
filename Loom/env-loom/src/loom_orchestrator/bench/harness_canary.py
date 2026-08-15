@@ -35,6 +35,7 @@ def run_benchmark(
     corpus_dir: Path = corpus.CORPUS_DIR,
     chunk_s: float = DEFAULT_CHUNK_S,
     target_lang: str = "fr",
+    use_streaming_policy: bool = True,
 ) -> CanaryBenchmarkResult:
     """Validation isolée de la qualité/latence de traduction Canary-1B-v2 (ADR-0047) — bypass
     complet de WLK : découpe le corpus en segments de `chunk_s` secondes (même approximation
@@ -65,7 +66,7 @@ def run_benchmark(
     transcript_path = out_dir / f"{run_id}.transcript.txt"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    translator = AlignAttCanaryTranslator()
+    translator = AlignAttCanaryTranslator(use_streaming_policy=use_streaming_policy)
 
     with EventLogger(log_path) as logger, transcript_path.open("w", encoding="utf-8") as transcript:
         for idx, chunk in enumerate(iter_duration_chunks(wav_path, chunk_s=chunk_s)):
@@ -101,6 +102,12 @@ def main() -> None:
     parser.add_argument("--corpus-dir", type=Path, default=corpus.CORPUS_DIR)
     parser.add_argument("--chunk-s", type=float, default=DEFAULT_CHUNK_S)
     parser.add_argument("--target-lang", default="fr")
+    parser.add_argument(
+        "--no-streaming-policy",
+        action="store_true",
+        help="Décodage par défaut (pas d'AlignAtt) — diagnostic pour isoler si le "
+        "code-switching observé vient de la politique streaming ou du modèle lui-même.",
+    )
     args = parser.parse_args()
 
     result = run_benchmark(
@@ -109,6 +116,7 @@ def main() -> None:
         args.corpus_dir,
         chunk_s=args.chunk_s,
         target_lang=args.target_lang,
+        use_streaming_policy=not args.no_streaming_policy,
     )
 
     events = load_events(result.log_path)

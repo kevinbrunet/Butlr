@@ -58,21 +58,32 @@ class AlignAttCanaryTranslator:
         model_name: str = MODEL_NAME,
         alignatt_thr: int = ALIGNATT_THR_DEFAULT,
         xatt_scores_layer: int = XATT_SCORES_LAYER_DEFAULT,
+        use_streaming_policy: bool = True,
     ) -> None:
         # ⚠ Import différé (comme les autres traducteurs) : `nemo_toolkit['asr']` chargé depuis
         # `env-loom` (déjà présent avant ADR-0047 pour Sortformer, cf. `pyproject.toml`).
         from nemo.collections.asr.models import EncDecMultiTaskModel
-        from nemo.collections.asr.parts.submodules.multitask_decoding import (
-            AEDStreamingDecodingConfig,
-        )
 
         self._model = EncDecMultiTaskModel.from_pretrained(model_name)
-        self._streaming_cfg = AEDStreamingDecodingConfig(
-            streaming_policy="alignatt",
-            alignatt_thr=alignatt_thr,
-            xatt_scores_layer=xatt_scores_layer,
-        )
-        self._model.change_decoding_strategy(self._streaming_cfg)
+
+        # ⚠ `use_streaming_policy=False` : diagnostic ajouté le 2026-08-15 (ADR-0047 Révisions)
+        # suite à un premier run montrant beaucoup d'anglais non traduit sur `corpus a` avec la
+        # politique AlignAtt — hypothèse à vérifier : commits précoces (faible latence) qui
+        # laissent le modèle sans assez de contexte pour décider de la traduction, donc il
+        # recopie le mot source. Décodage par défaut (pas de `change_decoding_strategy`) sert de
+        # point de comparaison, pas la configuration visée à terme (celle-ci ignore tout l'intérêt
+        # streaming/faible-latence d'AlignAtt).
+        if use_streaming_policy:
+            from nemo.collections.asr.parts.submodules.multitask_decoding import (
+                AEDStreamingDecodingConfig,
+            )
+
+            self._streaming_cfg = AEDStreamingDecodingConfig(
+                streaming_policy="alignatt",
+                alignatt_thr=alignatt_thr,
+                xatt_scores_layer=xatt_scores_layer,
+            )
+            self._model.change_decoding_strategy(self._streaming_cfg)
 
     def translate(self, audio: "np.ndarray", target_lang: str = "fr") -> str:
         """Traduit un segment audio 16kHz mono complet (pas de streaming — un seul appel,

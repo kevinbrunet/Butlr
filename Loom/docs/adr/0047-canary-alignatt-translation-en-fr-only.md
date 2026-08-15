@@ -165,3 +165,23 @@ le chinois si Kevin décide de le réactiver plus tard.
   chunk-par-chunk incrémental réel visé par la politique streaming — à confirmer. Prochain test :
   revenir à des segments de taille normale (`--chunk-s 10.0`, défaut) pour isoler "dégénère
   seulement sur audio très long en un bloc" de "qualité mauvaise en général".
+- 2026-08-15 — run avec segments de taille normale (`--chunk-s 10.0`, défaut, 19 segments
+  indépendants) : ✓ **plus de dégénérescence en boucle** — confirme que c'était spécifique au
+  traitement de 185s en un seul appel, pas un défaut du modèle sur des segments réalistes.
+  ✓ Latence bonne : p50=715,7ms/p95=934,8ms, 1 seul dépassement sur 19 (budget provisoire
+  1000ms) — comparable à Qwen3-4B (ADR-0043, p50=214-487ms/p95=572-1170ms selon le run). ⚠
+  Qualité lue par lecture directe du transcript : **code-switching systématique**, pas une erreur
+  isolée — de l'anglais laissé tel quel dans la quasi-totalité des 19 segments ("Alice était
+  beginning to get very excited", "Then elle looked at the sides of the well", "so she managed to
+  put it into one of the cupboards"). Nettement en dessous de Qwen3-4B sur ce même corpus
+  (ADR-0043 : "correcte et cohérente", une seule erreur isolée sur tout le fichier). Hypothèse non
+  vérifiée : la politique AlignAtt force des commits précoces (faible latence) avant que le modèle
+  ait vu assez de contexte pour décider de la traduction, et recopie le mot source faute de mieux
+  — sous-traduction, un coût connu des politiques incrémentales agressives, pas nécessairement un
+  défaut du modèle hors streaming. `use_streaming_policy=False` ajouté à
+  `AlignAttCanaryTranslator`/`--no-streaming-policy` à `harness_canary.py` pour isoler cette
+  hypothèse (décodage complet, sans contrainte de commit précoce) — pas encore testé. **Bilan
+  intermédiaire** : à ce stade, Canary+AlignAtt streaming est moins bon que le repli Qwen3-4B déjà
+  validé sur qualité, comparable en latence, sans le défaut de blocage `#15231` sur ce corpus. Le
+  test `--no-streaming-policy` tranchera si c'est réparable (config de politique à ajuster) ou
+  fondamental (pivoter vers AlignAtt4LLM/Qwen3-4B, cf. Alternatives).
