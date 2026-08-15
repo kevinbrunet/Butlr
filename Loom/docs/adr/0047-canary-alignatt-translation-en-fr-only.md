@@ -233,3 +233,10 @@ le chinois si Kevin décide de le réactiver plus tard.
   séparation de voix (SepFormer/ECAPA-TDNN, `speechbrain`) et le repli pyannote fonctionnent
   toujours avec ce `pytorch-lightning` plus récent. **Pas encore fait** — tâche de suivi ouverte,
   indépendante du reste de cette ADR.
+- 2026-08-15 — `harness_separation.py` re-passé sur `corpus g` (fedora2) après le changement de
+  `pytorch-lightning` : ✓ SepFormer-WHAMR + ECAPA-TDNN chargent et tournent sans erreur, latences
+  dans la même gamme que les mesures précédentes (séparation 30-387ms, embedding 5-188ms selon le
+  run). Un warning `Could not parse CUDA device string 'cuda'` apparaît (repli sur device 0) —
+  sans rapport avec `pytorch-lightning` (parsing interne à `speechbrain`), pas bloquant. **Dernier
+  point ouvert de cette ADR clos** : le fix `override-dependencies` peut être considéré fiable,
+  ADR-0042/0044 restent valides tels quels. Cette ADR (0047) est définitivement close.
