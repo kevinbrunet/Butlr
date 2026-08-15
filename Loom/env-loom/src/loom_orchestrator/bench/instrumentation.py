@@ -14,6 +14,7 @@ STAGE_TTS = "tts"
 STAGE_TRANSPORT = "transport"
 STAGE_SEAMLESS = "seamless"
 STAGE_TRANSLATE_LLM = "traduction-llm"
+STAGE_CANARY = "canary"
 
 # ⚠ STAGE_SEAMLESS : budget provisoire (ADR-0040 retire la traduction de l'étage WLK sans
 # établir de nouveau chiffre — la traduction n'y était de toute façon jamais mesurée
@@ -22,6 +23,8 @@ STAGE_TRANSLATE_LLM = "traduction-llm"
 # ⚠ STAGE_TRANSLATE_LLM (ADR-0043) : même budget provisoire de 1000ms repris tel quel, pas
 # encore mesuré — Seamless garde son propre étage (STAGE_SEAMLESS) tant que le remplacement
 # n'a pas été validé et basculé dans harness_pipeline.py (cf. ADR-0043 §Conséquences).
+# ⚠ STAGE_CANARY (ADR-0047) : même logique, budget provisoire de 1000ms repris tel quel, pas
+# encore mesuré — traducteur jamais exécuté (cf. `translation_canary.py`).
 BUDGET_MS: dict[str, int] = {
     STAGE_WLK: 1000,
     STAGE_ORCHESTRATOR: 100,
@@ -29,6 +32,7 @@ BUDGET_MS: dict[str, int] = {
     STAGE_TRANSPORT: 100,
     STAGE_SEAMLESS: 1000,
     STAGE_TRANSLATE_LLM: 1000,
+    STAGE_CANARY: 1000,
 }
 
 
