@@ -118,3 +118,16 @@ le chinois si Kevin décide de le réactiver plus tard.
 
 - 2026-08-15 — création, suite à la demande explicite de Kevin d'essayer Canary-1B-v2 + AlignAtt et de
   mettre le chinois en pause. Pas encore implémenté ni mesuré sur la machine cible.
+- 2026-08-15 — ⚠ conflit de dépendances confirmé sur fedora2 au premier `import nemo` après
+  rafraîchissement de `nemo-toolkit` (`uv lock --upgrade-package nemo-toolkit`) : `asteroid`
+  (tiré transitivement par `speechbrain`/`pyannote.audio[separation]`, ADR-0042/0044) impose
+  `pytorch-lightning==1.4.9`, incompatible avec le NeMo `main` récent (`ImportError:
+  cannot import name 'get_num_classes' from 'torchmetrics.utilities.data'`, module de compat
+  legacy `pytorch_lightning.metrics`). Confirme la préoccupation initiale de cette ADR (dépendance
+  neuve/instable) — pas sur l'axe attendu (nemo-toolkit lui-même), mais sur son interaction avec
+  `asteroid`, déjà présent avant cette ADR. Corrigé par `[tool.uv] override-dependencies =
+  ["pytorch-lightning>=2.0"]` dans `pyproject.toml` — force un PL récent pour tout le graphe. ⚠ Pas
+  encore vérifié si ça casse `asteroid` lui-même ou la séparation de voix déjà validée (ADR-0042/
+  0044) au runtime — à confirmer par `harness_separation.py` après ce changement, pas supposé sans
+  danger juste parce que l'import de `nemo` réussit maintenant. Toujours pas de mesure sur
+  `harness_canary.py` à ce stade.

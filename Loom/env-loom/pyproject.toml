@@ -72,5 +72,18 @@ asyncio_mode = "auto"
 line-length = 100
 target-version = "py312"
 
+# ⚠ ADR-0047 : `asteroid` (tiré transitivement par speechbrain/pyannote.audio[separation],
+# ADR-0042/0044) impose `pytorch-lightning==1.4.9`, incompatible avec le NeMo `main` récent
+# nécessaire au décodage streaming AlignAtt de Canary (import cassé : `pytorch_lightning.metrics`
+# essaie d'importer `torchmetrics.utilities.data.get_num_classes`, retiré des torchmetrics
+# récents — constaté sur fedora2, 2026-08-15). `override-dependencies` force un PL récent pour
+# tout le graphe, y compris `asteroid` — ⚠ pas vérifié si `asteroid` fonctionne réellement avec
+# un PL 2.x (probable puisqu'il n'est visiblement pas maintenu activement, ✓ 1.4.9 date de ~2021),
+# ni si les chemins de code d'`asteroid` sont réellement exercés au runtime par la séparation de
+# voix déjà validée (ADR-0042/0044) — à re-tester (`harness_separation.py`) après ce changement,
+# pas supposé sans danger juste parce que l'import réussit.
+[tool.uv]
+override-dependencies = ["pytorch-lightning>=2.0"]
+
 [tool.uv.sources]
 nemo-toolkit = { git = "https://github.com/NVIDIA/NeMo.git", rev = "main" }
