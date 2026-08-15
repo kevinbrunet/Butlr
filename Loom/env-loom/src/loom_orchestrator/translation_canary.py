@@ -14,15 +14,17 @@ MODEL_NAME = "nvidia/canary-1b-v2"
 # EN/ZH→FR. Ne pas ajouter "zh" ici sans relire l'ADR d'abord.
 SUPPORTED_SOURCE_LANGUAGES = frozenset({"en", "fr"})
 
-# Paramètres de la politique de décodage streaming native NeMo (`AEDStreamingDecodingConfig`,
-# policy="alignatt") — ✓ noms et valeurs par défaut lus dans la doc officielle NeMo ("Canary
-# Chunked and Streaming Decoding", 2026-08-15), cf. ADR-0047 §Context. ⚠ Jamais exécutés :
-# aucune confirmation par run réel que ces valeurs sont adaptées à notre cas (parole continue,
-# cible p95 1,5-2s) — point de départ documenté, pas calibré empiriquement (même statut que
-# `FRONTIER_FRAMES_DEFAULT` dans `alignatt.py` pour Seamless).
-CHUNK_SECS_DEFAULT = 2.0
-LEFT_CONTEXT_SECS_DEFAULT = 10.0
-RIGHT_CONTEXT_SECS_DEFAULT = 2.0
+# Paramètres de la politique de décodage streaming native NeMo (`AEDStreamingDecodingConfig`).
+# ✓ Noms de champs et valeurs par défaut confirmés le 2026-08-15 par introspection directe de
+# la dataclass sur la machine cible (`dataclasses.fields(AEDStreamingDecodingConfig)`) — PAS la
+# doc NeMo, qui s'est révélée fausse sur ce point précis (cf. ADR-0047 Révisions 2026-08-15) :
+# `policy=` n'existe pas (c'est `streaming_policy=`), et `chunk_secs`/`left_context_secs`/
+# `right_context_secs` (censés borner le coût par étape, argument central de la première version
+# de l'ADR-0047) **n'existent pas du tout** sur cette classe — la doc décrivait probablement une
+# fonctionnalité différente (chunking pour l'inférence longue, `chunk_len_in_secs`, pas la
+# politique de streaming elle-même). Aucune garantie de contexte borné n'est donc confirmée pour
+# l'instant — à vérifier empiriquement (coût par appel en fonction de la durée d'audio fournie),
+# pas à supposer comme pour Seamless (ADR-0041/0043).
 ALIGNATT_THR_DEFAULT = 8
 XATT_SCORES_LAYER_DEFAULT = -2
 
@@ -30,7 +32,7 @@ XATT_SCORES_LAYER_DEFAULT = -2
 class AlignAttCanaryTranslator:
     """Traduction speech-to-text EN→FR via `nvidia/canary-1b-v2` (NeMo), politique de
     décodage streaming AlignAtt **native** à NeMo (`AEDStreamingDecodingConfig`,
-    `policy="alignatt"`) — cf. ADR-0047.
+    `streaming_policy="alignatt"`) — cf. ADR-0047.
 
     Contrairement à `AlignAttSeamlessTranslator` (ADR-0041), qui ré-implémente AlignAtt à la
     main contre les tenseurs d'attention bruts de `transformers` (parce qu'aucune politique de
@@ -38,12 +40,13 @@ class AlignAttCanaryTranslator:
     ce module ne fait qu'appeler l'API NeMo documentée avec les bons paramètres, pas de calcul
     de frontière ici (`loom_orchestrator/alignatt.py` n'est pas utilisé sur ce chemin).
 
-    ⚠ **Aucune ligne de ce module n'a été exécutée** — écrit contre la documentation officielle
-    NeMo ("Canary Chunked and Streaming Decoding", lue le 2026-08-15) et le script d'exemple
-    `examples/asr/asr_chunked_inference/aed/speech_to_text_aed_streaming_infer.py` du dépôt
-    NVIDIA-NeMo/NeMo, jamais contre une exécution réelle ni une lecture du code source NeMo. À
-    vérifier/corriger au premier run sur la machine cible — même statut que
-    `speaker_separation.py` (ADR-0042) à sa création.
+    ✓ Chargement du modèle et construction de `AEDStreamingDecodingConfig` exécutés avec succès
+    sur la machine cible le 2026-08-15 (noms de champs corrigés par introspection directe, cf.
+    ADR-0047 Révisions — la doc NeMo s'est révélée fausse sur `policy=` et sur l'existence même
+    de `chunk_secs`/`left_context_secs`/`right_context_secs`, retirés). ⚠ `translate()` reste
+    non vérifié par exécution — signature exacte de `.transcribe()` (kwargs `source_lang`/
+    `target_lang`/`task`/`pnc`, format de `hypotheses[0]`) toujours écrite contre la doc
+    HuggingFace du modèle uniquement.
 
     ⚠ Bug connu non résolu au 2026-08-15 (`NVIDIA-NeMo/NeMo#15231`) : le décodage streaming
     AlignAtt sur `canary-1b-v2` se bloquerait après ~20-40s sur de l'audio continu long. Premier
@@ -53,32 +56,19 @@ class AlignAttCanaryTranslator:
     def __init__(
         self,
         model_name: str = MODEL_NAME,
-        chunk_secs: float = CHUNK_SECS_DEFAULT,
-        left_context_secs: float = LEFT_CONTEXT_SECS_DEFAULT,
-        right_context_secs: float = RIGHT_CONTEXT_SECS_DEFAULT,
         alignatt_thr: int = ALIGNATT_THR_DEFAULT,
         xatt_scores_layer: int = XATT_SCORES_LAYER_DEFAULT,
     ) -> None:
-        # ⚠ Import différé (comme les autres traducteurs) : `nemo_toolkit['asr']` est une
-        # dépendance lourde, neuve dans `env-loom` (jamais installée avant ADR-0047) — pas de
-        # garantie qu'elle coexiste sans conflit avec les versions torch/torchaudio déjà
-        # pinnées par WhisperLiveKit/SpeechBrain/`llama-cpp-python` (cf. ADR-0047 §Consequences).
+        # ⚠ Import différé (comme les autres traducteurs) : `nemo_toolkit['asr']` chargé depuis
+        # `env-loom` (déjà présent avant ADR-0047 pour Sortformer, cf. `pyproject.toml`).
         from nemo.collections.asr.models import EncDecMultiTaskModel
-
-        # ⚠ Nom de classe/paramètres du constructeur de la politique de streaming non confirmés
-        # par exécution — `AEDStreamingDecodingConfig` d'après la doc NeMo, chemin d'import
-        # exact (`nemo.collections.asr.parts.submodules...` ou équivalent) à corriger au
-        # premier run si celui-ci échoue.
         from nemo.collections.asr.parts.submodules.multitask_decoding import (
             AEDStreamingDecodingConfig,
         )
 
         self._model = EncDecMultiTaskModel.from_pretrained(model_name)
         self._streaming_cfg = AEDStreamingDecodingConfig(
-            policy="alignatt",
-            chunk_secs=chunk_secs,
-            left_context_secs=left_context_secs,
-            right_context_secs=right_context_secs,
+            streaming_policy="alignatt",
             alignatt_thr=alignatt_thr,
             xatt_scores_layer=xatt_scores_layer,
         )

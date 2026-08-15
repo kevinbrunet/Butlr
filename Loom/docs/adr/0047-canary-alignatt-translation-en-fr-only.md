@@ -17,15 +17,19 @@ traduction simultanée de la parole. Piste retenue par Kevin : **Canary-1B-v2** 
 CC-BY-4.0, poids publics sur Hugging Face) combiné à la politique **AlignAtt** (Papi et al., Interspeech
 2023, arxiv 2305.11408 — déjà l'algorithme derrière ADR-0041/`alignatt.py`).
 
-✓ Vérifié par documentation officielle NeMo (page "Canary Chunked and Streaming Decoding", lue le
+~ D'après la documentation officielle NeMo (page "Canary Chunked and Streaming Decoding", lue le
 2026-08-15) : contrairement à notre intégration Seamless (ADR-0041), qui ré-encode l'intégralité de
 l'audio disponible à chaque poll (cause structurelle confirmée de l'OOM ayant motivé ADR-0043), NeMo
 expose une politique de décodage streaming **native** pour Canary via `AEDStreamingDecodingConfig`
-(`policy="alignatt"`), à contexte **borné** : `chunk_secs=2.0`, `left_context_secs=10.0`,
-`right_context_secs=2.0`, `alignatt_thr=8`, `xatt_scores_layer=-2`. Le coût par étape ne grandit donc
-a priori pas avec la durée totale de la ligne — la propriété précise qui manquait à notre intégration
-Seamless. ⚠ Comportement exact du cache encodeur entre chunks non confirmé par exécution réelle,
-seulement par lecture de doc — à vérifier au premier run.
+(`streaming_policy="alignatt"`, `alignatt_thr=8`, `xatt_scores_layer=-2`). **Correction (2026-08-15,
+cf. Révisions)** : la première version de ce paragraphe affirmait un contexte **borné**
+(`chunk_secs`/`left_context_secs`/`right_context_secs`) comme argument central — introspection
+directe de la dataclass sur la machine cible a montré que ces trois champs **n'existent pas** sur
+`AEDStreamingDecodingConfig`. La doc décrivait probablement une fonctionnalité différente (chunking
+pour l'inférence longue, `chunk_len_in_secs`), pas la politique de streaming elle-même. **Aucune
+garantie de coût borné n'est donc confirmée** pour Canary à ce stade — la propriété qui manquait à
+Seamless n'est pas démontrée résolue ici, seulement plausible (NeMo porte quand même la logique de
+frontière nativement, cf. Decision/Consequences) et reste à mesurer empiriquement, pas à supposer.
 
 ⚠ Canary-1B-v2 ne couvre que 25 langues européennes (dont l'anglais et le français) — **le mandarin
 n'est pas supporté** (vérifié sur la fiche HuggingFace `nvidia/canary-1b-v2`, lue le 2026-08-15).
@@ -131,3 +135,15 @@ le chinois si Kevin décide de le réactiver plus tard.
   0044) au runtime — à confirmer par `harness_separation.py` après ce changement, pas supposé sans
   danger juste parce que l'import de `nemo` réussit maintenant. Toujours pas de mesure sur
   `harness_canary.py` à ce stade.
+- 2026-08-15 — modèle chargé avec succès sur fedora2 (dépendances débloquées), mais
+  `AEDStreamingDecodingConfig(policy="alignatt", chunk_secs=..., left_context_secs=...,
+  right_context_secs=...)` a échoué (`TypeError: unexpected keyword argument 'policy'`).
+  Introspection directe de la dataclass (`dataclasses.fields`) sur la machine cible : le champ
+  s'appelle `streaming_policy`, pas `policy` — et surtout, **`chunk_secs`/`left_context_secs`/
+  `right_context_secs` n'existent pas du tout** sur cette classe (champs réels :
+  `streaming_policy`, `alignatt_thr`, `waitk_lagging`, `exclude_sink_frames`,
+  `xatt_scores_layer`, `max_tokens_per_alignatt_step`, `max_generation_length`,
+  `use_avgpool_for_alignatt`, `hallucinations_detector`). **Corrige à la baisse la confiance du
+  §Context** : l'argument "contexte borné, évite le défaut de Seamless" reposait sur une lecture
+  de doc erronée — pas confirmé pour l'instant. `translation_canary.py` corrigé avec les noms
+  réels. `translate()` (appel à `.transcribe()`) reste non exécuté.
