@@ -147,3 +147,21 @@ le chinois si Kevin décide de le réactiver plus tard.
   §Context** : l'argument "contexte borné, évite le défaut de Seamless" reposait sur une lecture
   de doc erronée — pas confirmé pour l'instant. `translation_canary.py` corrigé avec les noms
   réels. `translate()` (appel à `.transcribe()`) reste non exécuté.
+- 2026-08-15 — premier run réel de `translate()` sur fedora2 (`corpus a`, `--chunk-s 999` — tout
+  le fichier, ~185s, en un seul appel `.transcribe()`) : ✓ **le bug `NVIDIA-NeMo/NeMo#15231` ne
+  se reproduit pas ici** — pas de blocage, latence mesurée 5,08s pour tout le fichier (`n=1`, cf.
+  log). ⚠ Mais qualité inutilisable en l'état : sortie constatée par lecture directe du transcript
+  — mélange anglais/français non traduit ("elle peeped into le book her sister was reading"), puis
+  dégénérescence en boucle de répétition ("elle se trouvait sur la banque" ×20+) à partir d'un
+  certain point, même mode de dégénérescence autoregressive déjà documenté pour Seamless (ADR-0040,
+  corrigé à l'époque par `no_repeat_ngram_size`/`repetition_penalty` sur `generate()` — pas
+  d'équivalent appliqué ici, aucun mécanisme de ce type identifié dans les champs de
+  `AEDStreamingDecodingConfig`). Nettement en dessous de la qualité déjà validée pour Qwen3-4B sur
+  ce même corpus (ADR-0043 : "correcte et cohérente"). ⚠ Cause pas isolée : ce test traduit 185s
+  d'audio en un seul appel `.transcribe()` — plausible que le modèle dégénère spécifiquement sur
+  un segment aussi long traité d'un bloc (jamais vu à l'entraînement), pas nécessairement sur des
+  segments de taille normale. `strategy: beam`/`beam_size: 1` affiché dans les logs suggère aussi
+  que `.transcribe()` fait un décodage beam classique sur tout l'audio encodé, pas forcément le
+  chunk-par-chunk incrémental réel visé par la politique streaming — à confirmer. Prochain test :
+  revenir à des segments de taille normale (`--chunk-s 10.0`, défaut) pour isoler "dégénère
+  seulement sur audio très long en un bloc" de "qualité mauvaise en général".
