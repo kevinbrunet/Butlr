@@ -10,6 +10,26 @@ if TYPE_CHECKING:
 
 MODEL_LANGUAGE = "french_24l"
 FALLBACK_VOICE = "estelle"
+# Garde-fou de durée (Pocket TTS >= 4.0, paramètre `stop` de `generate_audio_stream`) : au-delà
+# de ce budget pour un texte donné, la génération est interrompue. ✓ Constaté le 2026-10-26
+# (sonde isolée, corpus a, Pocket TTS 4.0.1) : avec une voix clonée depuis de l'anglais, le
+# modèle `french_24l` n'émet souvent pas de fin de séquence et génère jusqu'à sa longueur
+# maximale (2,7 s d'audio pour « Oui, », 9,7 s pour 14 mots), bloquant le consommateur unique
+# du pipeline. ⚠ Valeurs non calibrées : ~2,5 mots/s en français parlé, marge x2.
+MAX_SPEECH_S_PER_WORD = 0.8
+MAX_SPEECH_EXTRA_S = 1.5
+
+
+def _to_numpy(tensor: object) -> "np.ndarray":
+    """Tenseur Pocket TTS (CPU ou GPU) -> numpy ; sans copie quand il est déjà sur CPU."""
+    return tensor.detach().cpu().numpy()
+
+
+def max_speech_samples(text: str, sample_rate_hz: int) -> int:
+    """Budget d'audio, en échantillons, au-delà duquel une synthèse de `text` est jugée
+    partie en boucle — pur."""
+    words = max(1, len(text.split()))
+    return int((MAX_SPEECH_S_PER_WORD * words + MAX_SPEECH_EXTRA_S) * sample_rate_hz)
 
 
 class PocketTtsSynthesizer:
@@ -42,10 +62,25 @@ class PocketTtsSynthesizer:
     par `asyncio.to_thread` (ou itérer `synthesize_stream()` depuis un thread dédié).
     """
 
-    def __init__(self, language: str = MODEL_LANGUAGE, voice: str = FALLBACK_VOICE) -> None:
+    def __init__(
+        self, language: str = MODEL_LANGUAGE, voice: str = FALLBACK_VOICE, device: str = "cuda"
+    ) -> None:
+        """`device` : "cuda" (défaut depuis ADR-0051) ou "cpu" (ADR-0036 historique).
+
+        ✓ Pas d'argument `device` dans `TTSModel.load_model()` (Pocket TTS 4.0.1) : la doc
+        officielle (section « Running on GPU ») déplace le modèle à la main, `TTSModel` étant
+        un `nn.Module` ; non supporté officiellement. Les morceaux générés sont alors sur le
+        GPU et doivent être ramenés sur le CPU avant `.numpy()` (`_to_numpy`).
+        """
+        import torch
         from pocket_tts import TTSModel
 
         self._model = TTSModel.load_model(language=language)
+        if device == "cuda" and not torch.cuda.is_available():
+            print("WARNING tts: CUDA indisponible, Pocket TTS reste sur CPU.")
+            device = "cpu"
+        self._model.to(device)
+        self.device = device
         self._voice = voice
         self._voice_state = self._model.get_state_for_audio_prompt(voice)
         self._named_voice_cache: dict[str, object] = {}
@@ -60,7 +95,7 @@ class PocketTtsSynthesizer:
         ADR-0036 — cf. `synthesize_stream()`.
         """
         audio_tensor = self._model.generate_audio(self._voice_state, text)
-        return audio_tensor.numpy()
+        return _to_numpy(audio_tensor)
 
     def synthesize_stream(
         self, text: str, voice_state: object | None = None
@@ -90,9 +125,23 @@ class PocketTtsSynthesizer:
         `bench/harness_tts_continuation.py` (sonde de régression) — ne plus les utiliser en
         production.
         """
+        import threading
+
         state = voice_state if voice_state is not None else self._voice_state
-        for chunk in self._model.generate_audio_stream(state, text):
-            yield chunk.numpy()
+        stop = threading.Event()
+        budget = max_speech_samples(text, self.sample_rate_hz)
+        produced = 0
+        for chunk in self._model.generate_audio_stream(state, text, stop=stop):
+            if stop.is_set():
+                continue  # on laisse le générateur finir proprement (fils de décodage)
+            produced += chunk.shape[-1]
+            yield _to_numpy(chunk)
+            if produced >= budget:
+                stop.set()
+                print(
+                    f"WARNING tts: synthèse coupée à {produced / self.sample_rate_hz:.1f}s "
+                    f"(budget dépassé, fin de séquence jamais émise ?) pour {text[:60]!r}"
+                )
 
     def clone_voice_state(self, audio: "np.ndarray", source_sample_rate_hz: int) -> object:
         """Construit un état vocal à partir d'un clip audio brut mono (à
@@ -188,4 +237,4 @@ class PocketTtsSynthesizer:
         `new_line_state()`, jamais de l'état interne partagé de ce synthesizer.
         """
         for chunk in self._model.generate_audio_stream(state, text, copy_state=False):
-            yield chunk.numpy()
+            yield _to_numpy(chunk)

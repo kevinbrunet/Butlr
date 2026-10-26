@@ -3,7 +3,7 @@ name = "loom-env"
 version = "0.0.1"
 description = "Environnement unique Loom : WhisperLiveKit + Pocket TTS embarqués en bibliothèque, orchestrateur asyncio (cf. ADR-0039)."
 requires-python = ">=3.12,<3.13"
-license = { file = "../../LICENSE" }
+license = { file = "../../../LICENSE" }
 authors = [{ name = "Kevin Brunet" }]
 # ⚠ Noms de package PyPI et extras repris tels quels de la spec/recherche externe,
 #   non vérifiés par une install réelle à ce stade (cf. T0.1/T1.1).
@@ -50,6 +50,9 @@ dependencies = [
     # qu'évalué indépendamment : API numpy-friendly (tableaux directs, pas de struct.pack
     # manuel comme PyAudio), callbacks entrée/sortie natifs.
     "sounddevice>=0.4",
+    # Variante STT Voxtral (ADR-0049) : client websocket du serveur vLLM
+    # (`/v1/realtime`) — le modèle tourne dans `Loom/voxtral-server/`, pas dans ce venv.
+    "websockets>=13",
 ]
 
 [project.optional-dependencies]
@@ -84,6 +87,11 @@ target-version = "py312"
 # pas supposé sans danger juste parce que l'import réussit.
 [tool.uv]
 override-dependencies = ["pytorch-lightning>=2.0"]
+# ruff figé : 0.17 active par défaut des règles (UP037...) que le code n'a jamais suivies ;
+# même version que `mono/env-loom` (ADR-0048).
+constraint-dependencies = ["ruff==0.15.21"]
 
 [tool.uv.sources]
-nemo-toolkit = { git = "https://github.com/NVIDIA/NeMo.git", rev = "main" }
+# Figé sur le commit validé (fedora2) plutôt que `main` : une résolution ne doit pas changer
+# NeMo à notre insu (cf. ci-dessous, WhisperLiveKit figé pour la même raison).
+nemo-toolkit = { git = "https://github.com/NVIDIA/NeMo.git", rev = "71820fbc750b1623b7746958a03cb25788942f90" }

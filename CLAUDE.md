@@ -38,7 +38,7 @@ Si une décision change, **mets à jour l'ADR** (ou crée-en un nouveau). Ne mod
 | LLM runtime | llama.cpp server (OpenAI-compat, CUDA) | Qwen 2.5 7B Instruct GGUF Q5_K_M ; flag `--jinja` pour tool calling |
 | Scripts setup | Bash (Fedora Workstation) | `scripts/` — requiert CUDA Toolkit, cmake, jq, curl |
 | `Alveus` | .NET, ASP.NET Core | Voir `Alveus/docs/architecture.md`. |
-| `Loom` | Python 3.12, `uv`, WhisperLiveKit, Pocket TTS | Un seul process/venv (`env-loom/`) — bibliothèques embarquées, pas de serveur (cf. ADR-0039). Voir `Loom/CLAUDE.md`. |
+| `Loom` | Python 3.12, `uv`, WhisperLiveKit ou Voxtral Realtime, Pocket TTS | Deux sous-projets, `mono/` et `multi/` (ADR-0048), chacun en un process/venv aux bibliothèques embarquées (ADR-0039) ; variante `--stt voxtral` cliente du serveur vLLM `voxtral-server/` (ADR-0049). Voir `Loom/CLAUDE.md`. |
 
 ## Conventions importantes
 

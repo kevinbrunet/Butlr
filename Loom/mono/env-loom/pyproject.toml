@@ -1,0 +1,58 @@
+[project]
+name = "loom-mono"
+version = "0.0.1"
+description = "Loom mono-locuteur (ADR-0048) : STT (WhisperLiveKit embarqué ou client Voxtral, ADR-0049) + traduction Qwen (llama.cpp) + Pocket TTS à voix clonée progressivement — sans séparation, empreinte vocale, suivi d'identité ni diarisation."
+requires-python = ">=3.12,<3.13"
+license = { file = "../../../LICENSE" }
+authors = [{ name = "Kevin Brunet" }]
+# Dépendances de `multi/env-loom` moins tout ce qui servait à isoler une voix (ADR-0048) :
+# speechbrain (SepFormer, ECAPA), pyannote.audio (séparation), nemo-toolkit et l'extra
+# `diarization-sortformer` de WhisperLiveKit (diarisation), et transformers/sentencepiece
+# (Seamless, abandonné depuis ADR-0043). torchaudio est explicite : `tts_pocket.clone_voice_state`
+# l'importe, multi l'obtenait transitivement par speechbrain/NeMo.
+# ⚠ llama-cpp-python : même build CUDA que multi (`CMAKE_ARGS="-DGGML_CUDA=on" uv sync`).
+dependencies = [
+    "whisperlivekit",
+    "pocket-tts",
+    "pydantic>=2.6",
+    "numpy>=2.0",
+    "torchaudio",
+    "llama-cpp-python>=0.3",
+    "huggingface-hub>=0.24",
+    "sounddevice>=0.4",
+    # Variante STT Voxtral (ADR-0049) : client websocket du serveur `Loom/voxtral-server/`.
+    "websockets>=13",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.4"]
+
+[project.scripts]
+loom-mono = "loom_orchestrator.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/loom_orchestrator"]
+
+[tool.uv]
+# Versions figées explicitement (pas de dérive silencieuse d'une résolution à l'autre).
+# 2026-10-26 : passées aux dernières publiées sur PyPI à la demande de Kevin (Pocket TTS
+# 2.1.0 -> 4.0.1, WLK 0.2.24 -> 0.2.26, llama-cpp-python 0.3.34 -> 0.3.36, torch 2.13.0 ->
+# 2.14.1) ; ✓ API de Pocket TTS utilisée par `tts_pocket.py` inchangée (lecture du code
+# source 4.0.1) ; ~ comportement changé (modèles FR réentraînés en 3.2.0, température 0,3).
+# torchaudio 2.11.0 reste la dernière version publiée.
+constraint-dependencies = [
+    "whisperlivekit==0.2.26",
+    "pocket-tts==4.0.1",
+    "llama-cpp-python==0.3.36",
+    "torch==2.14.1",
+    "torchaudio==2.11.0",
+    "faster-whisper==1.2.1",
+    "ruff==0.15.21",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

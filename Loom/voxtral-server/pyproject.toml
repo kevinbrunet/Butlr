@@ -1,0 +1,23 @@
+[project]
+name = "loom-voxtral-server"
+version = "0.0.1"
+description = "Serveur vLLM de Voxtral Realtime pour les variantes Voxtral de Loom (ADR-0049) : environnement séparé de mono/ et multi/, qui n'en sont que clients websocket."
+requires-python = ">=3.12,<3.13"
+license = { file = "../../LICENSE" }
+authors = [{ name = "Kevin Brunet" }]
+# ✓ Dépendances reprises de la fiche du modèle mistralai/Voxtral-Mini-4B-Realtime-2602 (lue le
+#   2026-10-26) : vllm (tire mistral_common >= 1.9.0), soxr/librosa/soundfile, transformers v5
+#   recommandé. Environnement séparé précisément parce que Loom fige transformers 4.57
+#   (WhisperLiveKit, NeMo) — cf. ADR-0049.
+dependencies = [
+    "vllm==0.32.0",
+    # ✓ vllm 0.32.0 exige transformers >= 5.16.1, < 5.20.0 (résolution uv, 2026-10-26).
+    "transformers>=5.2",
+    "soxr",
+    "librosa",
+    "soundfile",
+]
+
+[tool.uv]
+package = false
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]

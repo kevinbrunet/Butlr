@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — supersedes [ADR 0033](0033-whisperlivekit-stt-diarization-translation.md), [ADR 0037](0037-asyncio-orchestration-no-pipecat.md)
+Accepted — supersedes [ADR 0033](0033-whisperlivekit-stt-diarization-translation.md), [ADR 0037](0037-asyncio-orchestration-no-pipecat.md) — partiellement superseded par [ADR 0049](0049-voxtral-realtime-stt-variant-vllm-server.md) pour la seule variante `--stt voxtral` (STT servi par vLLM, websocket local)
 
 ## Context
 

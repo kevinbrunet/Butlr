@@ -9,7 +9,7 @@ services:
       - LOOM_LANGUAGE=auto  # cf. ADR-0033/0039 — repli manuel EN/ZH si l'auto-détection échoue sur le ZH
     volumes:
       - ./voices:/voices
-      - ./corpus:/app/corpus:ro
+      - ../corpus:/app/corpus:ro
     deploy:
       resources:
         reservations:

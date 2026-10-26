@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted — partiellement superseded par [ADR 0050](0050-pocket-tts-4-voice-cloning-off-by-default.md) : personnalisation optionnelle (`--voice-clone`) depuis Pocket TTS 4.0.1
 
 ## Context
 

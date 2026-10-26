@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted — partiellement superseded par [ADR 0051](0051-pocket-tts-on-gpu.md) : Pocket TTS sur GPU par défaut (`--tts-device cpu` pour revenir)
 
 ## Context
 

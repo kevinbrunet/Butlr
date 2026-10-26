@@ -22,6 +22,7 @@ from loom_orchestrator.audio_io import (
     list_devices,
 )
 from loom_orchestrator.bench import corpus
+from loom_orchestrator.compat import patch_wlk_sortformer_state
 from loom_orchestrator.bench.instrumentation import (
     STAGE_TRANSLATE_LLM,
     STAGE_TTS,
@@ -53,6 +54,8 @@ from loom_orchestrator.speaker_tracking import (
     update_ema_embedding,
     update_running_embedding,
 )
+from loom_orchestrator.stt_voxtral import DEFAULT_URL as VOXTRAL_DEFAULT_URL
+from loom_orchestrator.stt_voxtral import VoxtralRealtimeProcessor
 from loom_orchestrator.translation_llm import LlmTranslator
 from loom_orchestrator.tts_pocket import PocketTtsSynthesizer
 from loom_orchestrator.voice_personalization import PersonalizedVoiceManager
@@ -95,7 +98,7 @@ class IdentitySession:
     de harness_pipeline.py, mais tenu par identité plutôt que par ligne WLK d'un flux
     unique."""
 
-    processor: AudioProcessor
+    processor: "AudioProcessor | VoxtralRealtimeProcessor"
     commit_state: dict[int, LineCommitState] = field(default_factory=dict)
     known_texts: list[str] = field(default_factory=list)
     sealed: set[int] = field(default_factory=set)
@@ -125,6 +128,10 @@ async def run_live(
     target_lang: str,
     lan: str,
     separator_backend: str,
+    stt: str,
+    voxtral_url: str,
+    tts_device: str,
+    voice_clone: bool,
     input_device: "int | str | None",
     output_device: "int | str | None",
     dry_run_wav: Path | None,
@@ -146,11 +153,23 @@ async def run_live(
 
     # cf. bench/harness_pipeline_dual.py — même raisonnement pour désactiver Sortformer
     # quand separator_backend="pyannote" (ADR-0044 §Révisions 2026-07-17).
-    use_sortformer = separator_backend != "pyannote"
-    engine_kwargs = {"pcm_input": True, "diarization": use_sortformer, "lan": lan}
-    if use_sortformer:
-        engine_kwargs["diarization_backend"] = "sortformer"
-    engine = TranscriptionEngine(**engine_kwargs)
+    # Variante Voxtral (ADR-0049) : pas de moteur WLK ni de Sortformer — la séparation et le
+    # routage par identité restent en amont, chaque identité a sa session Voxtral.
+    engine = None
+    if stt == "wlk":
+        patch_wlk_sortformer_state()
+        use_sortformer = separator_backend != "pyannote"
+        engine_kwargs = {"pcm_input": True, "diarization": use_sortformer, "lan": lan}
+        if use_sortformer:
+            engine_kwargs["diarization_backend"] = "sortformer"
+        engine = TranscriptionEngine(**engine_kwargs)
+    elif stt != "voxtral":
+        raise ValueError(f"stt inconnu : {stt!r} — attendu 'wlk' ou 'voxtral'")
+
+    def _new_processor(ident: int) -> "AudioProcessor | VoxtralRealtimeProcessor":
+        if engine is not None:
+            return AudioProcessor(transcription_engine=engine, mode="full")
+        return VoxtralRealtimeProcessor(url=voxtral_url, speaker=str(ident))
 
     sessions: list[IdentitySession] = []
     if separator_backend == "pyannote":
@@ -166,7 +185,7 @@ async def run_live(
         )
     embedder = SpeakerEmbedder()
     llm_translator = LlmTranslator()
-    synth = PocketTtsSynthesizer()
+    synth = PocketTtsSynthesizer(device=tts_device)
     voice_registry = VoiceRegistry.load()
     voice_manager = PersonalizedVoiceManager(synth, voice_registry)
 
@@ -325,6 +344,7 @@ async def run_live(
         # entre tâches. Tout appel touchant Pocket TTS passe maintenant par le même
         # consommateur unique que `translate`/`synthesize_stream`, sans exception.
         voice_personalization_queue: asyncio.Queue = asyncio.Queue(maxsize=8)
+        stop_requested = asyncio.Event()
 
         def _queue_latest(queue: asyncio.Queue, item: tuple) -> None:
             if queue.full():
@@ -343,8 +363,21 @@ async def run_live(
             (`GGML_ASSERT(buffer) failed`, cf. ADR-0044 §Révisions) — et une première version
             de la personnalisation de voix, dispatchée en tâche parallèle plutôt que par ce
             worker, a provoqué un segfault (exit 139) pour la même raison (cf. Révisions
-            ADR-0046)."""
+            ADR-0046).
+
+            S'arrête d'elle-même (`stop_requested`, files vides) au lieu d'être annulée :
+            annuler une tâche qui attend `asyncio.to_thread` n'arrête pas le thread, et le
+            commit final de fin de run appelait alors llama.cpp/Pocket TTS en parallèle de
+            l'appel encore en cours (segfault, exit 139, constaté le 2026-10-26 sur mono puis
+            sur corpus b ; `join()` ne protégeait pas : `task_done()` est appelé avant le
+            traitement)."""
             while True:
+                if (
+                    stop_requested.is_set()
+                    and final_queue.empty()
+                    and all(queue.empty() for queue in partial_queues)
+                ):
+                    return
                 if not final_queue.empty():
                     ident, idx, line = await final_queue.get()
                     try:
@@ -422,11 +455,7 @@ async def run_live(
             de locuteurs ouvert, pas de nombre fixe (ADR-0044)."""
             while len(sessions) <= ident:
                 new_ident = len(sessions)
-                sessions.append(
-                    IdentitySession(
-                        processor=AudioProcessor(transcription_engine=engine, mode="full")
-                    )
-                )
+                sessions.append(IdentitySession(processor=_new_processor(new_ident)))
                 known_embeddings.append(None)
                 embedding_counts.append(0)
                 identity_timeline.append([])
@@ -434,6 +463,31 @@ async def run_live(
                 consumer_tasks.append(asyncio.create_task(consume(new_ident)))
                 voice_manager.assign_fallback(new_ident)
                 print(f"Nouveau locuteur détecté : id{new_ident}")
+
+        async def _send_silence_to_others(
+            active: set[int], n_samples: int, global_start_sample: int
+        ) -> None:
+            """Pousse `n_samples` de silence vers chaque identité qui ne reçoit pas cet
+            incrément. ✓ Constaté le 2026-10-26 (corpus b, `--stt wlk`) : une identité qui
+            cesse de parler ne recevait plus aucun audio, donc jamais de silence — son STT ne
+            finalisait pas ses phrases en attente, traduites seulement au signal de fin de
+            flux (jusqu'à 66 s de retard pour id2, ~10-17 s pour id3 avec Voxtral, dont le
+            scellement sur pause dépend aussi de l'audio reçu). Le silence fait avancer
+            l'horloge et la détection de fin de phrase de chaque identité au rythme du flux
+            réel. Coût : chaque STT traite toute la durée du flux, pas seulement ses tours de
+            parole (charge GPU multipliée par le nombre d'identités)."""
+            import numpy as np
+
+            if n_samples <= 0:
+                return
+            silence = _pcm16_bytes(np.zeros(n_samples, dtype=np.float32))
+            sends = []
+            for ident, session in enumerate(sessions):
+                if ident in active:
+                    continue
+                _record_send(ident, n_samples, global_start_sample)
+                sends.append(session.processor.process_audio(silence))
+            await asyncio.gather(*sends)
 
         async def route_window(
             window: "np.ndarray",
@@ -505,6 +559,7 @@ async def run_live(
                         sessions[ident].processor.process_audio(_pcm16_bytes(increment_audio))
                     )
                 await asyncio.gather(*sends)
+                await _send_silence_to_others(set(assignment), increment_len, global_start_sample)
                 _debug(f"DEBUG assignment: {' '.join(assignment_debug)}")
             else:
                 mixture_embedding = await asyncio.to_thread(embedder.embed, window)
@@ -520,12 +575,16 @@ async def run_live(
                 embedding_counts[active_ident] += 1
                 increment_audio = window[increment_start : increment_start + increment_len]
                 _record_send(active_ident, len(increment_audio), global_start_sample)
-                _queue_latest(
-                    voice_personalization_queue,
-                    (active_ident, known_embeddings[active_ident], increment_audio),
-                )
+                if voice_clone:
+                    _queue_latest(
+                        voice_personalization_queue,
+                        (active_ident, known_embeddings[active_ident], increment_audio),
+                    )
                 await sessions[active_ident].processor.process_audio(
                     _pcm16_bytes(increment_audio)
+                )
+                await _send_silence_to_others(
+                    {active_ident}, len(increment_audio), global_start_sample
                 )
 
         async def route_consumer(route_queue: "asyncio.Queue") -> None:
@@ -662,7 +721,8 @@ async def run_live(
             await queue.join()
 
         route_consumer_task.cancel()
-        commit_worker_task.cancel()
+        stop_requested.set()
+        await commit_worker_task
         for task in consumer_tasks:
             task.cancel()
 
@@ -734,6 +794,29 @@ def main() -> None:
         help="Modèle de séparation de voix (ADR-0044) — 'pyannote' nécessite HF_TOKEN.",
     )
     parser.add_argument(
+        "--stt",
+        choices=["wlk", "voxtral"],
+        default="wlk",
+        help="Moteur STT par identité : WhisperLiveKit embarqué (défaut) ou Voxtral Realtime "
+        "servi par vLLM (ADR-0049, lancer d'abord Loom/voxtral-server/serve.sh).",
+    )
+    parser.add_argument("--voxtral-url", default=VOXTRAL_DEFAULT_URL)
+    parser.add_argument(
+        "--tts-device",
+        choices=["cuda", "cpu"],
+        default="cuda",
+        help="Périphérique de Pocket TTS (ADR-0051) : GPU par défaut, CPU pour l'ancien "
+        "comportement (ADR-0036).",
+    )
+    parser.add_argument(
+        "--voice-clone",
+        action="store_true",
+        help="Active la personnalisation de voix par locuteur (ADR-0046). Désactivée par "
+        "défaut depuis Pocket TTS 4.0.1 : ✓ constaté le 2026-10-26 (sur mono) qu'une voix "
+        "clonée depuis l'anglais fait générer au modèle french_24l 2 à 3 fois trop d'audio. "
+        "Sans elle, chaque locuteur garde sa voix de pool distincte.",
+    )
+    parser.add_argument(
         "--list-devices", action="store_true", help="Liste les périphériques audio et quitte."
     )
     parser.add_argument(
@@ -784,6 +867,10 @@ def main() -> None:
             target_lang=args.target_lang,
             lan=args.lan,
             separator_backend=args.separator_backend,
+            stt=args.stt,
+            voxtral_url=args.voxtral_url,
+            tts_device=args.tts_device,
+            voice_clone=args.voice_clone,
             input_device=input_device,
             output_device=output_device,
             dry_run_wav=args.dry_run_wav,
