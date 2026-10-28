@@ -104,6 +104,7 @@ class OutputSink(Protocol):
     jamais bifurquer sur le mode (ADR-0045)."""
 
     def push(self, ident: int, chunk: "np.ndarray") -> None: ...
+    def pending_s(self, ident: int) -> float: ...
     def close(self) -> None: ...
 
 
@@ -116,7 +117,7 @@ class LiveDeviceSink:
         sample_rate_hz: int,
         device: "int | str | None" = None,
         blocksize: int = 1024,
-        max_buffer_s: float = DEFAULT_MAX_BUFFER_S,
+        max_buffer_s: float | None = DEFAULT_MAX_BUFFER_S,
     ) -> None:
         import sounddevice as sd
 
@@ -139,6 +140,9 @@ class LiveDeviceSink:
     def push(self, ident: int, chunk: "np.ndarray") -> None:
         self._mixer.push(ident, chunk)
 
+    def pending_s(self, ident: int) -> float:
+        return self._mixer.pending_s(ident)
+
     def close(self) -> None:
         self._stream.stop()
         self._stream.close()
@@ -155,7 +159,7 @@ class DryRunWavSink:
         path: Path,
         sample_rate_hz: int,
         blocksize: int = 1024,
-        max_buffer_s: float = DEFAULT_MAX_BUFFER_S,
+        max_buffer_s: float | None = DEFAULT_MAX_BUFFER_S,
     ) -> None:
         self._mixer = AudioMixer(sample_rate_hz, max_buffer_s)
         self._sample_rate_hz = sample_rate_hz
@@ -179,9 +183,19 @@ class DryRunWavSink:
     def push(self, ident: int, chunk: "np.ndarray") -> None:
         self._mixer.push(ident, chunk)
 
+    def pending_s(self, ident: int) -> float:
+        return self._mixer.pending_s(ident)
+
     def close(self) -> None:
+        """Laisse d'abord jouer tout l'audio encore en attente (le français a pris du retard
+        sur la source, cf. `DEFAULT_MAX_BUFFER_S`) : sinon la fin de la sortie serait coupée
+        du WAV, ce qui fausse toute mesure sur la sortie."""
         import numpy as np
 
+        backlog_s = self._mixer.pending_s()
+        print(f"Sortie : {backlog_s:.1f}s d'audio en attente en fin de source, lecture jusqu'au bout")
+        while self._mixer.pending_s() > 0 and self._thread.is_alive():
+            time.sleep(0.05)
         self._stop_event.set()
         self._thread.join(timeout=2.0)
         full_audio = (

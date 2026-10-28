@@ -107,6 +107,15 @@ CORPUS_MANIFEST: tuple[CorpusFile, ...] = (
         "MEO069+MEE067 vérifié par timestamps HF (edinburghcstr/ami) et confirmé à l'oreille "
         "— cf. commentaire de provenance ci-dessus pour le détail.",
     ),
+    CorpusFile(
+        "h", "h_en_turns.wav", "en", 3, 180.0,
+        "EN 3 locuteurs en tours de parole alternés, sans chevauchement (~3 min)",
+        provenance="Montage (2026-10-28) de corpus a (Alice), archive.org/details/"
+        "tom_sawyer_librivox TSawyer_01-02 et archive.org/details/moby_dick_librivox "
+        "mobydick_001_002, domaine public : 15 tours de 5 à 21 s coupés sur des pauses, "
+        "0,6 s de blanc entre deux tours, ordre non cyclique (un lecteur revient après une "
+        "absence). Vérité terrain des tours (locuteur, début, fin) : h_en_turns.turns.json.",
+    ),
 )
 
 

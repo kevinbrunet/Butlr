@@ -1,0 +1,77 @@
+[
+ {
+  "locuteur": "alice",
+  "debut_s": 0.0,
+  "fin_s": 12.93
+ },
+ {
+  "locuteur": "tom",
+  "debut_s": 13.53,
+  "fin_s": 24.25
+ },
+ {
+  "locuteur": "alice",
+  "debut_s": 24.85,
+  "fin_s": 30.03
+ },
+ {
+  "locuteur": "moby",
+  "debut_s": 30.63,
+  "fin_s": 45.99
+ },
+ {
+  "locuteur": "tom",
+  "debut_s": 46.59,
+  "fin_s": 67.38
+ },
+ {
+  "locuteur": "moby",
+  "debut_s": 67.98,
+  "fin_s": 75.52
+ },
+ {
+  "locuteur": "alice",
+  "debut_s": 76.12,
+  "fin_s": 89.12
+ },
+ {
+  "locuteur": "tom",
+  "debut_s": 89.72,
+  "fin_s": 97.31
+ },
+ {
+  "locuteur": "moby",
+  "debut_s": 97.91,
+  "fin_s": 112.33
+ },
+ {
+  "locuteur": "alice",
+  "debut_s": 112.93,
+  "fin_s": 122.05
+ },
+ {
+  "locuteur": "moby",
+  "debut_s": 122.65,
+  "fin_s": 133.81
+ },
+ {
+  "locuteur": "tom",
+  "debut_s": 134.41,
+  "fin_s": 146.13
+ },
+ {
+  "locuteur": "alice",
+  "debut_s": 146.73,
+  "fin_s": 163.11
+ },
+ {
+  "locuteur": "tom",
+  "debut_s": 163.71,
+  "fin_s": 173.86
+ },
+ {
+  "locuteur": "moby",
+  "debut_s": 174.46,
+  "fin_s": 185.51
+ }
+]

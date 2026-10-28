@@ -33,6 +33,7 @@ from loom_orchestrator.bench.instrumentation import (
 from loom_orchestrator.bench.line_tracking import extract_updates
 from loom_orchestrator.bench.replay import replay_realtime
 from loom_orchestrator.bench.timestamps import hms_to_seconds
+from loom_orchestrator.catch_up import CatchUp
 from loom_orchestrator.commit_policy import compute_flush, force_flush
 from loom_orchestrator.commit_state import (
     LineCommitState,
@@ -131,6 +132,8 @@ async def run_live(
     stt: str,
     voxtral_url: str,
     tts_device: str,
+    translation_context: bool,
+    catch_up_enabled: bool,
     voice_clone: bool,
     input_device: "int | str | None",
     output_device: "int | str | None",
@@ -184,7 +187,7 @@ async def run_live(
             "'pyannote'"
         )
     embedder = SpeakerEmbedder()
-    llm_translator = LlmTranslator()
+    llm_translator = LlmTranslator(keep_context=translation_context)
     synth = PocketTtsSynthesizer(device=tts_device)
     voice_registry = VoiceRegistry.load()
     voice_manager = PersonalizedVoiceManager(synth, voice_registry)
@@ -193,6 +196,7 @@ async def run_live(
         sink = DryRunWavSink(dry_run_wav, synth.sample_rate_hz)
     else:
         sink = LiveDeviceSink(synth.sample_rate_hz, device=output_device)
+    catch_up = CatchUp(synth.sample_rate_hz) if catch_up_enabled else None
 
     known_embeddings: list[list[float] | None] = []
     embedding_counts: list[int] = []
@@ -225,6 +229,7 @@ async def run_live(
             increment: str,
             event_stage_t_in: float,
             is_final: bool = False,
+            source: str = "",
         ) -> None:
             if not increment:
                 return
@@ -249,11 +254,16 @@ async def run_live(
                 )
             )
 
-            for chunk in new_chunks:
-                sink.push(ident, chunk)
+            if catch_up is not None and new_chunks:
+                sink.push(ident, catch_up.process(new_chunks, sink.pending_s(ident)))
+            else:
+                for chunk in new_chunks:
+                    sink.push(ident, chunk)
 
             if transcript_path is not None:
                 with transcript_path.open("a", encoding="utf-8") as f:
+                    if source:
+                        f.write(f"[id{ident}/{speaker}] SRC (segment) : {source}\n")
                     f.write(f"[id{ident}/{speaker}] FR (increment) : {increment}\n")
             state.chunk_count += 1
 
@@ -276,7 +286,7 @@ async def run_live(
 
             end_s = _to_global_seconds(ident, hms_to_seconds(end))
             translated = await asyncio.to_thread(
-                llm_translator.translate, segment, source_lang, target_lang
+                llm_translator.translate, segment, source_lang, target_lang, ident
             )
             t_translate_end = time.monotonic() - session_start_monotonic
             segment_id = f"{session_id}-id{ident}-line{idx}-chunk{state.chunk_count}"
@@ -284,7 +294,9 @@ async def run_live(
 
             state.committed_fr = f"{state.committed_fr} {translated}".strip()
             speaker = line.get("speaker", "?")
-            await emit_increment(ident, idx, speaker, translated, t_translate_end)
+            await emit_increment(
+                ident, idx, speaker, translated, t_translate_end, source=segment
+            )
 
         async def force_final_commit_llm(ident: int, idx: int, line: dict) -> None:
             text, end = line.get("text"), line.get("end")
@@ -307,7 +319,7 @@ async def run_live(
                     state.flushed_source = new_flushed
                     if segment:
                         translated = await asyncio.to_thread(
-                            llm_translator.translate, segment, source_lang, target_lang
+                            llm_translator.translate, segment, source_lang, target_lang, ident
                         )
                         t_translate_end = time.monotonic() - session_start_monotonic
                         segment_id = f"{session_id}-id{ident}-line{idx}-chunk{state.chunk_count}"
@@ -325,7 +337,8 @@ async def run_live(
                         state.committed_fr = f"{state.committed_fr} {translated}".strip()
                         speaker = line.get("speaker", "?")
                         await emit_increment(
-                            ident, idx, speaker, translated, t_translate_end, is_final=True
+                            ident, idx, speaker, translated, t_translate_end, is_final=True,
+                            source=segment,
                         )
             _release_gpu_state(state)
 
@@ -754,6 +767,8 @@ async def run_live(
                     )
 
     sink.close()
+    if catch_up is not None:
+        print(catch_up.summary())
     if log_path is not None:
         print(f"\nLog : {log_path}")
     if transcript_path is not None:
@@ -807,6 +822,18 @@ def main() -> None:
         default="cuda",
         help="Périphérique de Pocket TTS (ADR-0051) : GPU par défaut, CPU pour l'ancien "
         "comportement (ADR-0036).",
+    )
+    parser.add_argument(
+        "--translation-context",
+        action="store_true",
+        help="Traduit chaque segment à la suite des précédents du même locuteur, en "
+        "réutilisant le cache KV de llama.cpp (expérimental, fenêtre 32k, sans compactage).",
+    )
+    parser.add_argument(
+        "--no-catch-up",
+        action="store_true",
+        help="Désactive le rattrapage du retard de sortie (coupe des silences puis "
+        "accélération sans changement de hauteur, cf. catch_up.py).",
     )
     parser.add_argument(
         "--voice-clone",
@@ -870,6 +897,8 @@ def main() -> None:
             stt=args.stt,
             voxtral_url=args.voxtral_url,
             tts_device=args.tts_device,
+            translation_context=args.translation_context,
+            catch_up_enabled=not args.no_catch_up,
             voice_clone=args.voice_clone,
             input_device=input_device,
             output_device=output_device,

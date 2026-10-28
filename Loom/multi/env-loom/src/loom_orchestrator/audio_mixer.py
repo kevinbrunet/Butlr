@@ -6,10 +6,15 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import numpy as np
 
-# ⚠ Pas calibré empiriquement (ADR-0045) — quelques secondes de marge avant qu'un identité
-# muette/à la traîne ne perde de l'audio déjà synthétisé (politique drop-oldest, même esprit
-# que `route_queue`/`partial_queues` dans `bench/harness_pipeline_dual.py`).
-DEFAULT_MAX_BUFFER_S = 5.0
+# Pas de limite par défaut : tout l'audio synthétisé est joué, quitte à prendre du retard sur
+# la source. ✓ Constaté le 2026-10-28 (mono, corpus a, WLK + Qwen3.5-9B + Pocket TTS) : le
+# français synthétisé dure plus longtemps que l'anglais source (~15 s de retard accumulé en
+# 3 min) ; l'ancienne limite de 5 s (drop-oldest, ADR-0045) jetait 18,6 s d'audio, dont des
+# débuts de phrases, et faisait passer les mots perdus à la prononciation de 4,3 % à 19,7 %.
+# Le retard est résorbé en amont par `catch_up.py` (coupe des silences puis accélération,
+# ADR-0053) ; ⚠ au-delà de ce qu'il peut rattraper, il grandit encore sans borne. Une limite
+# en secondes réactive le drop-oldest.
+DEFAULT_MAX_BUFFER_S: float | None = None
 
 
 class IdentityAudioBuffer:
@@ -26,10 +31,12 @@ class IdentityAudioBuffer:
     au même tampon en parallèle.
     """
 
-    def __init__(self, sample_rate_hz: int, max_buffer_s: float = DEFAULT_MAX_BUFFER_S) -> None:
+    def __init__(
+        self, sample_rate_hz: int, max_buffer_s: float | None = DEFAULT_MAX_BUFFER_S
+    ) -> None:
         import numpy as np
 
-        self._max_samples = int(max_buffer_s * sample_rate_hz)
+        self._max_samples = None if max_buffer_s is None else int(max_buffer_s * sample_rate_hz)
         self._samples = np.zeros(0, dtype=np.float32)
         self._lock = threading.Lock()
         self.dropped_samples = 0
@@ -39,6 +46,8 @@ class IdentityAudioBuffer:
 
         with self._lock:
             self._samples = np.concatenate([self._samples, chunk.astype(np.float32)])
+            if self._max_samples is None:
+                return
             overflow = len(self._samples) - self._max_samples
             if overflow > 0:
                 self._samples = self._samples[overflow:]
@@ -58,6 +67,10 @@ class IdentityAudioBuffer:
             )
         return available
 
+    def pending_samples(self) -> int:
+        with self._lock:
+            return len(self._samples)
+
 
 class AudioMixer:
     """Registre de tampons par identité + mixage additif de sortie (ADR-0045 — mixage "au fil
@@ -74,7 +87,9 @@ class AudioMixer:
     pendant qu'un bloc de sortie se mixe.
     """
 
-    def __init__(self, sample_rate_hz: int, max_buffer_s: float = DEFAULT_MAX_BUFFER_S) -> None:
+    def __init__(
+        self, sample_rate_hz: int, max_buffer_s: float | None = DEFAULT_MAX_BUFFER_S
+    ) -> None:
         self._sample_rate_hz = sample_rate_hz
         self._max_buffer_s = max_buffer_s
         self._buffers: dict[int, IdentityAudioBuffer] = {}
@@ -100,3 +115,15 @@ class AudioMixer:
         for buffer in buffers:
             mixed += buffer.pull(n_frames)
         return np.clip(mixed, -1.0, 1.0)
+
+    def pending_s(self, ident: int | None = None) -> float:
+        """Audio encore en attente de lecture, en secondes : pour `ident`, ou pour l'identité
+        la plus en retard si `None` — le retard de la sortie sur le moment où cet audio a été
+        produit."""
+        with self._lock:
+            if ident is not None:
+                buffers = [self._buffers[ident]] if ident in self._buffers else []
+            else:
+                buffers = list(self._buffers.values())
+        pending = max((b.pending_samples() for b in buffers), default=0)
+        return pending / self._sample_rate_hz

@@ -58,3 +58,19 @@ def test_mixer_silent_identity_contributes_nothing() -> None:
     mixer.ensure_identity(1)
     mixer.push(2, np.array([0.4, 0.4], dtype=np.float32))
     assert np.allclose(mixer.pull_mixed(2), [0.4, 0.4])
+
+
+def test_identity_buffer_keeps_everything_by_default() -> None:
+    buf = IdentityAudioBuffer(sample_rate_hz=10)
+    buf.push(np.arange(1000, dtype=np.float32))
+    assert buf.dropped_samples == 0
+    assert buf.pending_samples() == 1000
+
+
+def test_mixer_pending_s_reports_most_delayed_identity() -> None:
+    mixer = AudioMixer(sample_rate_hz=10)
+    mixer.push(0, np.zeros(20, dtype=np.float32))
+    mixer.push(1, np.zeros(50, dtype=np.float32))
+    assert mixer.pending_s() == 5.0
+    mixer.pull_mixed(50)
+    assert mixer.pending_s() == 0.0

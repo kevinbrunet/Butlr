@@ -1,11 +1,12 @@
 [project]
 name = "loom-mono"
 version = "0.0.1"
-description = "Loom mono-locuteur (ADR-0048) : STT (WhisperLiveKit embarqué ou client Voxtral, ADR-0049) + traduction Qwen (llama.cpp) + Pocket TTS à voix clonée progressivement — sans séparation, empreinte vocale, suivi d'identité ni diarisation."
+description = "Loom mono-locuteur (ADR-0048) : STT (WhisperLiveKit embarqué ou client Voxtral, ADR-0049) + traduction Qwen (llama.cpp) + Pocket TTS à voix clonée progressivement — sans séparation ni diarisation ; identification par empreinte vocale des intervenants qui parlent à tour de rôle en option (ADR-0052)."
 requires-python = ">=3.12,<3.13"
 license = { file = "../../../LICENSE" }
 authors = [{ name = "Kevin Brunet" }]
-# Dépendances de `multi/env-loom` moins tout ce qui servait à isoler une voix (ADR-0048) :
+# Dépendances de `multi/env-loom` moins tout ce qui servait à isoler une voix (ADR-0048),
+# speechbrain revenu pour la seule empreinte vocale (ADR-0052) :
 # speechbrain (SepFormer, ECAPA), pyannote.audio (séparation), nemo-toolkit et l'extra
 # `diarization-sortformer` de WhisperLiveKit (diarisation), et transformers/sentencepiece
 # (Seamless, abandonné depuis ADR-0043). torchaudio est explicite : `tts_pocket.clone_voice_state`
@@ -22,6 +23,9 @@ dependencies = [
     "sounddevice>=0.4",
     # Variante STT Voxtral (ADR-0049) : client websocket du serveur `Loom/voxtral-server/`.
     "websockets>=13",
+    # Identification des intervenants qui parlent à tour de rôle, `--speakers` (ADR-0052) :
+    # empreinte ECAPA-TDNN. librosa (hauteur de voix) vient transitivement de WhisperLiveKit.
+    "speechbrain>=1.0",
 ]
 
 [project.optional-dependencies]

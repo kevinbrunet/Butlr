@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted — politique du tampon de sortie supersedée par [ADR 0053](0053-output-keeps-all-audio-catch-up-by-silence-cut-and-speedup.md)
 
 ## Context
 
@@ -82,3 +82,4 @@ eu besoin de calculer un décalage exact entre les deux.
 ## Révisions
 
 - 2026-07-19 — création.
+- 2026-10-28 — ✓ la limite de tampon de 5 s (drop-oldest) jetait 18,6 s d'audio sur corpus `a` (mono WLK) et faisait passer les mots perdus de 4,3 % à 19,7 %. Politique du tampon supersedée par [ADR 0053](0053-output-keeps-all-audio-catch-up-by-silence-cut-and-speedup.md) : plus aucun drop par défaut, retard rattrapé en amont (coupe des silences, accélération). Le mixage au fil de l'eau reste tel quel.

@@ -24,6 +24,8 @@ from loom_orchestrator.bench.instrumentation import (
 from loom_orchestrator.bench.line_tracking import extract_updates
 from loom_orchestrator.bench.replay import replay_realtime
 from loom_orchestrator.bench.timestamps import hms_to_seconds
+from loom_orchestrator.catch_up import CatchUp
+from loom_orchestrator.speaker_identity import InputAudioHistory, Speaker, SpeakerIdentifier
 from loom_orchestrator.commit_policy import compute_flush, force_flush
 from loom_orchestrator.commit_state import (
     LineCommitState,
@@ -81,6 +83,9 @@ async def run_live(
     stt: str,
     voxtral_url: str,
     tts_device: str,
+    translation_context: bool,
+    catch_up_enabled: bool,
+    speakers: bool,
     clone_voice: bool,
     input_device: "int | str | None",
     output_device: "int | str | None",
@@ -104,14 +109,19 @@ async def run_live(
         transcript_path.write_text("", encoding="utf-8")
 
     processor = _new_processor(stt, lan, voxtral_url)
-    llm_translator = LlmTranslator()
+    llm_translator = LlmTranslator(keep_context=translation_context)
     synth = PocketTtsSynthesizer(device=tts_device)
     voice = ProgressiveVoiceCloner(synth)
+    # Plusieurs personnes qui parlent chacune leur tour (`--speakers`) : une identité par
+    # empreinte vocale, une voix de synthèse par identité (cf. speaker_identity.py).
+    identifier = SpeakerIdentifier() if speakers else None
+    input_history = InputAudioHistory() if speakers else None
 
     if dry_run_wav is not None:
         sink = DryRunWavSink(dry_run_wav, synth.sample_rate_hz)
     else:
         sink = LiveDeviceSink(synth.sample_rate_hz, device=output_device)
+    catch_up = CatchUp(synth.sample_rate_hz) if catch_up_enabled else None
 
     commit_state: dict[int, LineCommitState] = {}
     known_texts: list[str] = []
@@ -123,13 +133,23 @@ async def run_live(
         session_start_monotonic = time.monotonic()
 
         async def emit_increment(
-            idx: int, increment: str, event_stage_t_in: float, is_final: bool = False
+            idx: int,
+            increment: str,
+            event_stage_t_in: float,
+            is_final: bool = False,
+            source: str = "",
+            speaker: Speaker | None = None,
         ) -> None:
             if not increment:
                 return
             state = commit_state[idx]
+            voice_state = (
+                synth.get_named_voice_state(speaker.voice)
+                if speaker is not None
+                else voice.get_voice_state()
+            )
             new_chunks, ttfc_s = await asyncio.to_thread(
-                _consume_stream, synth, increment, voice.get_voice_state()
+                _consume_stream, synth, increment, voice_state
             )
             segment_id = f"{session_id}-line{idx}-chunk{state.chunk_count}"
             logger.log(
@@ -138,18 +158,36 @@ async def run_live(
                     is_final=is_final,
                 )
             )
-            for chunk in new_chunks:
-                sink.push(SPEAKER_ID, chunk)
+            if catch_up is not None and new_chunks:
+                sink.push(SPEAKER_ID, catch_up.process(new_chunks, sink.pending_s(SPEAKER_ID)))
+            else:
+                for chunk in new_chunks:
+                    sink.push(SPEAKER_ID, chunk)
             if transcript_path is not None:
+                tag = f"[id{speaker.ident}/{speaker.voice}] " if speaker is not None else ""
                 with transcript_path.open("a", encoding="utf-8") as f:
-                    f.write(f"FR (increment) : {increment}\n")
+                    if source:
+                        f.write(f"{tag}SRC (segment) : {source}\n")
+                    f.write(f"{tag}FR (increment) : {increment}\n")
             state.chunk_count += 1
 
         async def translate_and_emit(
             idx: int, state: LineCommitState, segment: str, end: str | None, is_final: bool
         ) -> None:
+            speaker = None
+            if identifier is not None:
+                if end is not None:
+                    speaker = await asyncio.to_thread(
+                        identifier.identify_segment, input_history, hms_to_seconds(end)
+                    )
+                else:
+                    speaker = identifier.registry.current
             translated = await asyncio.to_thread(
-                llm_translator.translate, segment, source_lang, target_lang
+                llm_translator.translate,
+                segment,
+                source_lang,
+                target_lang,
+                speaker.ident if speaker is not None else 0,
             )
             t_translate_end = time.monotonic() - session_start_monotonic
             if end is not None:
@@ -161,7 +199,10 @@ async def run_live(
                     )
                 )
             state.committed_fr = f"{state.committed_fr} {translated}".strip()
-            await emit_increment(idx, translated, t_translate_end, is_final=is_final)
+            await emit_increment(
+                idx, translated, t_translate_end, is_final=is_final, source=segment,
+                speaker=speaker,
+            )
 
         async def try_llm_commit(idx: int, line: dict) -> None:
             text, end = line.get("text"), line.get("end")
@@ -291,9 +332,11 @@ async def run_live(
             # le STT bufferise, et le clonage ne fait qu'accumuler ; la reconstruction de voix
             # est confiée au consommateur unique.
             await processor.process_audio(chunk_bytes)
-            if clone_voice:
+            if clone_voice or input_history is not None:
                 pcm = np.frombuffer(chunk_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-                if voice.add_audio(pcm):
+                if input_history is not None:
+                    input_history.append(pcm)
+                if clone_voice and voice.add_audio(pcm):
                     rebuild_requested.set()
 
         async def feed() -> None:
@@ -345,6 +388,10 @@ async def run_live(
                 print(f"WARNING: force_final_commit_llm a échoué en fin de run ({exc!r}).")
 
     sink.close()
+    if catch_up is not None:
+        print(catch_up.summary())
+    if identifier is not None:
+        print(identifier.summary())
     if log_path is not None:
         print(f"\nLog : {log_path}")
     if transcript_path is not None:
@@ -386,6 +433,24 @@ def main() -> None:
         "comportement (ADR-0036).",
     )
     parser.add_argument(
+        "--translation-context",
+        action="store_true",
+        help="Traduit chaque segment à la suite des précédents du même locuteur, en "
+        "réutilisant le cache KV de llama.cpp (expérimental, fenêtre 32k, sans compactage).",
+    )
+    parser.add_argument(
+        "--speakers",
+        action="store_true",
+        help="Plusieurs personnes qui parlent chacune leur tour (sans chevauchement) : "
+        "reconnaissance par empreinte vocale, une voix de synthèse par personne.",
+    )
+    parser.add_argument(
+        "--no-catch-up",
+        action="store_true",
+        help="Désactive le rattrapage du retard de sortie (coupe des silences puis "
+        "accélération sans changement de hauteur, cf. catch_up.py).",
+    )
+    parser.add_argument(
         "--voice-clone",
         action="store_true",
         help="Active le clonage progressif de la voix du locuteur (ADR-0048). Désactivé par "
@@ -405,6 +470,9 @@ def main() -> None:
     parser.add_argument("--debug-dump-dir", type=Path, default=None)
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
+    if args.speakers and args.voice_clone:
+        parser.error("--speakers et --voice-clone sont exclusifs : une voix précalculée par "
+                     "personne, pas de clonage progressif d'une voix unique.")
 
     if args.list_devices:
         print(list_devices())
@@ -426,6 +494,9 @@ def main() -> None:
             stt=args.stt,
             voxtral_url=args.voxtral_url,
             tts_device=args.tts_device,
+            translation_context=args.translation_context,
+            catch_up_enabled=not args.no_catch_up,
+            speakers=args.speakers,
             clone_voice=args.voice_clone,
             input_device=_device(args.input_device),
             output_device=_device(args.output_device),

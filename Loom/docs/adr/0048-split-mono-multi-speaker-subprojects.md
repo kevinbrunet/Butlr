@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted — partiellement supersedé par [ADR 0052](0052-mono-turn-taking-speaker-identification.md) (empreinte vocale de retour dans le mono, en option)
 
 ## Context
 
@@ -66,3 +66,4 @@ Il exigerait de garder l'encodeur ECAPA uniquement pour reconnaître le locuteur
   - ✓ **Diarisation Sortformer cassée en multi, défaut antérieur aux mises à jour** : WhisperLiveKit définit sa propre `StreamingSortformerState` sans `spkcache_compressed`, que NeMo 71820fbc lit déjà ; 19 `AttributeError` sur corpus `b`, STT ~5 s de retard. Corrigé par `compat.patch_wlk_sortformer_state()` (valeur de classe par défaut, comme NeMo). Multi, corpus `b`, après correctif : plus aucune exception, exit 0 ; bout en bout p50 7,3 s (problème de latence connu de la séparation, ADR-0042).
   - ✓ **Mono, corpus `a`, Pocket TTS 4.0.1, voix `estelle`, `--stt wlk`** : bout en bout p50/p95 1 588/7 285 ms, 17 incréments ; le TTS (CPU) produit l'audio à 0,81 fois le temps réel et le retard s'accumule. Variante Voxtral : cf. ADR-0049.
 - 2026-10-26 — ✓ Après le TTS sur GPU (ADR-0051) : mono corpus `a`, `--stt wlk`, bout en bout p50/p95 758/1 321 ms, dans la cible (p95 1,5-2 s) ; `--stt voxtral` 546/724 ms (ADR-0049).
+- 2026-10-28 — speechbrain (encodeur ECAPA seul) revient dans le mono pour l'option `--speakers` : identification des intervenants qui parlent à tour de rôle, une voix par identité, cf. [ADR 0052](0052-mono-turn-taking-speaker-identification.md). Supersede partiellement cet ADR sur ce point ; sans `--speakers`, le mono reste tel que décrit ici. Le registre inter-sessions reste rejeté.
