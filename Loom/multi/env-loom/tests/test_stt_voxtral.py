@@ -107,3 +107,13 @@ def test_rotation_is_forced_at_rotate_max_s() -> None:
     from loom_orchestrator.stt_voxtral import should_rotate
 
     assert should_rotate(30.0, since_text_s=0.0) is True
+
+
+def test_snapshot_appends_empty_active_line_when_all_sealed() -> None:
+    lines = SentenceLines()
+    lines.append("Hello everyone. Tod", 1.0)
+    assert [x["text"] for x in lines.snapshot()] == ["Hello everyone.", "Tod"]
+    lines.seal_active()
+    assert lines.snapshot()[-1] == {"text": "", "end": None, "speaker": "1"}
+    lines.append(" Next one", 3.0)
+    assert [x["text"] for x in lines.snapshot()] == ["Hello everyone.", "Tod", "Next one"]

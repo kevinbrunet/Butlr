@@ -55,6 +55,7 @@ from loom_orchestrator.speaker_tracking import (
     update_ema_embedding,
     update_running_embedding,
 )
+from loom_orchestrator.stt_parakeet import ParakeetMultitalkerEngine, ParakeetSpeakerView
 from loom_orchestrator.stt_voxtral import DEFAULT_URL as VOXTRAL_DEFAULT_URL
 from loom_orchestrator.stt_voxtral import VoxtralRealtimeProcessor
 from loom_orchestrator.translation_llm import LlmTranslator
@@ -166,16 +167,31 @@ async def run_live(
         if use_sortformer:
             engine_kwargs["diarization_backend"] = "sortformer"
         engine = TranscriptionEngine(**engine_kwargs)
-    elif stt != "voxtral":
-        raise ValueError(f"stt inconnu : {stt!r} — attendu 'wlk' ou 'voxtral'")
+    elif stt not in ("voxtral", "parakeet"):
+        raise ValueError(f"stt inconnu : {stt!r} — attendu 'wlk', 'voxtral' ou 'parakeet'")
+    # Variante Parakeet Multitalker (ADR-0054) : un seul moteur sur le flux brut, qui sépare
+    # lui-même les locuteurs — ni séparation de voix, ni empreinte, ni routage. Chaque locuteur
+    # qu'il détecte devient une identité, vue par le reste de l'orchestrateur comme un
+    # processeur WLK (`ParakeetSpeakerView`).
+    parakeet = ParakeetMultitalkerEngine() if stt == "parakeet" else None
+    parakeet_views: dict[int, ParakeetSpeakerView] = {}
 
-    def _new_processor(ident: int) -> "AudioProcessor | VoxtralRealtimeProcessor":
+    def _new_processor(
+        ident: int,
+    ) -> "AudioProcessor | VoxtralRealtimeProcessor | ParakeetSpeakerView":
+        if parakeet is not None:
+            parakeet_views[ident] = ParakeetSpeakerView(speaker=str(ident))
+            return parakeet_views[ident]
         if engine is not None:
             return AudioProcessor(transcription_engine=engine, mode="full")
         return VoxtralRealtimeProcessor(url=voxtral_url, speaker=str(ident))
 
     sessions: list[IdentitySession] = []
-    if separator_backend == "pyannote":
+    separator = embedder = None
+    separation_window_s = SEPARATION_WINDOW_S
+    if parakeet is not None:
+        pass
+    elif separator_backend == "pyannote":
         separator = PyannoteVoiceSeparator()
         separation_window_s = PYANNOTE_CHUNK_SAMPLES / SAMPLE_RATE_HZ
     elif separator_backend == "sepformer":
@@ -186,7 +202,8 @@ async def run_live(
             f"separator_backend inconnu : {separator_backend!r} — attendu 'sepformer' ou "
             "'pyannote'"
         )
-    embedder = SpeakerEmbedder()
+    if parakeet is None:
+        embedder = SpeakerEmbedder()
     llm_translator = LlmTranslator(keep_context=translation_context)
     synth = PocketTtsSynthesizer(device=tts_device)
     voice_registry = VoiceRegistry.load()
@@ -448,8 +465,13 @@ async def run_live(
                         continue
                     _debug(f"DEBUG wlk-text id{ident}/line{idx}: {_text!r}")
                     segment_id = f"{session_id}-id{ident}-wlk-line{idx}-{len(_text)}"
-                    t_in = _to_global_seconds(ident, hms_to_seconds(end))
                     t_out = time.monotonic() - session_start_monotonic
+                    # ✓ Constaté le 2026-10-28 (`--stt parakeet`, corpus g) : le rejeu envoie
+                    # chaque tranche de 100 ms dès son début, et Parakeet horodate au plus
+                    # juste — la fin d'un mot dépassait alors de quelques dizaines de ms
+                    # l'instant de mesure, `LatencyEvent.create` levait une erreur et tuait
+                    # en silence la tâche de ce locuteur (plus rien de traduit pour lui).
+                    t_in = min(_to_global_seconds(ident, hms_to_seconds(end)), t_out)
                     logger.log(LatencyEvent.create(segment_id, STAGE_WLK, t_in, t_out))
 
                 if not lines:
@@ -627,6 +649,9 @@ async def run_live(
                 nonlocal buffer, routed_samples
 
                 pcm16 = np.frombuffer(chunk_bytes, dtype=np.int16)
+                if parakeet_queue is not None:
+                    parakeet_queue.put_nowait(pcm16.astype(np.float32) / 32768.0)
+                    return
                 buffer = np.concatenate([buffer, pcm16.astype(np.float32) / 32768.0])
 
                 unrouted = len(buffer) - routed_samples
@@ -658,6 +683,10 @@ async def run_live(
                 assert corpus_key is not None
                 wav_path = corpus.resolve(corpus_key, corpus_dir=corpus_dir)
                 await replay_realtime(wav_path, send)
+                if parakeet_queue is not None:
+                    parakeet_queue.put_nowait(None)
+                    await parakeet_task
+                    return
 
                 unrouted = len(buffer) - routed_samples
                 if unrouted > 0:
@@ -685,6 +714,44 @@ async def run_live(
                 # plus bas). Pas de "fin de fichier" en direct.
                 await capture_live(send, device=input_device)
 
+        async def parakeet_worker(queue: "asyncio.Queue") -> None:
+            """Unique appelant du moteur Parakeet (GPU, bloquant → thread). Regroupe l'audio
+            en attente, le passe au moteur, puis distribue le texte de chaque locuteur à son
+            identité ; `None` = fin de flux. File sans limite : ✓ un morceau de 1,12 s se
+            calcule en ~70 ms (banc du 2026-10-28), le moteur ne prend donc pas de retard
+            dans des conditions normales, et jeter de l'audio casserait son état de streaming."""
+            import numpy as np
+
+            def dispatch(updates: list) -> None:
+                for update in updates:
+                    _debug(
+                        f"DEBUG parakeet id{update.speaker} @{parakeet.audio_s:.2f}s "
+                        f"(fin {update.end_s:.2f}s) : +{update.delta!r}"
+                    )
+                    _ensure_identity(update.speaker)
+                    parakeet_views[update.speaker].apply(update.delta, update.end_s)
+                for view in parakeet_views.values():
+                    view.seal_if_paused(parakeet.audio_s)
+
+            done = False
+            while not done:
+                pending = [await queue.get()]
+                while not queue.empty():
+                    pending.append(queue.get_nowait())
+                done = pending[-1] is None
+                audio = [p for p in pending if p is not None]
+                if audio:
+                    dispatch(await asyncio.to_thread(parakeet.push, np.concatenate(audio)))
+            dispatch(await asyncio.to_thread(parakeet.finish))
+            for view in parakeet_views.values():
+                view.close()
+
+        parakeet_queue: "asyncio.Queue | None" = None
+        parakeet_task: "asyncio.Task | None" = None
+        if parakeet is not None:
+            parakeet_queue = asyncio.Queue()
+            parakeet_task = asyncio.create_task(parakeet_worker(parakeet_queue))
+
         route_queue: asyncio.Queue = asyncio.Queue(maxsize=ROUTE_QUEUE_MAXSIZE)
         route_consumer_task = asyncio.create_task(route_consumer(route_queue))
         commit_worker_task = asyncio.create_task(commit_worker())
@@ -710,8 +777,11 @@ async def run_live(
         # Attend que chaque consume(ident) se termine de lui-même plutôt qu'un délai fixe
         # suivi d'une annulation inconditionnelle (cf. ADR-0044 §Révisions — un délai fixe
         # s'est révélé insuffisant sous charge, perdant la toute fin d'une transcription).
+        if parakeet_task is not None and not parakeet_task.done():
+            parakeet_queue.put_nowait(None)
+            await parakeet_task
         if consumer_tasks:
-            if source == "mic":
+            if source == "mic" and parakeet is None:
                 # WLK ne reçoit son flush b"" qu'une fois capture_live annulée — envoyé
                 # explicitement ici, `feed()` ne l'a pas fait (contrairement au chemin
                 # `corpus`, qui le fait naturellement à la fin du fichier).
@@ -810,10 +880,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--stt",
-        choices=["wlk", "voxtral"],
+        choices=["wlk", "voxtral", "parakeet"],
         default="wlk",
         help="Moteur STT par identité : WhisperLiveKit embarqué (défaut) ou Voxtral Realtime "
-        "servi par vLLM (ADR-0049, lancer d'abord Loom/voxtral-server/serve.sh).",
+        "servi par vLLM (ADR-0049, lancer d'abord Loom/voxtral-server/serve.sh). 'parakeet' : "
+        "Parakeet Multitalker sur le flux brut, sans séparation ni suivi par empreinte "
+        "(ADR-0054).",
     )
     parser.add_argument("--voxtral-url", default=VOXTRAL_DEFAULT_URL)
     parser.add_argument(
@@ -877,6 +949,8 @@ def main() -> None:
 
     if args.source == "corpus" and args.corpus_key is None:
         parser.error("--corpus-key est requis avec --source corpus")
+    if args.stt == "parakeet" and args.voice_clone:
+        parser.error("--voice-clone demande l'empreinte vocale, absente avec --stt parakeet")
 
     input_device: "int | str | None" = args.input_device
     if input_device is not None and input_device.isdigit():

@@ -129,6 +129,16 @@ class SentenceLines:
             out.append(self._line(self.active_text.strip(), self.active_end_s))
         return out
 
+    def snapshot(self) -> list[dict]:
+        """`lines()` tel qu'envoyé à l'orchestrateur : quand tout est scellé, une ligne active
+        vide à la suite, sinon l'orchestrateur prend la dernière ligne scellée pour la ligne
+        active et ne la traduit en entier qu'à la fin du flux (✓ constaté le 2026-10-28,
+        corpus b : 20 s de retard sur la dernière phrase d'un locuteur qui se tait)."""
+        out = self.lines()
+        if not self.active_text.strip():
+            out.append({"text": "", "end": None, "speaker": self.speaker})
+        return out
+
     def _line(self, text: str, end_s: float) -> dict:
         return {"text": text, "end": seconds_to_hms(end_s), "speaker": self.speaker}
 
@@ -253,7 +263,7 @@ class VoxtralRealtimeProcessor:
                 self._responses.put_nowait(None)
 
     def _emit(self) -> None:
-        self._responses.put_nowait(VoxtralResponse(self._lines.lines()))
+        self._responses.put_nowait(VoxtralResponse(self._lines.snapshot()))
 
     async def process_audio(self, pcm16: bytes) -> None:
         await self._ready.wait()
